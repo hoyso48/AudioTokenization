@@ -1,0 +1,13 @@
+numpy
+soundfile
+librosa
+einops
+torch
+pytorch_lightning
+transformers
+hydra-core
+torchaudio
+einx
+pesq
+pystoi
+matplotlib
