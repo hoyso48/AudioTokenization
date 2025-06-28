@@ -1,0 +1,16 @@
+defaults:
+  - preprocess: default
+  - dataset: default
+  - model: base
+  - train: default
+name: bigcodec-base-ls-600k-vq8192-80hz-antialias
+log_dir: pl_log
+debug: false
+resume_ckpt: null #'/home/hoyso/projects/tokenizersss/BigCodec/outputs/2025-03-04/14-23-43/pl_log/last.ckpt' # train
+ckpt: null # infer
+input_dir: null # infer
+output_dir: null # infer
+hydra:
+  output_subdir: hydra
+  job:
+    chdir: True
