@@ -1,11 +1,11 @@
 codec_encoder:
   type: 'bigcodec'
   out_channels: 512
-  ngf: 32
-  use_rnn: True
+  ngf: 16
+  use_rnn: False
   rnn_bidirectional: False
-  rnn_num_layers: 2
-  up_ratios: [2, 4, 5, 5]
+  rnn_num_layers: 1
+  up_ratios: [2, 2, 4, 4, 5]
   dilations: [1, 3, 9]
   causal: False
   antialias: False
@@ -13,11 +13,11 @@ codec_encoder:
 codec_decoder:
   in_channels: 512
   upsample_initial_channel: 512
-  ngf: 32
+  ngf: 16
   use_rnn: True
   rnn_bidirectional: False
-  rnn_num_layers: 2
-  up_ratios: [5, 5, 4, 2] # [2, 5, 5, 4]
+  rnn_num_layers: 1
+  up_ratios: [5, 4, 4, 2, 2] # [2, 5, 5, 4]
   dilations: [1, 3, 9]
   causal: False
   antialias: False
@@ -31,21 +31,21 @@ codec_decoder:
   codebook_dim: 8
 
 mpd:
-  periods: [2, 3, 5, 7, 11]
-  max_downsample_channels: 512
-  channels: 16
+  periods: [2, 3, 5]
+  max_downsample_channels: 256
+  channels: 8
   channel_increasing_factor: 4
 
 mstft:
   stft_params:
-    fft_sizes: [128, 256, 512, 1024, 2048]
-    hop_sizes: [32, 64, 128, 256, 512]
-    win_lengths: [128, 256, 512, 1024, 2048]
+    fft_sizes: [256, 512, 1024]
+    hop_sizes: [64, 128, 256]
+    win_lengths: [256, 512, 1024]
     window: hann_window
   in_channels: 1
   out_channels: 1
   kernel_sizes: [5, 3]
-  channels: 32
-  max_downsample_channels: 512
+  channels: 8
+  max_downsample_channels: 256
   downsample_scales: [2, 2, 2]
   use_weight_norm: True
