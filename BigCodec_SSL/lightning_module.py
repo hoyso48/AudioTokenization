@@ -12,7 +12,7 @@ import torchmetrics
 import torchaudio
 
 import wandb
-from vq import BigCodecEncoder, BigCodecDecoder
+from vq import BigCodecEncoder, BigCodecDecoder, ConformerEncoderSTFT, ConformerDecoderISTFT
 from module import HiFiGANMultiPeriodDiscriminator, SpecDiscriminator
 from criterions import GANLoss, MultiResolutionMelSpectrogramLoss
 from common.schedulers import WarmupLR
@@ -31,7 +31,7 @@ class CodebookPerplexity(torchmetrics.Metric):
         self.add_state("total_counts", default=torch.tensor(0), dist_reduce_fx="sum")
 
     def update(self, indices: torch.Tensor) -> None:
-        one_hot = F.one_hot(indices.flatten(), num_classes=self.codebook_size).sum(dim=0)
+        one_hot = F.one_hot(indices.long().flatten(), num_classes=self.codebook_size).sum(dim=0)
         self.codebook_counts += one_hot
         self.total_counts += one_hot.sum()
 
@@ -98,10 +98,27 @@ class CodecLightningModule(pl.LightningModule):
                         causal=enccfg.causal,
                         antialias=enccfg.antialias
                     )
+        elif enccfg.type == 'conformer_stft':
+            self.encoder = ConformerEncoderSTFT(
+                hop_length=enccfg.hop_length,
+                n_fft=enccfg.n_fft,
+                window_size=enccfg.window_size,
+                dim=enccfg.dim,
+                n_layers=enccfg.n_layers,
+                n_head=enccfg.n_head,
+                ffn_mult=enccfg.ffn_mult,
+                conv_kernel_size=enccfg.conv_kernel_size,
+                dropout=enccfg.dropout,
+                max_seq_len=enccfg.max_seq_len,
+                rope_theta=enccfg.rope_theta,
+                causal=enccfg.causal,
+                out_channels=enccfg.out_channels,
+            )
         else:
             raise ValueError(f'Invalid codec encoder type: {enccfg.type}')
         deccfg = self.cfg.model.codec_decoder
-        self.decoder = BigCodecDecoder(
+        if deccfg.type == 'bigcodec':
+            self.decoder = BigCodecDecoder(
                     in_channels=deccfg.in_channels,
                     upsample_initial_channel=deccfg.upsample_initial_channel,
                     ngf=deccfg.ngf,
@@ -120,6 +137,32 @@ class CodecLightningModule(pl.LightningModule):
                     codebook_size=deccfg.codebook_size,
                     codebook_dim=deccfg.codebook_dim,
                 )
+        elif deccfg.type == 'conformer_istft':
+            self.decoder = ConformerDecoderISTFT(
+                 in_channels=deccfg.in_channels,
+                 hop_length=deccfg.hop_length,
+                 n_fft=deccfg.n_fft,
+                 window_size=deccfg.window_size,
+                 dim=deccfg.dim,
+                 n_layers=deccfg.n_layers,
+                 n_head=deccfg.n_head,
+                 ffn_mult=deccfg.ffn_mult,
+                 conv_kernel_size=deccfg.conv_kernel_size,
+                 dropout=deccfg.dropout,
+                 max_seq_len=deccfg.max_seq_len,
+                 rope_theta=deccfg.rope_theta,
+                 causal=deccfg.causal,
+                 fsq=deccfg.fsq,
+                 fsq_levels=deccfg.fsq_levels,
+                 vq_num_quantizers=deccfg.vq_num_quantizers,
+                 vq_commit_weight=deccfg.vq_commit_weight,
+                 vq_weight_init=deccfg.vq_weight_init,
+                 vq_full_commit_loss=deccfg.vq_full_commit_loss,
+                 codebook_size=deccfg.codebook_size,
+                 codebook_dim=deccfg.codebook_dim,
+            )
+        else:
+            raise ValueError(f'Invalid codec decoder type: {deccfg.type}')
         mpdcfg = self.cfg.model.mpd
         self.discriminator = HiFiGANMultiPeriodDiscriminator(
                     periods=mpdcfg.periods,
@@ -178,7 +221,7 @@ class CodecLightningModule(pl.LightningModule):
         metrics['codebook_utilization'] = CodebookUtilization(codebook_size=self.cfg.model.codec_decoder.codebook_size)
         return torchmetrics.MetricCollection(prefix=prefix, metrics=metrics)
     
-    @torch.compile
+    # @torch.compile
     def forward(self, batch):
         if self.cfg.train.use_semantic:
             wav = batch['wav']

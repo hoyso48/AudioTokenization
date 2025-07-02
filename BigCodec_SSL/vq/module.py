@@ -6,6 +6,7 @@ from torch.nn.utils import weight_norm
 from torch import Tensor
 import torch.nn.functional as F
 import torch
+from typing import Tuple
 
 class CausalConv1d(nn.Module):
     def __init__(
@@ -237,130 +238,6 @@ class ScaleBiasLayer(nn.Module):
         scale = self.scale.view(1, 1, -1)
         bias = self.bias.view(1, 1, -1)
         return x * scale + bias
-    
-class ConformerEncoderLayer(nn.Module):
-    def __init__(self, dim: int = 16, 
-                 stride: int = 1, 
-                 causal: bool = False, 
-                 antialias: bool = False):
-        super().__init__()
-        self.layer_norm = nn.LayerNorm(dim, eps=1e-5)
-        self.pointwise_conv1 = nn.Conv1d(
-            dim,
-            2 * dim,
-            kernel_size=1,
-            stride=1,
-            padding=0,
-            bias=False,
-        )
-        self.glu = nn.GLU(dim=1)
-        self.conv = nn.Conv1d(
-            dim,
-            dim,
-            3,
-            stride=1,
-            padding=0,
-            groups=dim,
-            bias=False,
-        )
-
-        self.conv_layer_norm = nn.LayerNorm(dim, eps=1e-5)
-        self.activation = activations.SnakeBeta(dim, alpha_logscale=True)
-        self.pointwise_conv2 = nn.Conv1d(
-            dim,
-            dim,
-            kernel_size=1,
-            stride=1,
-            padding=0,
-            bias=False,
-        )
-        self.dropout = nn.Dropout(0.1)
-    
-    def forward(self, x):
-        x = x.transpose(1, 2)
-        x = self.layer_norm(x)
-        x = x.transpose(1, 2)
-        x = self.pointwise_conv1(x)
-        x = self.glu(x)
-        x = self.conv(x)
-        x = x.transpose(1, 2)
-        x = self.conv_layer_norm(x)
-        x = x.transpose(1, 2)
-        x = self.activation(x)
-        x = self.pointwise_conv2(x)
-        x = self.dropout(x)
-        return x
-
-class Wav2Vec2BertConvolutionModule(nn.Module):
-    """Convolution block used in the conformer block"""
-
-    def __init__(self, config):
-        super().__init__()
-        if (config.conv_depthwise_kernel_size - 1) % 2 == 1:
-            raise ValueError("`config.conv_depthwise_kernel_size` should be a odd number for 'SAME' padding")
-        self.layer_norm = nn.LayerNorm(config.hidden_size, eps=config.layer_norm_eps)
-        self.pointwise_conv1 = nn.Conv1d(
-            config.hidden_size,
-            2 * config.hidden_size,
-            kernel_size=1,
-            stride=1,
-            padding=0,
-            bias=False,
-        )
-        self.glu = nn.GLU(dim=1)
-        self.depthwise_conv = nn.Conv1d(
-            config.hidden_size,
-            config.hidden_size,
-            config.conv_depthwise_kernel_size,
-            stride=1,
-            padding=0,
-            groups=config.hidden_size,
-            bias=False,
-        )
-
-        self.depthwise_layer_norm = nn.LayerNorm(config.hidden_size, eps=config.layer_norm_eps)
-        self.activation = ACT2FN[config.hidden_act]
-        self.pointwise_conv2 = nn.Conv1d(
-            config.hidden_size,
-            config.hidden_size,
-            kernel_size=1,
-            stride=1,
-            padding=0,
-            bias=False,
-        )
-        self.dropout = nn.Dropout(config.conformer_conv_dropout)
-
-    def forward(self, hidden_states, attention_mask=None):
-        hidden_states = self.layer_norm(hidden_states)
-
-        # Ensure that we do not leak padded positions in depthwise convolution if attention mask is passed.
-        # Put 0 where necessary
-        if attention_mask is not None:
-            hidden_states = hidden_states.masked_fill(~attention_mask.bool().unsqueeze(-1), 0.0)
-
-        # exchange the temporal dimension and the feature dimension
-        hidden_states = hidden_states.transpose(1, 2)
-
-        # GLU mechanism
-        # => (batch, 2*channel, dim)
-        hidden_states = self.pointwise_conv1(hidden_states)
-        # => (batch, channel, dim)
-        hidden_states = self.glu(hidden_states)
-
-        # Pad the sequence entirely on the left because of causal convolution.
-        hidden_states = torch.nn.functional.pad(hidden_states, (self.depthwise_conv.kernel_size[0] - 1, 0))
-
-        # 1D Depthwise Conv
-        hidden_states = self.depthwise_conv(hidden_states)
-
-        hidden_states = self.depthwise_layer_norm(hidden_states.transpose(1, 2)).transpose(1, 2)
-
-        hidden_states = self.activation(hidden_states)
-
-        hidden_states = self.pointwise_conv2(hidden_states)
-        hidden_states = self.dropout(hidden_states)
-        hidden_states = hidden_states.transpose(1, 2)
-        return hidden_states
 
 class SemanticEncoder(nn.Module):
     def __init__(
@@ -474,4 +351,196 @@ class SemanticDecoder(nn.Module):
         x = self.initial_conv(z)  # (Batch, Decode_channels, Length)
         x = self.residual_blocks(x) + x  # Residual connection
         x = self.final_conv(x)  # (Batch, Output_channels, Length)
+        return x
+
+# Conformer Block components
+
+class RMSNorm(torch.nn.Module):
+    def __init__(self, dim: int, eps: float = 1e-6):
+        super().__init__()
+        self.eps = eps
+        self.weight = nn.Parameter(torch.ones(dim))
+
+    def _norm(self, x):
+        return x * torch.rsqrt(x.pow(2).mean(-1, keepdim=True) + self.eps)
+
+    def forward(self, x):
+        output = self._norm(x.float()).type_as(x)
+        return output * self.weight
+
+def precompute_freqs_cis(dim: int, end: int, theta: float = 10000.0):
+    freqs = 1.0 / (theta ** (torch.arange(0, dim, 2)[: (dim // 2)].float() / dim))
+    t = torch.arange(end, device=freqs.device, dtype=torch.float32)
+    freqs = torch.outer(t, freqs)
+    freqs_cis = torch.polar(torch.ones_like(freqs), freqs)
+    return freqs_cis
+
+def reshape_for_broadcast(freqs_cis: torch.Tensor, x: torch.Tensor):
+    ndim = x.ndim
+    assert 0 <= 1 < ndim
+    shape = [1] * ndim
+    shape[1] = x.shape[1]
+    shape[-1] = x.shape[-1]
+    return freqs_cis.view(*shape)
+
+def apply_rotary_emb(
+    xq: torch.Tensor,
+    xk: torch.Tensor,
+    freqs_cis: torch.Tensor,
+) -> Tuple[torch.Tensor, torch.Tensor]:
+    xq_ = torch.view_as_complex(xq.float().reshape(*xq.shape[:-1], -1, 2))
+    xk_ = torch.view_as_complex(xk.float().reshape(*xk.shape[:-1], -1, 2))
+    freqs_cis = reshape_for_broadcast(freqs_cis, xq_)
+    xq_out = torch.view_as_real(xq_ * freqs_cis).flatten(3)
+    xk_out = torch.view_as_real(xk_ * freqs_cis).flatten(3)
+    return xq_out.type_as(xq), xk_out.type_as(xk)
+
+class SelfAttention(nn.Module):
+    def __init__(self, dim, n_head=8, dropout=0.1, causal: bool = False):
+        super().__init__()
+        self.n_head = n_head
+        self.head_dim = dim // n_head
+        self.causal = causal
+        
+        self.qkv_proj = nn.Linear(dim, 3 * dim, bias=False)
+        self.out_proj = nn.Linear(dim, dim, bias=False)
+        self.dropout = dropout
+        try:
+            from flash_attn import flash_attn_func
+            self.flash_attn_func = flash_attn_func
+        except ImportError:
+            print("FlashAttention not found, using manual attention")
+            self.flash_attn_func = None
+
+    def forward(self, x, freqs_cis):
+        B, C, T = x.shape
+        x = x.transpose(1, 2)
+        
+        qkv = self.qkv_proj(x)
+        qkv = qkv.view(B, T, 3, self.n_head, self.head_dim)
+        q, k, v = qkv.unbind(2)
+        
+        q, k = apply_rotary_emb(q, k, freqs_cis=freqs_cis)
+
+        if self.flash_attn_func is not None:
+            # flash_attn_func expects (B, T, n_head, head_dim)
+            out = self.flash_attn_func(q, k, v, dropout_p=self.dropout if self.training else 0.0, causal=self.causal)
+        else:
+            # Fallback to manual attention. Transpose to (B, n_head, T, head_dim)
+            q = q.transpose(1, 2)
+            k = k.transpose(1, 2)
+            v = v.transpose(1, 2)
+
+            scores = torch.matmul(q, k.transpose(-2, -1)) / (self.head_dim ** 0.5)
+            
+            if self.causal:
+                mask = torch.ones(T, T, device=q.device, dtype=torch.bool).triu(diagonal=1)
+                scores = scores.masked_fill(mask, float('-inf'))
+
+            scores = F.softmax(scores, dim=-1)
+            scores = F.dropout(scores, self.dropout, self.training)
+
+            out = torch.matmul(scores, v) # out shape (B, n_head, T, head_dim)
+            out = out.transpose(1, 2) # -> (B, T, n_head, head_dim)
+
+        out = out.reshape(B, T, C)
+        out = self.out_proj(out)
+        out = out.transpose(1, 2)
+        
+        return out
+
+class FeedForward(nn.Module):
+    def __init__(self, dim, mult=4, dropout=0.1):
+        super().__init__()
+        hidden_dim = int(2 * (dim * mult) / 3)
+        multiple_of = 256
+        hidden_dim = multiple_of * ((hidden_dim + multiple_of - 1) // multiple_of)
+
+        self.w1 = nn.Linear(dim, hidden_dim, bias=False)
+        self.w2 = nn.Linear(hidden_dim, dim, bias=False)
+        self.w3 = nn.Linear(dim, hidden_dim, bias=False)
+        self.dropout = nn.Dropout(dropout)
+
+    def forward(self, x): # expects (B, T, C)
+        out = self.w2(F.silu(self.w1(x)) * self.w3(x))
+        out = self.dropout(out)
+        return out
+
+class ConformerConvModule(nn.Module):
+    def __init__(self, dim, kernel_size=31, dropout=0.1, causal: bool = False):
+        super().__init__()
+        self.layer_norm = RMSNorm(dim)
+        self.pointwise_conv1 = nn.Conv1d(dim, 2 * dim, kernel_size=1)
+        self.glu = nn.GLU(dim=1)
+        if causal:
+            self.depthwise_conv = CausalConv1d(dim, dim, kernel_size=kernel_size, groups=dim)
+        else:
+            self.depthwise_conv = nn.Conv1d(dim, dim, kernel_size=kernel_size, groups=dim, padding='same')
+        self.silu = nn.SiLU()
+        self.pointwise_conv2 = nn.Conv1d(dim, dim, kernel_size=1)
+        self.dropout = nn.Dropout(dropout)
+
+    def forward(self, x):
+        residual = x
+        x_norm = self.layer_norm(x.transpose(1, 2)).transpose(1, 2)
+        out = self.pointwise_conv1(x_norm)
+        out = self.glu(out)
+        out = self.depthwise_conv(out)
+        out = self.silu(out)
+        out = self.pointwise_conv2(out)
+        out = self.dropout(out)
+        return residual + out
+
+class ConformerLayer(nn.Module):
+    def __init__(self, dim, n_head=8, ffn_mult=4, conv_kernel_size=31, dropout=0.1, conv_first: bool = False, causal: bool = False):
+        super().__init__()
+        self.ffn1 = FeedForward(dim, mult=ffn_mult, dropout=dropout)
+        self.self_attn = SelfAttention(dim, n_head=n_head, dropout=dropout, causal=causal)
+        self.conv = ConformerConvModule(dim, kernel_size=conv_kernel_size, dropout=dropout, causal=causal)
+        self.ffn2 = FeedForward(dim, mult=ffn_mult, dropout=dropout)
+        self.conv_first = conv_first
+
+        self.norm1 = RMSNorm(dim)
+        self.norm2 = RMSNorm(dim)
+        self.norm3 = RMSNorm(dim)
+        # self.final_norm = RMSNorm(dim)
+        
+        self.dropout = nn.Dropout(dropout)
+
+    def forward(self, x, freqs_cis):
+        if self.conv_first:
+            x = x + self.conv(x)
+        else:
+            x = x + self.dropout(self.self_attn(self.norm2(x.transpose(1, 2)).transpose(1, 2), freqs_cis))
+
+        x = x + self.ffn1(self.norm1(x.transpose(1, 2))).transpose(1, 2)
+
+        if self.conv_first:
+            x = x + self.dropout(self.self_attn(self.norm2(x.transpose(1, 2)).transpose(1, 2), freqs_cis))
+        else:
+            x = x + self.conv(x)
+
+        x = x + self.ffn2(self.norm3(x.transpose(1, 2))).transpose(1, 2)
+        # x = self.final_norm(x.transpose(1, 2)).transpose(1, 2)
+        return x
+
+class ConformerBackbone(nn.Module):
+    def __init__(self, dim, n_layers, n_head=8, ffn_mult=4, conv_kernel_size=31, dropout=0.1, max_seq_len=8192, rope_theta=10000.0, conv_first: bool = False, causal: bool = False):
+        super().__init__()
+        self.layers = nn.ModuleList([
+            ConformerLayer(dim, n_head, ffn_mult, conv_kernel_size, dropout, conv_first=conv_first, causal=causal)
+            for _ in range(n_layers)
+        ])
+        self.freqs_cis = precompute_freqs_cis(
+            dim // n_head,
+            max_seq_len,
+            rope_theta,
+        )
+
+    def forward(self, x):
+        self.freqs_cis = self.freqs_cis.to(x.device)
+        freqs_cis = self.freqs_cis[:x.shape[-1]]
+
+        for layer in self.layers:
+            x = layer(x, freqs_cis)
         return x

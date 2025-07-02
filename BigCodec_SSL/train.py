@@ -34,7 +34,7 @@ def train(cfg):
         strategy=DDPStrategy(find_unused_parameters=True),
         callbacks=callbacks,
         limit_train_batches=1.0 if not cfg.debug else 0.001,
-        logger = pl.loggers.WandbLogger(project='Audio-Tokenizer', name=cfg.name, save_dir=cfg.log_dir),
+        logger = pl.loggers.WandbLogger(project='Audio-Tokenizer', name=cfg.name, save_dir=cfg.log_dir, id=cfg.wandb_id),
     )
     trainer.fit(lightning_module, datamodule=datamodule, ckpt_path=cfg.resume_ckpt)
     trainer.validate(lightning_module, datamodule=datamodule)

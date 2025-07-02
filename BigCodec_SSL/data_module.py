@@ -101,8 +101,6 @@ class FSDataset(Dataset):
         # length = wav.shape[1]
         if self.min_audio_length != -1:
             l = self.min_audio_length
-            if self.pad_to_multiple_of != 1:
-                l = l + self.pad_to_multiple_of - l % self.pad_to_multiple_of
             if length < l:
                 wav = F.pad(wav, (0, l - length))
                 length = wav.shape[0]
@@ -111,9 +109,17 @@ class FSDataset(Dataset):
             else:
                 i = 0
             wav = wav[i:i+l]
+            if l % self.pad_to_multiple_of != 0:
+                padded = self.pad_to_multiple_of - l % self.pad_to_multiple_of
+            else:
+                padded = 0
+            wav = F.pad(wav, (0, padded))
         else:
-            if self.pad_to_multiple_of != 1:
-                wav = F.pad(wav, (0, self.pad_to_multiple_of - length % self.pad_to_multiple_of))
+            if length % self.pad_to_multiple_of != 0:
+                padded = self.pad_to_multiple_of - length % self.pad_to_multiple_of
+            else:
+                padded = 0
+            wav = F.pad(wav, (0, padded))
 
         out = {
             'wav': wav,

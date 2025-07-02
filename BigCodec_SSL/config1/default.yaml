@@ -3,10 +3,11 @@ defaults:
   - dataset: default
   - model: base
   - train: default
-name: bigcodec-base-ls-600k-vq8192-80hz-bs64
+name: conformer-stft-istft-512-ls-300k-vq8192-80hz-no-final-norm-no-scale
 log_dir: pl_log
 debug: false
-resume_ckpt: null #'/home/hoyso/projects/tokenizersss/BigCodec/outputs/2025-03-04/14-23-43/pl_log/last.ckpt' # train
+resume_ckpt: null
+wandb_id: null
 ckpt: null # infer
 input_dir: null # infer
 output_dir: null # infer
