@@ -354,6 +354,11 @@ class SemanticDecoder(nn.Module):
         return x
 
 # Conformer Block components
+def rmsnorm(x, eps):
+    def _norm(y):
+        return y * torch.rsqrt(y.pow(2).mean(-1, keepdim=True) + eps)
+
+    return _norm(x.float()).type_as(x)
 
 class RMSNorm(torch.nn.Module):
     def __init__(self, dim: int, eps: float = 1e-6):
@@ -361,13 +366,9 @@ class RMSNorm(torch.nn.Module):
         self.eps = eps
         self.weight = nn.Parameter(torch.ones(dim))
 
-    def _norm(self, x):
-        return x * torch.rsqrt(x.pow(2).mean(-1, keepdim=True) + self.eps)
-
     def forward(self, x):
-        output = self._norm(x.float()).type_as(x)
-        return output * self.weight
-
+        return rmsnorm(x, self.eps) * self.weight
+    
 def precompute_freqs_cis(dim: int, end: int, theta: float = 10000.0):
     freqs = 1.0 / (theta ** (torch.arange(0, dim, 2)[: (dim // 2)].float() / dim))
     t = torch.arange(end, device=freqs.device, dtype=torch.float32)
@@ -419,6 +420,8 @@ class SelfAttention(nn.Module):
         qkv = self.qkv_proj(x)
         qkv = qkv.view(B, T, 3, self.n_head, self.head_dim)
         q, k, v = qkv.unbind(2)
+        q = rmsnorm(q, 1e-6)
+        k = rmsnorm(k, 1e-6)
         
         q, k = apply_rotary_emb(q, k, freqs_cis=freqs_cis)
 
@@ -437,10 +440,10 @@ class SelfAttention(nn.Module):
                 mask = torch.ones(T, T, device=q.device, dtype=torch.bool).triu(diagonal=1)
                 scores = scores.masked_fill(mask, float('-inf'))
 
-            scores = F.softmax(scores, dim=-1)
+            scores = F.softmax(scores, dim=-1, dtype=torch.float32)
             scores = F.dropout(scores, self.dropout, self.training)
 
-            out = torch.matmul(scores, v) # out shape (B, n_head, T, head_dim)
+            out = torch.matmul(scores, v).to(q.dtype) # out shape (B, n_head, T, head_dim)
             out = out.transpose(1, 2) # -> (B, T, n_head, head_dim)
 
         out = out.reshape(B, T, C)
@@ -469,27 +472,26 @@ class FeedForward(nn.Module):
 class ConformerConvModule(nn.Module):
     def __init__(self, dim, kernel_size=31, dropout=0.1, causal: bool = False):
         super().__init__()
-        self.layer_norm = RMSNorm(dim)
         self.pointwise_conv1 = nn.Conv1d(dim, 2 * dim, kernel_size=1)
         self.glu = nn.GLU(dim=1)
         if causal:
             self.depthwise_conv = CausalConv1d(dim, dim, kernel_size=kernel_size, groups=dim)
         else:
             self.depthwise_conv = nn.Conv1d(dim, dim, kernel_size=kernel_size, groups=dim, padding='same')
+        self.conv_norm = RMSNorm(dim)
         self.silu = nn.SiLU()
         self.pointwise_conv2 = nn.Conv1d(dim, dim, kernel_size=1)
         self.dropout = nn.Dropout(dropout)
 
     def forward(self, x):
-        residual = x
-        x_norm = self.layer_norm(x.transpose(1, 2)).transpose(1, 2)
-        out = self.pointwise_conv1(x_norm)
+        out = self.pointwise_conv1(x)
         out = self.glu(out)
         out = self.depthwise_conv(out)
+        out = self.conv_norm(out.transpose(1, 2)).transpose(1, 2)
         out = self.silu(out)
         out = self.pointwise_conv2(out)
         out = self.dropout(out)
-        return residual + out
+        return out
 
 class ConformerLayer(nn.Module):
     def __init__(self, dim, n_head=8, ffn_mult=4, conv_kernel_size=31, dropout=0.1, conv_first: bool = False, causal: bool = False):
@@ -500,28 +502,27 @@ class ConformerLayer(nn.Module):
         self.ffn2 = FeedForward(dim, mult=ffn_mult, dropout=dropout)
         self.conv_first = conv_first
 
-        self.norm1 = RMSNorm(dim)
-        self.norm2 = RMSNorm(dim)
-        self.norm3 = RMSNorm(dim)
-        # self.final_norm = RMSNorm(dim)
+        self.conv_norm_in = RMSNorm(dim)
+        self.ffn1_norm_in = RMSNorm(dim)
+        self.attn_norm_in = RMSNorm(dim)
+        self.ffn2_norm_in = RMSNorm(dim)
         
         self.dropout = nn.Dropout(dropout)
 
     def forward(self, x, freqs_cis):
         if self.conv_first:
-            x = x + self.conv(x)
+            x = x + self.conv(self.conv_norm_in(x.transpose(1, 2)).transpose(1, 2))
         else:
-            x = x + self.dropout(self.self_attn(self.norm2(x.transpose(1, 2)).transpose(1, 2), freqs_cis))
+            x = x + self.dropout(self.self_attn(self.attn_norm_in(x.transpose(1, 2)).transpose(1, 2), freqs_cis))
 
-        x = x + self.ffn1(self.norm1(x.transpose(1, 2))).transpose(1, 2)
+        x = x + self.ffn1(self.ffn1_norm_in(x.transpose(1, 2))).transpose(1, 2)
 
         if self.conv_first:
-            x = x + self.dropout(self.self_attn(self.norm2(x.transpose(1, 2)).transpose(1, 2), freqs_cis))
+            x = x + self.dropout(self.self_attn(self.attn_norm_in(x.transpose(1, 2)).transpose(1, 2), freqs_cis))
         else:
-            x = x + self.conv(x)
+            x = x + self.conv(self.conv_norm_in(x.transpose(1, 2)).transpose(1, 2))
 
-        x = x + self.ffn2(self.norm3(x.transpose(1, 2))).transpose(1, 2)
-        # x = self.final_norm(x.transpose(1, 2)).transpose(1, 2)
+        x = x + self.ffn2(self.ffn2_norm_in(x.transpose(1, 2))).transpose(1, 2)
         return x
 
 class ConformerBackbone(nn.Module):

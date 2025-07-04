@@ -152,6 +152,7 @@ class ConformerEncoderSTFT(nn.Module):
         # We convert complex to real+imag: (B, 2*(n_fft//2+1), n_frames)
         stft_dim = n_fft // 2 + 1
         self.input_proj = nn.Conv1d(2 * stft_dim, dim, kernel_size=1)
+        self.input_norm = RMSNorm(dim)
         
         # Conformer backbone
         self.conformer_backbone = ConformerBackbone(
@@ -192,6 +193,7 @@ class ConformerEncoderSTFT(nn.Module):
         
         # Input projection
         x = self.input_proj(stft_features)  # (B, dim, n_frames)
+        x = self.input_norm(x.transpose(1, 2)).transpose(1, 2)
         
         # Conformer backbone
         x = self.conformer_backbone(x)  # (B, dim, n_frames)
