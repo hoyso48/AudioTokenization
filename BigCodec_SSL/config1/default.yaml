@@ -3,11 +3,11 @@ defaults:
   - dataset: default
   - model: base
   - train: default
-name: conformer-stft-istft-512-ls-300k-vq8192-80hz-no-final-norm-no-scale
+name: conformer-stft-istft-512-ls-30k-vq8192-80hz-base500
 log_dir: pl_log
 debug: false
-resume_ckpt: null
-wandb_id: null
+resume_ckpt: '/home/hoyso/projects/AudioTokenization/BigCodec_SSL/outputs/2025-07-04/16-22-28/pl_log/last.ckpt'
+wandb_id: 'fjrggjhv'
 ckpt: null # infer
 input_dir: null # infer
 output_dir: null # infer

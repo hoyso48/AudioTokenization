@@ -19,7 +19,7 @@ codec_encoder:
   conv_kernel_size: 31
   dropout: 0.1
   max_seq_len: 8192
-  rope_theta: 10000.0
+  rope_theta: 500
   causal: False
   out_channels: 256
 
@@ -46,7 +46,7 @@ codec_decoder:
   conv_kernel_size: 31
   dropout: 0.1
   max_seq_len: 8192
-  rope_theta: 10000.0
+  rope_theta: 500
   causal: False
   vq_num_quantizers: 1 # 8
   vq_commit_weight: 0.25
