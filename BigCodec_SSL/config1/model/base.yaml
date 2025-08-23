@@ -9,17 +9,18 @@ codec_encoder:
   # dilations: [1, 3, 9]
   # causal: False
   # antialias: False
-  hop_length: 200 #256
-  n_fft: 800 #1024
-  window_size: 800 #1024
+  hop_length: 160 #256
+  n_fft: 640 #1024
+  window_size: 640 #1024
   dim: 256
-  n_layers: 6
+  n_layers: 5
   n_head: 8
   ffn_mult: 4
   conv_kernel_size: 31
   dropout: 0.1
-  max_seq_len: 8192
-  rope_theta: 500
+  original_max_position_embeddings: 100
+  max_position_embeddings: 8192
+  base: 10000
   causal: False
   out_channels: 256
 
@@ -36,23 +37,24 @@ codec_decoder:
   # causal: False
   # antialias: False
   in_channels: 256
-  hop_length: 200 #256
-  n_fft: 800 #1024
-  window_size: 800 #1024
+  hop_length: 160 #256
+  n_fft: 640 #1024
+  window_size: 640 #1024
   dim: 256
-  n_layers: 6
+  n_layers: 5
   n_head: 8
   ffn_mult: 4
   conv_kernel_size: 31
   dropout: 0.1
-  max_seq_len: 8192
-  rope_theta: 500
+  original_max_position_embeddings: 100
+  max_position_embeddings: 8192
+  base: 10000
   causal: False
   vq_num_quantizers: 1 # 8
   vq_commit_weight: 0.25
   vq_weight_init: False
   fsq: False
-  fsq_levels: [4,4,4,4,4,8]
+  fsq_levels: [4,4,4,4,4,4,4,4]
   vq_full_commit_loss: False
   codebook_size: 8192 # 1024
   codebook_dim: 8

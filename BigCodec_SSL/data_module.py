@@ -68,7 +68,7 @@ class FSDataset(Dataset):
         # self.filelist = utils.read_filelist(join(self.ocwd, self.phase_cfg.filelist))
         self.filelist = self.get_filelist(join(self.ocwd, self.phase_cfg.filelist))
         self.min_audio_length = self.phase_cfg.min_audio_length
-        self.pad_to_multiple_of = self.cfg.dataset.pad_to_multiple_of
+        self.multiple_of = self.cfg.dataset.multiple_of
         if self.cfg.train.use_semantic:
             self.feature_extractor = AutoFeatureExtractor.from_pretrained("facebook/w2v-bert-2.0")
 
@@ -108,18 +108,11 @@ class FSDataset(Dataset):
                 i = random.randint(0, length-l)
             else:
                 i = 0
+            l = (l // self.multiple_of) * self.multiple_of
             wav = wav[i:i+l]
-            if l % self.pad_to_multiple_of != 0:
-                padded = self.pad_to_multiple_of - l % self.pad_to_multiple_of
-            else:
-                padded = 0
-            wav = F.pad(wav, (0, padded))
         else:
-            if length % self.pad_to_multiple_of != 0:
-                padded = self.pad_to_multiple_of - length % self.pad_to_multiple_of
-            else:
-                padded = 0
-            wav = F.pad(wav, (0, padded))
+            l = (length // self.multiple_of) * self.multiple_of
+            wav = wav[:l]
 
         out = {
             'wav': wav,
@@ -146,3 +139,5 @@ class FSDataset(Dataset):
             feats = torch.stack(feats)
             out['feats'] = feats
         return out
+
+

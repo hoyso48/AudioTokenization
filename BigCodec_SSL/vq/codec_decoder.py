@@ -277,7 +277,12 @@ class ISTFTHead(FourierHead):
 def init_weights(m):
     if isinstance(m, nn.Conv1d):
         nn.init.trunc_normal_(m.weight, std=0.02)
-        nn.init.constant_(m.bias, 0)
+        if m.bias is not None:
+            nn.init.constant_(m.bias, 0)
+    elif isinstance(m, nn.Linear):
+        nn.init.trunc_normal_(m.weight, std=0.02)
+        if m.bias is not None:
+            nn.init.constant_(m.bias, 0)
 
 # class CodecDecoderVocos(nn.Module):
 #     def __init__(self,
@@ -394,8 +399,9 @@ class ConformerDecoderISTFT(nn.Module):
                  ffn_mult=4,
                  conv_kernel_size=31,
                  dropout=0.1,
-                 max_seq_len=8192,
-                 rope_theta=10000.0,
+                 max_position_embeddings=2048,
+                 original_max_position_embeddings=4096,
+                 base=10000.0,
                  causal=False,
                  # Quantizer parameters
                  fsq=False,
@@ -446,8 +452,9 @@ class ConformerDecoderISTFT(nn.Module):
             ffn_mult=ffn_mult,
             conv_kernel_size=conv_kernel_size,
             dropout=dropout,
-            max_seq_len=max_seq_len,
-            rope_theta=rope_theta,
+            max_position_embeddings=max_position_embeddings,
+            original_max_position_embeddings=original_max_position_embeddings,
+            base=base,
             causal=causal,
             conv_first=False
         )
@@ -459,7 +466,7 @@ class ConformerDecoderISTFT(nn.Module):
         
         self.reset_parameters()
 
-    def forward(self, x, vq=True):
+    def forward(self, x, unmerge_fn=None, vq=True):
         if vq is True:
             if self.fsq:
                 x, q = self.quantizer(x)
@@ -468,6 +475,9 @@ class ConformerDecoderISTFT(nn.Module):
                 x, q, commit_loss = self.quantizer(x)
             return x, q, commit_loss
         
+        if unmerge_fn is not None:
+            x = unmerge_fn(x.transpose(1, 2)).transpose(1, 2)
+
         # Input projection
         x = self.input_proj(x)  # (B, dim, T)
         

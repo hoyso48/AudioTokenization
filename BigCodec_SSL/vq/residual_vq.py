@@ -32,7 +32,7 @@ class ResidualVQ(nn.Module):
             
             quantized_out = quantized_out + quantized
 
-            loss = loss.mean()
+            # loss = loss.mean()
 
             all_indices.append(indices)
             all_losses.append(loss)

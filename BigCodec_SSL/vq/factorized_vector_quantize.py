@@ -59,11 +59,11 @@ class FactorizedVectorQuantize(nn.Module):
         
 
         if self.training:
-            commitment_loss = F.mse_loss(z_e, z_q.detach(), reduction='none').mean([1, 2]) * self.commitment
-            codebook_loss = F.mse_loss(z_q, z_e.detach(), reduction='none').mean([1, 2])
+            commitment_loss = F.mse_loss(z_e, z_q.detach(), reduction='none') * self.commitment
+            codebook_loss = F.mse_loss(z_q, z_e.detach(), reduction='none')
             commit_loss = commitment_loss + codebook_loss
         else:
-            commit_loss = torch.zeros(z.shape[0], device = z.device)
+            commit_loss = torch.zeros(z_e.shape, device = z.device)
 
         z_q = (
             z_e + (z_q - z_e).detach()

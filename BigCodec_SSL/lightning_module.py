@@ -18,10 +18,12 @@ from criterions import GANLoss, MultiResolutionMelSpectrogramLoss
 from common.schedulers import WarmupLR
 from transformers import LlamaForCausalLM, LlamaConfig
 from transformers import AutoModel
-from vq.module import SemanticDecoder,SemanticEncoder
+from vq.module import SemanticDecoder,SemanticEncoder,Downsample,Upsample,Upsample1D
 from transformers import AutoFeatureExtractor, Wav2Vec2BertModel
 from torchmetrics.audio import ShortTimeObjectiveIntelligibility, PerceptualEvaluationSpeechQuality, ScaleInvariantSignalNoiseRatio, ScaleInvariantSignalDistortionRatio
 from pesq import NoUtterancesError
+from tome import OurToMe, GreedyToMe, TokenPooler, TokenUnpooler, OurToMeMaskingUpsampler
+from dtp.tome_ops import ToMeChained, GeneralizedToMeMaskingUpsampler, ToMeGreedy, ToMeTopK, ToMeK2
 
 class CodebookPerplexity(torchmetrics.Metric):
     def __init__(self, codebook_size, **kwargs):
@@ -109,8 +111,9 @@ class CodecLightningModule(pl.LightningModule):
                 ffn_mult=enccfg.ffn_mult,
                 conv_kernel_size=enccfg.conv_kernel_size,
                 dropout=enccfg.dropout,
-                max_seq_len=enccfg.max_seq_len,
-                rope_theta=enccfg.rope_theta,
+                max_position_embeddings=enccfg.max_position_embeddings,
+                original_max_position_embeddings=enccfg.original_max_position_embeddings,
+                base=enccfg.base,
                 causal=enccfg.causal,
                 out_channels=enccfg.out_channels,
             )
@@ -149,8 +152,9 @@ class CodecLightningModule(pl.LightningModule):
                  ffn_mult=deccfg.ffn_mult,
                  conv_kernel_size=deccfg.conv_kernel_size,
                  dropout=deccfg.dropout,
-                 max_seq_len=deccfg.max_seq_len,
-                 rope_theta=deccfg.rope_theta,
+                 max_position_embeddings=deccfg.max_position_embeddings,
+                 original_max_position_embeddings=deccfg.original_max_position_embeddings,
+                 base=deccfg.base,
                  causal=deccfg.causal,
                  fsq=deccfg.fsq,
                  fsq_levels=deccfg.fsq_levels,
@@ -192,6 +196,19 @@ class CodecLightningModule(pl.LightningModule):
             self.semantic_model = Wav2Vec2BertModel.from_pretrained("facebook/w2v-bert-2.0", output_hidden_states=True)
             self.semantic_model.eval()
             self.semantic_model.requires_grad_(False)
+
+        # self.tome = ToMeTopK(kernel_size=2, num_iterations=8, r=0.5, filter_chained=True, filter_multiple_src=False)
+        self.tome = ToMeK2(num_iterations=8, r=0.5)
+        self.masking_upsampler = GeneralizedToMeMaskingUpsampler(enccfg.out_channels, kernel_size=2)
+        # self.masking_upsampler = GeneralizedToMeMaskingUpsampler(enccfg.out_channels)
+        # self.tome = OurToMe(r=0.5, m=None, iterations=8)
+        # self.masking_upsampler = OurToMeMaskingUpsampler(enccfg.out_channels)
+        # self.tome_unmerge = True
+        # self.downsample = Downsample(enccfg.out_channels, enccfg.out_channels)
+        # self.upsample = Upsample1D(scale_factor=2.0, mode='nearest')
+        # self.tome = GreedyToMe(r=0.375, m=8)
+        # self.pooler = TokenPooler(enccfg.out_channels, r=0.5, temperature=1.0)
+        # self.unpooler = TokenUnpooler(enccfg.out_channels, use_soft_probs=False)
 
     def construct_criteria(self):
         cfg = self.cfg.train
@@ -265,15 +282,55 @@ class CodecLightningModule(pl.LightningModule):
             }
         else:
             wav = batch['wav']
-            vq_emb = self.encoder(wav.unsqueeze(1))
+            vq_emb = self.encoder(wav.unsqueeze(1), stage=0)
+            vq_emb = self.encoder(vq_emb, stage=1)
+            if getattr(self, 'tome', None) is not None:
+                vq_emb = vq_emb.transpose(1, 2)
+                # vq_emb, unmerge_fn, sizes = self.tome(vq_emb)
+                # vq_emb, merge_btree, unmerge_fn = self.tome(vq_emb
+                vq_emb, merge_btree = self.tome.merge(vq_emb)
+                vq_emb = vq_emb.transpose(1, 2)
+            elif getattr(self, 'downsample', None) is not None:
+                vq_emb = self.downsample(vq_emb)
+            elif getattr(self, 'pooler', None) is not None:
+                vq_emb = vq_emb.transpose(1, 2)
+                vq_emb, pooled_tokens, binary_mask, soft_probs = self.pooler(vq_emb)
+                vq_emb = vq_emb.transpose(1, 2)
+            # vq_emb = self.encoder(vq_emb, stage=1)
             vq_post_emb, vq_code, vq_loss = self.decoder(vq_emb, vq=True)
+            if getattr(self, 'masking_upsampler', None) is not None:
+                vq_post_emb = vq_post_emb.transpose(1, 2)
+                # vq_post_emb = self.masking_upsampler(vq_post_emb, sizes)
+                vq_post_emb = self.masking_upsampler(vq_post_emb, merge_btree)
+                vq_post_emb = vq_post_emb.transpose(1, 2)
+            elif getattr(self, 'tome', None) is not None:
+                vq_post_emb = vq_post_emb.transpose(1, 2)
+                # vq_post_emb = unmerge_fn(vq_post_emb)
+                vq_post_emb = self.tome.unmerge(vq_post_emb, self.tome.btree_to_root_map(merge_btree))
+                vq_post_emb = vq_post_emb.transpose(1, 2)
+            elif getattr(self, 'upsample', None) is not None:
+                vq_post_emb = self.upsample(vq_post_emb)
+            elif getattr(self, 'unpooler', None) is not None:
+                vq_post_emb = vq_post_emb.transpose(1, 2)
+                vq_post_emb = self.unpooler(vq_post_emb, pooled_tokens, binary_mask, soft_probs)
+                vq_post_emb = vq_post_emb.transpose(1, 2)
             y_ = self.decoder(vq_post_emb, vq=False) # [B, 1, T]
             y = wav.unsqueeze(1)
+            # soft_probs = soft_probs / soft_probs.sum(dim=-1, keepdim=True)
+            # entropy_loss = (soft_probs + 1e-6).log() * soft_probs
+            # entropy_loss = - (entropy_loss.sum(dim=-1))
+            # entropy_loss = entropy_loss.mean()
+            vq_loss = sum(vq_loss)
+            if getattr(self, 'pooler', None) is not None:
+                vq_loss = vq_loss.transpose(1, 2)[binary_mask.bool()].mean()
+            else:
+                vq_loss = vq_loss.mean()
             output = {
                 'gt_wav': y,
                 'gen_wav': y_,
                 'vq_loss': vq_loss,
-                'vq_code': vq_code
+                'vq_code': vq_code,
+                # 'entropy_loss': 5*entropy_loss
             }
         return output
     
@@ -371,11 +428,16 @@ class CodecLightningModule(pl.LightningModule):
 
         # VQ loss
         if vq_loss is not None:
-            vq_loss = sum(vq_loss)
+            # vq_loss = sum(vq_loss)
             gen_loss += vq_loss
             output_dict['vq_loss'] = vq_loss
+        
+        if 'entropy_loss' in output:
+            gen_loss += output['entropy_loss']
+            output_dict['entropy_loss'] = output['entropy_loss']
 
-        # Semantic reconstruction loss
+        # Semantic reconstruction loss 
+
         if self.cfg.train.use_semantic:
             output_dict['semantic_recon_loss'] = output['semantic_recon_loss']
             gen_loss += output_dict['semantic_recon_loss'] * cfg.lambdas.lambda_semantic_loss
