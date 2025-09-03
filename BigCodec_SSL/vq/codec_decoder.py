@@ -5,7 +5,7 @@ from .residual_vq import ResidualVQ
 from .module import WNConv1d, DecoderBlock, ResLSTM, ConformerBackbone, RMSNorm
 from .alias_free_torch import *
 from . import activations
-from .vector_quantize_pytorch_lucidrains import VectorQuantize, FSQ
+from vector_quantize_pytorch import FSQ
 
 def init_weights(m):
     if isinstance(m, nn.Conv1d):
@@ -394,7 +394,9 @@ class ConformerDecoderISTFT(nn.Module):
                  n_fft=1024,
                  window_size=1024,
                  dim=512,
-                 n_layers=12,
+                 n_layers_stage0=12,
+                 n_layers_stage1=12,
+                 r=0.5,
                  n_head=8,
                  ffn_mult=4,
                  conv_kernel_size=31,
@@ -422,7 +424,7 @@ class ConformerDecoderISTFT(nn.Module):
         if fsq:
             self.quantizer = FSQ(
                 levels = fsq_levels,
-                channel_first = True,
+                channel_first = False,
                 dim = in_channels,
             )
             assert codebook_size == np.prod(fsq_levels), "codebook_size must be equal to the product of fsq_levels"
@@ -440,59 +442,84 @@ class ConformerDecoderISTFT(nn.Module):
         
         # Input projection from quantized features to conformer dimension
         if in_channels != dim:
-            self.input_proj = torch.nn.utils.weight_norm(nn.Conv1d(in_channels, dim, kernel_size=1))
+            self.input_proj = nn.Linear(in_channels, dim) #nn.Conv1d(in_channels, dim, kernel_size=1)
         else:
             self.input_proj = nn.Identity()
         
         # Conformer backbone
-        self.conformer_backbone = ConformerBackbone(
-            dim=dim,
-            n_layers=n_layers,
-            n_head=n_head,
-            ffn_mult=ffn_mult,
-            conv_kernel_size=conv_kernel_size,
-            dropout=dropout,
-            max_position_embeddings=max_position_embeddings,
-            original_max_position_embeddings=original_max_position_embeddings,
-            base=base,
-            causal=causal,
-            conv_first=False
-        )
+        if n_layers_stage0 > 0:
+            self.conformer_backbone_stage0 = ConformerBackbone(
+                dim=dim,
+                n_layers=n_layers_stage0,
+                n_head=n_head,
+                ffn_mult=ffn_mult,
+                conv_kernel_size=conv_kernel_size,
+                dropout=dropout,
+                max_position_embeddings=int(max_position_embeddings*r),
+                original_max_position_embeddings=int(original_max_position_embeddings*r),
+                base=base,
+                causal=causal,
+                conv_first=False
+                )
+        else:
+            self.conformer_backbone_stage0 = nn.Identity()
+        
+        if n_layers_stage1 > 0:
+            self.conformer_backbone_stage1 = ConformerBackbone(
+                dim=dim,
+                n_layers=n_layers_stage1,
+                n_head=n_head,
+                ffn_mult=ffn_mult,
+                conv_kernel_size=conv_kernel_size,
+                dropout=dropout,
+                max_position_embeddings=max_position_embeddings,
+                original_max_position_embeddings=original_max_position_embeddings,
+                base=base,
+                causal=causal,
+                conv_first=False
+                )
+        else:
+            self.conformer_backbone_stage1 = nn.Identity()
 
-        self.norm = RMSNorm(dim)
+        # self.input_norm = RMSNorm(dim)
         
         # Use existing ISTFTHead
         self.head = ISTFTHead(dim=dim, n_fft=n_fft, hop_length=hop_length, padding="same")
         
         self.reset_parameters()
 
-    def forward(self, x, unmerge_fn=None, vq=True):
+    def forward(self, x, vq=True, stage=0):
         if vq is True:
             if self.fsq:
                 x, q = self.quantizer(x)
-                commit_loss = torch.zeros(x.shape[0], device = x.device)
+                commit_loss = None
             else:
+                x = x.transpose(1, 2)
                 x, q, commit_loss = self.quantizer(x)
+                x = x.transpose(1, 2)
             return x, q, commit_loss
         
-        if unmerge_fn is not None:
-            x = unmerge_fn(x.transpose(1, 2)).transpose(1, 2)
+        if stage == 0:
+            # Input projection
+            x = self.input_proj(x)  # (B, T, dim)
 
-        # Input projection
-        x = self.input_proj(x)  # (B, dim, T)
-        
-        # Conformer backbone
-        x = self.conformer_backbone(x)  # (B, dim, T)
-        
-        # Convert to (B, T, dim) for ISTFTHead
-        x = x.transpose(1, 2)  # (B, T, dim)
+            # x = self.input_norm(x)
+            # Conformer backbone
+            x = self.conformer_backbone_stage0(x)  # (B, T, dim)
+            return x
+        elif stage == 1:
+            x = self.conformer_backbone_stage1(x)  # (B, T, dim)
+            # Convert to (B, T, dim) for ISTFTHead
+            # x = x.transpose(1, 2)  # (B, T, dim)
 
-        x = self.norm(x)
-        
-        # Use ISTFTHead
-        audio, x_pred = self.head(x)
-        
-        return audio
+            # x = self.norm(x)
+            
+            # Use ISTFTHead
+            audio, x_pred = self.head(x)
+            
+            return audio
+        else:
+            raise ValueError(f"Unsupported stage: {stage}")
 
     def vq2emb(self, vq):
         self.quantizer = self.quantizer.eval()

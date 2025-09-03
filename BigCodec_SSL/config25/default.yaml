@@ -3,7 +3,7 @@ defaults:
   - dataset: default
   - model: base
   - train: default
-name: onformer-stft-istft-1024-ls-600k-vq16384-100hz-ourtome50hzk2-unmerge-2stage
+name: squeezeformer-stft-istft-1024-ls-600k-VQ65536-100hz-conv50hz-unmerge-2stage
 log_dir: pl_log
 debug: false
 resume_ckpt: null

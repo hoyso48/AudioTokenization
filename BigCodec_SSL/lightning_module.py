@@ -21,9 +21,11 @@ from transformers import AutoModel
 from vq.module import SemanticDecoder,SemanticEncoder,Downsample,Upsample,Upsample1D
 from transformers import AutoFeatureExtractor, Wav2Vec2BertModel
 from torchmetrics.audio import ShortTimeObjectiveIntelligibility, PerceptualEvaluationSpeechQuality, ScaleInvariantSignalNoiseRatio, ScaleInvariantSignalDistortionRatio
+from torchmetrics.aggregation import MeanMetric
 from pesq import NoUtterancesError
 from tome import OurToMe, GreedyToMe, TokenPooler, TokenUnpooler, OurToMeMaskingUpsampler
-from dtp.tome_ops import ToMeChained, GeneralizedToMeMaskingUpsampler, ToMeGreedy, ToMeTopK, ToMeK2
+from dtp.tome_ops import ToMeChained, GeneralizedToMeMaskingUpsampler, ToMeGreedy, ToMeTopK, ToMeK2, ToMeK2V2, ToMeK2New
+import dtp.tome_ops
 
 class CodebookPerplexity(torchmetrics.Metric):
     def __init__(self, codebook_size, **kwargs):
@@ -106,7 +108,9 @@ class CodecLightningModule(pl.LightningModule):
                 n_fft=enccfg.n_fft,
                 window_size=enccfg.window_size,
                 dim=enccfg.dim,
-                n_layers=enccfg.n_layers,
+                n_layers_stage0=enccfg.n_layers_stage0,
+                n_layers_stage1=enccfg.n_layers_stage1,
+                r=enccfg.r,
                 n_head=enccfg.n_head,
                 ffn_mult=enccfg.ffn_mult,
                 conv_kernel_size=enccfg.conv_kernel_size,
@@ -147,7 +151,9 @@ class CodecLightningModule(pl.LightningModule):
                  n_fft=deccfg.n_fft,
                  window_size=deccfg.window_size,
                  dim=deccfg.dim,
-                 n_layers=deccfg.n_layers,
+                 n_layers_stage0=deccfg.n_layers_stage0,
+                 n_layers_stage1=deccfg.n_layers_stage1,
+                 r=deccfg.r,
                  n_head=deccfg.n_head,
                  ffn_mult=deccfg.ffn_mult,
                  conv_kernel_size=deccfg.conv_kernel_size,
@@ -197,18 +203,14 @@ class CodecLightningModule(pl.LightningModule):
             self.semantic_model.eval()
             self.semantic_model.requires_grad_(False)
 
-        # self.tome = ToMeTopK(kernel_size=2, num_iterations=8, r=0.5, filter_chained=True, filter_multiple_src=False)
-        self.tome = ToMeK2(num_iterations=8, r=0.5)
-        self.masking_upsampler = GeneralizedToMeMaskingUpsampler(enccfg.out_channels, kernel_size=2)
-        # self.masking_upsampler = GeneralizedToMeMaskingUpsampler(enccfg.out_channels)
-        # self.tome = OurToMe(r=0.5, m=None, iterations=8)
-        # self.masking_upsampler = OurToMeMaskingUpsampler(enccfg.out_channels)
-        # self.tome_unmerge = True
-        # self.downsample = Downsample(enccfg.out_channels, enccfg.out_channels)
-        # self.upsample = Upsample1D(scale_factor=2.0, mode='nearest')
-        # self.tome = GreedyToMe(r=0.375, m=8)
-        # self.pooler = TokenPooler(enccfg.out_channels, r=0.5, temperature=1.0)
-        # self.unpooler = TokenUnpooler(enccfg.out_channels, use_soft_probs=False)
+        tomecfg = self.cfg.model.tome
+        if tomecfg.use_tome:
+            self.tome = getattr(dtp.tome_ops, tomecfg.class_name)(**tomecfg.tome_params)
+            if tomecfg.proj:
+                self.tome_proj = nn.Linear(enccfg.out_channels, tomecfg.proj_dim)
+        else:
+            self.downsample = Downsample(in_channels=enccfg.out_channels, out_channels=enccfg.out_channels, stride=2)
+            self.upsample = Upsample(in_channels=deccfg.in_channels, out_channels=deccfg.in_channels, stride=2)
 
     def construct_criteria(self):
         cfg = self.cfg.train
@@ -236,6 +238,7 @@ class CodecLightningModule(pl.LightningModule):
         metrics['si_sdr'] = ScaleInvariantSignalDistortionRatio()
         metrics['codebook_perplexity'] = CodebookPerplexity(codebook_size=self.cfg.model.codec_decoder.codebook_size)
         metrics['codebook_utilization'] = CodebookUtilization(codebook_size=self.cfg.model.codec_decoder.codebook_size)
+        metrics['avg_sim'] = MeanMetric()
         return torchmetrics.MetricCollection(prefix=prefix, metrics=metrics)
     
     # @torch.compile
@@ -283,55 +286,32 @@ class CodecLightningModule(pl.LightningModule):
         else:
             wav = batch['wav']
             vq_emb = self.encoder(wav.unsqueeze(1), stage=0)
-            vq_emb = self.encoder(vq_emb, stage=1)
             if getattr(self, 'tome', None) is not None:
-                vq_emb = vq_emb.transpose(1, 2)
-                # vq_emb, unmerge_fn, sizes = self.tome(vq_emb)
-                # vq_emb, merge_btree, unmerge_fn = self.tome(vq_emb
-                vq_emb, merge_btree = self.tome.merge(vq_emb)
-                vq_emb = vq_emb.transpose(1, 2)
+                merged, merge_btree, avg_sim = self.tome.compute_merge(self.tome_proj(vq_emb))
+                direct_to_root_map = self.tome.btree_to_root_map(merge_btree)
+                vq_emb = self.tome.merge(vq_emb, direct_to_root_map)
             elif getattr(self, 'downsample', None) is not None:
                 vq_emb = self.downsample(vq_emb)
-            elif getattr(self, 'pooler', None) is not None:
-                vq_emb = vq_emb.transpose(1, 2)
-                vq_emb, pooled_tokens, binary_mask, soft_probs = self.pooler(vq_emb)
-                vq_emb = vq_emb.transpose(1, 2)
-            # vq_emb = self.encoder(vq_emb, stage=1)
+            vq_emb = self.encoder(vq_emb, stage=1)
             vq_post_emb, vq_code, vq_loss = self.decoder(vq_emb, vq=True)
+            vq_post_emb = self.decoder(vq_post_emb, vq=False, stage=0)
             if getattr(self, 'masking_upsampler', None) is not None:
-                vq_post_emb = vq_post_emb.transpose(1, 2)
-                # vq_post_emb = self.masking_upsampler(vq_post_emb, sizes)
                 vq_post_emb = self.masking_upsampler(vq_post_emb, merge_btree)
-                vq_post_emb = vq_post_emb.transpose(1, 2)
             elif getattr(self, 'tome', None) is not None:
-                vq_post_emb = vq_post_emb.transpose(1, 2)
-                # vq_post_emb = unmerge_fn(vq_post_emb)
-                vq_post_emb = self.tome.unmerge(vq_post_emb, self.tome.btree_to_root_map(merge_btree))
-                vq_post_emb = vq_post_emb.transpose(1, 2)
+                vq_post_emb = self.tome.unmerge(vq_post_emb, direct_to_root_map)
             elif getattr(self, 'upsample', None) is not None:
                 vq_post_emb = self.upsample(vq_post_emb)
-            elif getattr(self, 'unpooler', None) is not None:
-                vq_post_emb = vq_post_emb.transpose(1, 2)
-                vq_post_emb = self.unpooler(vq_post_emb, pooled_tokens, binary_mask, soft_probs)
-                vq_post_emb = vq_post_emb.transpose(1, 2)
-            y_ = self.decoder(vq_post_emb, vq=False) # [B, 1, T]
+            y_ = self.decoder(vq_post_emb, vq=False, stage=1) # [B, 1, T]
             y = wav.unsqueeze(1)
-            # soft_probs = soft_probs / soft_probs.sum(dim=-1, keepdim=True)
-            # entropy_loss = (soft_probs + 1e-6).log() * soft_probs
-            # entropy_loss = - (entropy_loss.sum(dim=-1))
-            # entropy_loss = entropy_loss.mean()
-            vq_loss = sum(vq_loss)
-            if getattr(self, 'pooler', None) is not None:
-                vq_loss = vq_loss.transpose(1, 2)[binary_mask.bool()].mean()
-            else:
-                vq_loss = vq_loss.mean()
+            
             output = {
                 'gt_wav': y,
                 'gen_wav': y_,
                 'vq_loss': vq_loss,
                 'vq_code': vq_code,
-                # 'entropy_loss': 5*entropy_loss
             }
+            if hasattr(self, 'tome'):
+                output['avg_sim'] = avg_sim
         return output
     
     @torch.inference_mode()
@@ -428,7 +408,7 @@ class CodecLightningModule(pl.LightningModule):
 
         # VQ loss
         if vq_loss is not None:
-            # vq_loss = sum(vq_loss)
+            vq_loss = sum(vq_loss)
             gen_loss += vq_loss
             output_dict['vq_loss'] = vq_loss
         
@@ -487,6 +467,8 @@ class CodecLightningModule(pl.LightningModule):
         si_snr = self.val_metrics['si_snr'].update(y_, y)
         si_sdr = self.val_metrics['si_sdr'].update(y_, y)
         stoi = self.val_metrics['stoi'].update(rs_y_, rs_y)
+        if 'avg_sim' in output:
+            avg_sim = self.val_metrics['avg_sim'].update(output['avg_sim'])
         try:
             pesq = self.val_metrics['pesq'].update(rs_y_, rs_y)
         except NoUtterancesError:
@@ -521,6 +503,8 @@ class CodecLightningModule(pl.LightningModule):
         si_snr = self.test_metrics['si_snr'].update(y_, y)
         si_sdr = self.test_metrics['si_sdr'].update(y_, y)
         stoi = self.test_metrics['stoi'].update(rs_y_, rs_y)
+        if 'avg_sim' in output:
+            avg_sim = self.test_metrics['avg_sim'].update(output['avg_sim'])
         try:
             pesq = self.test_metrics['pesq'].update(rs_y_, rs_y)
         except NoUtterancesError:

@@ -1,6 +1,6 @@
 import unittest
 import torch
-from .tome_ops import GeneralizedToMe
+from .tome_ops import GeneralizedToMe, OurToMeK, OurToMe2
 from typing import Tuple, Callable
 
 class TestGeneralizedToMe(unittest.TestCase):
@@ -125,6 +125,55 @@ class TestGeneralizedToMe(unittest.TestCase):
                         f"Unmerged tensor is not as expected. Got:\n{unmerged_x}\nExpected:\n{expected_unmerged_x}")
         
         print("Full merge/unmerge logic test passed.")
+
+
+class TestOurToMeK(unittest.TestCase):
+
+    def setUp(self):
+        print(f"\n--- Running test: {self._testMethodName} ---")
+
+    def test_initialization(self):
+        try:
+            OurToMeK(r=0.5, num_iterations=2, group_size=2)
+        except ValueError:
+            self.fail("OurToMeK raised ValueError unexpectedly.")
+
+    def test_merge_unmerge_k2_matches_expectation(self):
+        B, N, C = 1, 8, 4
+        r = 0.25  # Merge 2 tokens
+        group_size = 2
+
+        tome = OurToMeK(r=r, num_iterations=1, group_size=group_size)
+
+        # Deterministic input: two strong adjacent pairs
+        x = torch.zeros(B, N, C, dtype=torch.float32)
+        x[0, 2] = torch.tensor([1.0, 0.0, 0.0, 0.0])
+        x[0, 3] = torch.tensor([1.0, 0.0, 0.0, 0.0])
+        x[0, 4] = torch.tensor([0.0, 1.0, 0.0, 0.0])
+        x[0, 5] = torch.tensor([0.0, 1.0, 0.0, 0.0])
+        x[0, 0] = torch.tensor([0.0, 0.0, 1.0, 0.0])
+        x[0, 1] = torch.tensor([0.0, 0.0, 0.0, 1.0])
+        x[0, 6] = torch.tensor([0.0, 0.0, 1.0, 0.0])
+        x[0, 7] = torch.tensor([0.0, 0.0, 0.0, 1.0])
+
+        merged_x, btree, avg = tome.merge(x)
+
+        expected_btree = torch.zeros(B, N, dtype=torch.long)
+        expected_btree[0, 3] = -1
+        expected_btree[0, 5] = -1
+        self.assertTrue(torch.equal(btree.cpu(), expected_btree))
+
+        expected_n_merged = N - int(r * N)
+        self.assertEqual(merged_x.shape, (B, expected_n_merged, C))
+
+        expected_val1 = (x[0, 2] + x[0, 3]) / 2
+        expected_val2 = (x[0, 4] + x[0, 5]) / 2
+        expected_merged_x = torch.stack(
+            [x[0, 0], x[0, 1], expected_val1, expected_val2, x[0, 6], x[0, 7]]
+        ).unsqueeze(0)
+
+        self.assertTrue(torch.allclose(merged_x.cpu(), expected_merged_x))
+
 
 
 if __name__ == '__main__':

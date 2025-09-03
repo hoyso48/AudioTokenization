@@ -405,7 +405,9 @@ class ConformerEncoderSTFT(nn.Module):
                  n_fft=1024,
                  window_size=1024,
                  dim=512,
-                 n_layers=12,
+                 n_layers_stage0=12,
+                 n_layers_stage1=12,
+                 r=0.5,
                  n_head=8,
                  ffn_mult=4,
                  conv_kernel_size=31,
@@ -431,43 +433,49 @@ class ConformerEncoderSTFT(nn.Module):
         # STFT output: (B, n_fft//2+1, n_frames)
         # We convert complex to real+imag: (B, 2*(n_fft//2+1), n_frames)
         stft_dim = n_fft // 2 + 1
-        self.input_proj = nn.Conv1d(2 * stft_dim, dim, kernel_size=1)
+        self.input_proj = nn.Linear(2 * stft_dim, dim) #nn.Conv1d(2 * stft_dim, dim, kernel_size=1)
         self.input_norm = RMSNorm(dim)
         
         # Conformer backbone
-        self.conformer_backbone1 = ConformerBackbone(
-            dim=dim,
-            n_layers=n_layers,#-n_layers//2,
-            n_head=n_head,
-            ffn_mult=ffn_mult,
-            conv_kernel_size=conv_kernel_size,
-            dropout=dropout,
-            max_position_embeddings=max_position_embeddings,
-            original_max_position_embeddings=original_max_position_embeddings,
-            base=base,
-            causal=causal,
-            conv_first=True
-        )
-        self.conformer_backbone2 = nn.Identity()
-        self.conformer_backbone2 = ConformerBackbone(
-            dim=dim,
-            n_layers=n_layers,
-            n_head=n_head,
-            ffn_mult=ffn_mult,
-            conv_kernel_size=conv_kernel_size,
-            dropout=dropout,
-            max_position_embeddings=max_position_embeddings,
-            original_max_position_embeddings=original_max_position_embeddings//2,
-            base=base,
-            causal=causal,
-            conv_first=True
-        )
+        if n_layers_stage0 > 0:
+            self.conformer_backbone_stage0 = ConformerBackbone(
+                dim=dim,
+                n_layers=n_layers_stage0,
+                n_head=n_head,
+                ffn_mult=ffn_mult,
+                conv_kernel_size=conv_kernel_size,
+                dropout=dropout,
+                max_position_embeddings=max_position_embeddings,
+                original_max_position_embeddings=original_max_position_embeddings,
+                base=base,
+                causal=causal,
+                conv_first=True
+            )
+        else:
+            self.conformer_backbone_stage0 = nn.Identity()
+        # self.conformer_backbone2 = nn.Identity()
+        if n_layers_stage1 > 0:
+            self.conformer_backbone_stage1 = ConformerBackbone(
+                dim=dim,
+                n_layers=n_layers_stage1,
+                n_head=n_head,
+                ffn_mult=ffn_mult,
+                conv_kernel_size=conv_kernel_size,
+                dropout=dropout,
+                max_position_embeddings=int(max_position_embeddings*r),
+                original_max_position_embeddings=int(original_max_position_embeddings*r),
+                base=base,
+                causal=causal,
+                conv_first=True
+            )
+        else:
+            self.conformer_backbone_stage1 = nn.Identity()
 
-        self.norm = RMSNorm(dim)
+        # self.norm = RMSNorm(dim)
 
         # Output projection
         if out_channels != dim:
-            self.output_proj = torch.nn.utils.weight_norm(nn.Conv1d(dim, out_channels, kernel_size=1))
+            self.output_proj = nn.Linear(dim, out_channels) #nn.Conv1d(dim, out_channels, kernel_size=1)
         else:
             self.output_proj = nn.Identity()
         
@@ -489,18 +497,18 @@ class ConformerEncoderSTFT(nn.Module):
             stft_features = torch.cat([real_part, imag_part], dim=1)  # (B, 2*(n_fft//2+1), n_frames)
             
             # Input projection
-            x = self.input_proj(stft_features)  # (B, dim, n_frames)
-            x = self.input_norm(x.transpose(1, 2)).transpose(1, 2)
+            x = self.input_proj(stft_features.transpose(1, 2))  # (B, n_frames, dim)
+            x = self.input_norm(x)
             
             # Conformer backbone
-            x = self.conformer_backbone1(x)  # (B, dim, n_frames)
+            x = self.conformer_backbone_stage0(x)  # (B, n_frames, dim)
 
         elif stage == 1:
-            x = self.conformer_backbone2(x)  # (B, dim, n_frames)
-            x = self.norm(x.transpose(1, 2)).transpose(1, 2)
+            x = self.conformer_backbone_stage1(x)  # (B, n_frames, dim)
+            # x = self.norm(x)
             
             # Output projection
-            x = self.output_proj(x)  # (B, out_channels, n_frames)
+            x = self.output_proj(x)  # (B, n_frames, out_channels)
         
         return x
 

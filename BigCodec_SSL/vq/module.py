@@ -667,6 +667,15 @@ class SelfAttention(nn.Module):
         
         return out
 
+class LayerScale(nn.Module):
+    def __init__(self, d_model: int):
+        super().__init__()
+        self.scale = nn.Parameter(torch.ones(d_model))
+
+    def forward(self, x):
+        scale = self.scale.view(1, 1, -1)
+        return x * scale
+
 class FeedForward(nn.Module):
     def __init__(self, dim, mult=4, dropout=0.1):
         super().__init__()
@@ -687,22 +696,23 @@ class FeedForward(nn.Module):
 class ConformerConvModule(nn.Module):
     def __init__(self, dim, kernel_size=31, dropout=0.1, causal: bool = False):
         super().__init__()
-        self.pointwise_conv1 = nn.Conv1d(dim, 2 * dim, kernel_size=1)
-        self.glu = nn.GLU(dim=1)
+        self.pointwise_conv1 = nn.Linear(dim, 2 * dim) #nn.Conv1d(dim, 2 * dim, kernel_size=1)
+        self.glu = nn.GLU(dim=-1)
         if causal:
             self.depthwise_conv = CausalConv1d(dim, dim, kernel_size=kernel_size, groups=dim)
         else:
             self.depthwise_conv = nn.Conv1d(dim, dim, kernel_size=kernel_size, groups=dim, padding='same')
         self.conv_norm = RMSNorm(dim)
         self.silu = nn.SiLU()
-        self.pointwise_conv2 = nn.Conv1d(dim, dim, kernel_size=1)
+        self.pointwise_conv2 = nn.Linear(dim, dim) #nn.Conv1d(dim, dim, kernel_size=1)
         self.dropout = nn.Dropout(dropout)
 
     def forward(self, x):
+        # x: (B, T, C)
         out = self.pointwise_conv1(x)
         out = self.glu(out)
-        out = self.depthwise_conv(out)
-        out = self.conv_norm(out.transpose(1, 2)).transpose(1, 2)
+        out = self.depthwise_conv(out.transpose(1, 2)).transpose(1, 2)
+        out = self.conv_norm(out)
         out = self.silu(out)
         out = self.pointwise_conv2(out)
         out = self.dropout(out)
@@ -717,32 +727,58 @@ class ConformerLayer(nn.Module):
         self.ffn2 = FeedForward(dim, mult=ffn_mult, dropout=dropout)
         self.conv_first = conv_first
 
-        self.conv_norm_in = RMSNorm(dim)
-        self.ffn1_norm_in = RMSNorm(dim)
-        self.attn_norm_in = RMSNorm(dim)
-        self.ffn2_norm_in = RMSNorm(dim)
-        self.final_norm = RMSNorm(dim)
+        # self.conv_norm_in = RMSNorm(dim)
+        # self.ffn1_norm_in = RMSNorm(dim)
+        # self.attn_norm_in = RMSNorm(dim)
+        # self.ffn2_norm_in = RMSNorm(dim)
+        # self.final_norm = RMSNorm(dim)
+
+        self.conv_norm_out = RMSNorm(dim)
+        self.ffn1_norm_out = RMSNorm(dim)
+        self.attn_norm_out = RMSNorm(dim)
+        self.ffn2_norm_out = RMSNorm(dim)
+        self.conv_scale = LayerScale(dim)
+        self.ffn1_scale = LayerScale(dim)
+        self.attn_scale = LayerScale(dim)
+        self.ffn2_scale = LayerScale(dim)
         
         self.dropout = nn.Dropout(dropout)
 
     def forward(self, x):
+        # if self.conv_first:
+        #     x = x + self.conv(self.conv_norm_in(x))
+        # else:
+        #     x = x + self.dropout(self.self_attn(self.attn_norm_in(x)))
+
+        # x = x + self.ffn1(self.ffn1_norm_in(x))
+
+        # if self.conv_first:
+        #     x = x + self.dropout(self.self_attn(self.attn_norm_in(x)))
+        # else:
+        #     x = x + self.conv(self.conv_norm_in(x))
+
+        # x = x + self.ffn2(self.ffn2_norm_in(x))
+        # x = self.final_norm(x)
+
         if self.conv_first:
-            x = x + self.conv(self.conv_norm_in(x.transpose(1, 2)).transpose(1, 2))
+            x = x + self.conv_scale(self.conv(x))
+            x = self.conv_norm_out(x)
         else:
-            x = x + self.dropout(self.self_attn(self.attn_norm_in(x.transpose(1, 2))).transpose(1, 2))
+            x = x + self.attn_scale(self.dropout(self.self_attn(x)))
+            x = self.attn_norm_out(x)
 
-        x = x + self.ffn1(self.ffn1_norm_in(x.transpose(1, 2))).transpose(1, 2)
+        x = x + self.ffn1_scale(self.ffn1(x))
+        x = self.ffn1_norm_out(x)
 
         if self.conv_first:
-            x = x + self.dropout(self.self_attn(self.attn_norm_in(x.transpose(1, 2))).transpose(1, 2))
+            x = x + self.attn_scale(self.dropout(self.self_attn(x)))
+            x = self.attn_norm_out(x)
         else:
-            x = x + self.conv(self.conv_norm_in(x.transpose(1, 2)).transpose(1, 2))
+            x = x + self.conv_scale(self.conv(x))
+            x = self.conv_norm_out(x)
 
-        x = x + self.ffn2(self.ffn2_norm_in(x.transpose(1, 2))).transpose(1, 2)
-        x = self.final_norm(x.transpose(1, 2)).transpose(1, 2)
-        # x = x + self.dropout(self.self_attn(self.attn_norm_in(x.transpose(1, 2)).transpose(1, 2)))
-
-        # x = x + self.ffn1(self.ffn1_norm_in(x.transpose(1, 2))).transpose(1, 2)
+        x = x + self.ffn2_scale(self.ffn2(x))
+        x = self.ffn2_norm_out(x)
 
         return x
 
@@ -767,10 +803,9 @@ class Downsample(nn.Module):
         self.activation = activation
 
     def forward(self, x):
-        x = self.conv(x)
-        x = x.transpose(1, 2)
+        # x: (B, T, C)
+        x = self.conv(x.transpose(1, 2)).transpose(1, 2)
         x = self.norm(x)
-        x = x.transpose(1, 2)
         x = self.activation(x)
         return x
 
@@ -782,10 +817,9 @@ class Upsample(nn.Module):
         self.activation = activation
 
     def forward(self, x):
-        x = self.conv(x)
-        x = x.transpose(1, 2)
+        # x: (B, T, C)
+        x = self.conv(x.transpose(1, 2)).transpose(1, 2)
         x = self.norm(x)
-        x = x.transpose(1, 2)
         x = self.activation(x)
         return x
     
