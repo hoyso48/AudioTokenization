@@ -5,6 +5,10 @@ import jax
 import jax.numpy as jnp
 from jax import lax as lax
 from flax import nnx
+try:
+    from jax.experimental.pallas.ops.tpu.flash_attention import flash_attention as tpu_flash_attention
+except Exception:
+    tpu_flash_attention = None
 
 class CausalConv1d(nnx.Module):
     def __init__(
@@ -246,6 +250,7 @@ class SelfAttention(nnx.Module):
         precision: Any = lax.Precision.DEFAULT,
         rngs: nnx.Rngs = None,
         original_max_position_embeddings: int = 4096,
+        use_flash_attention: bool = False,
     ):
         self.n_head = n_head
         self.head_dim = dim // n_head
@@ -262,6 +267,7 @@ class SelfAttention(nnx.Module):
             base=base,
             original_max_position_embeddings=original_max_position_embeddings,
         )
+        self.use_flash_attention = use_flash_attention
 
     def __call__(self, x: jnp.ndarray) -> jnp.ndarray:
         # x: (B, T, C)
@@ -279,15 +285,36 @@ class SelfAttention(nnx.Module):
         sin = sin[None, None, :, :]
         q, k = _apply_rotary_pos_emb(q, k, cos, sin)
 
-        attn_logits = jnp.einsum('bhtd,bhsd->bhts', q, k) / math.sqrt(self.head_dim)
-        if self.causal:
-            mask = jnp.triu(jnp.ones((t, t), dtype=bool), k=1)
-            attn_logits = jnp.where(mask[None, None, :, :], -jnp.inf, attn_logits)
-        attn = jax.nn.softmax(attn_logits, axis=-1)
-        if self.dropout_p > 0.0:
-            attn = self.attn_dropout(attn)
-        out = jnp.einsum('bhts,bhsd->bhtd', attn, v)
+        use_tpu_flash = (
+            self.use_flash_attention
+            and tpu_flash_attention is not None
+            and (jax.default_backend() == 'tpu' or (len(jax.devices()) > 0 and jax.devices()[0].platform == 'tpu'))
+        )
+        if use_tpu_flash:
+            sm_scale = 1.0 / math.sqrt(self.head_dim)
+            try:
+                out = tpu_flash_attention(q, k, v, ab=None, segment_ids=None, causal=self.causal, sm_scale=sm_scale)
+            except Exception:
+                attn_logits = jnp.einsum('bhtd,bhsd->bhts', q, k) / math.sqrt(self.head_dim)
+                if self.causal:
+                    mask = jnp.triu(jnp.ones((t, t), dtype=bool), k=1)
+                    attn_logits = jnp.where(mask[None, None, :, :], -jnp.inf, attn_logits)
+                attn = jax.nn.softmax(attn_logits, axis=-1)
+                if self.dropout_p > 0.0:
+                    attn = self.attn_dropout(attn)
+                out = jnp.einsum('bhts,bhsd->bhtd', attn, v)
+        else:
+            attn_logits = jnp.einsum('bhtd,bhsd->bhts', q, k) / math.sqrt(self.head_dim)
+            if self.causal:
+                mask = jnp.triu(jnp.ones((t, t), dtype=bool), k=1)
+                attn_logits = jnp.where(mask[None, None, :, :], -jnp.inf, attn_logits)
+            attn = jax.nn.softmax(attn_logits, axis=-1)
+            if self.dropout_p > 0.0:
+                attn = self.attn_dropout(attn)
+            out = jnp.einsum('bhts,bhsd->bhtd', attn, v)
         out = out.transpose(0, 2, 1, 3).reshape(b, t, c)
+        if use_tpu_flash and self.dropout_p > 0.0:
+            out = self.attn_dropout(out)
         out = self.out_proj(out)
         return out
 
