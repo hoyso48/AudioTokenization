@@ -19,7 +19,7 @@ def _read_filelist(file_path: str) -> List[str]:
         return [line.strip().split('\t')[0] for line in f if line.strip()]
 
 
-def _load_audio(file_audio: str, target_sample_rate: int) -> np.ndarray:
+def _load_audio(file_audio: str, target_sample_rate: int, resample_res_type: Optional[str] = None) -> np.ndarray:
     info = sf.info(file_audio)
     sample_rate = info.samplerate
     with sf.SoundFile(file_audio, 'r') as f:
@@ -29,7 +29,14 @@ def _load_audio(file_audio: str, target_sample_rate: int) -> np.ndarray:
             waveform = waveform[:, 0]
         waveform = waveform.astype(np.float32)
     if target_sample_rate and target_sample_rate != sample_rate:
-        waveform = librosa.resample(waveform, orig_sr=sample_rate, target_sr=target_sample_rate)
+        try:
+            if resample_res_type is not None:
+                waveform = librosa.resample(waveform, orig_sr=sample_rate, target_sr=target_sample_rate, res_type=resample_res_type)
+            else:
+                waveform = librosa.resample(waveform, orig_sr=sample_rate, target_sr=target_sample_rate)
+        except TypeError:
+            # Older librosa without res_type kwarg
+            waveform = librosa.resample(waveform, orig_sr=sample_rate, target_sr=target_sample_rate)
     return waveform
 
 
@@ -75,15 +82,18 @@ class FilelistAudioDataset(RandomAccessDataSource):
         ocwd = hydra_utils.get_original_cwd()
         filelist_path = join(ocwd, self.phase_cfg.filelist)
         self.filelist = _read_filelist(filelist_path)
-        self.root = cfg.preprocess.datasets.LibriSpeech.root
+        # self.root = cfg.preprocess.datasets.LibriSpeech.root
 
     def __len__(self) -> int:
         return len(self.filelist)
 
     def __getitem__(self, idx: int) -> np.ndarray:
-        rel_path = self.filelist[idx]
-        full_path = join(self.root, rel_path)
-        wav = _load_audio(full_path, self.sample_rate)
+        # rel_path = self.filelist[idx]
+        # full_path = join(self.root, rel_path)
+        full_path = self.filelist[idx]
+        # Use high-quality resampler by default, can override via env
+        resample_res_type = os.environ.get('LIBROSA_RESAMPLE_RES_TYPE', None)
+        wav = _load_audio(full_path, self.sample_rate, resample_res_type=resample_res_type)
         wav = _crop_or_pad(wav, self.min_audio_length, self.multiple_of, self.phase)
         return wav
 
@@ -110,14 +120,20 @@ class DataModuleNNX:
             data_source=ds,
             operations=ops,
             sampler=sampler,
-            worker_count=max(1, cpu_count() // 2),
+            # Tune worker processes for IO-bound audio: 4-8 is often enough
+            worker_count=int(os.environ.get('GRAIN_WORKERS', max(1, min(cpu_count(), 8)))),
+            # Increase read threads and prefetch buffer for better overlap
+            read_options=grain.ReadOptions(
+                num_threads=int(os.environ.get('GRAIN_READ_THREADS', 8)),
+                prefetch_buffer_size=int(os.environ.get('GRAIN_PREFETCH', 400)),
+            ),
         )
 
         def _iter():
+            # Optional: small host-side prefetch to decouple iterator speed
             for batch in loader:
                 # batch: np.ndarray [B, T]
-                wav = jnp.asarray(batch)
-                yield {"wav": wav}
+                yield {"wav": jnp.asarray(batch)}
 
         return _iter()
 
@@ -129,5 +145,16 @@ class DataModuleNNX:
 
     def test_dataloader(self) -> Iterable[dict]:
         return self._build_loader('test')
+
+    def steps_per_epoch(self, phase: str) -> int:
+        """Number of steps per epoch for a given phase, mirroring CP logic.
+
+        Uses drop_remainder batching semantics to match Grain Batch transform.
+        """
+        ds = FilelistAudioDataset(self.cfg, phase)
+        batch_size = self.cfg.dataset.get(phase).batch_size
+        if batch_size <= 0:
+            return 0
+        return len(ds) // batch_size
 
 

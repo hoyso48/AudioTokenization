@@ -3,7 +3,7 @@ import jax.numpy as jnp
 from flax import nnx
 from typing import List, Tuple, Dict, Any, Optional, Union, Sequence
 from functools import partial
-from ..common.conv_weightnorm import WNConv2d
+from common.conv_weightnorm import WNConv2d
 
 class HiFiGANPeriodDiscriminator(nnx.Module):
     """HiFiGAN period discriminator (JAX/Flax NNX)."""

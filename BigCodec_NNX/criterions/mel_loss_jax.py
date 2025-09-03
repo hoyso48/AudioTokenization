@@ -3,7 +3,7 @@ from typing import List, Optional, Union, Callable, Tuple
 import jax
 import jax.numpy as jnp
 from flax import nnx
-from ..common.spectral import MelSpectrogram
+from common.spectral import MelSpectrogram
 
 class L1Loss(nnx.Module):
     def __call__(self, x, y):

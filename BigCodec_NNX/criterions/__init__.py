@@ -1,0 +1,3 @@
+from criterions.gan_loss_jax import GANLoss
+from criterions.mel_loss_jax import MultiResolutionMelSpectrogramLoss
+from criterions.mel_loss_jax import L1Loss

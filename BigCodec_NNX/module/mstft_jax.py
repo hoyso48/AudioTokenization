@@ -3,9 +3,9 @@ import jax.numpy as jnp
 from flax import nnx
 from typing import List, Tuple, Dict, Any, Optional, Callable, Union, Sequence
 from functools import partial
-from ..common.spectral import stft, _get_window
+from common.spectral import stft, _get_window
 from dataclasses import field
-from ..common.conv_weightnorm import WNConv2d
+from common.conv_weightnorm import WNConv2d
 
 class NLayerSpecDiscriminator(nnx.Module):
     """Multi-layer spectrogram discriminator (JAX/Flax NNX)."""

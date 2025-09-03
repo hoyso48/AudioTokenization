@@ -2,18 +2,18 @@ from flax import nnx
 import jax
 import jax.numpy as jnp
 from typing import Sequence
-from AudioTokenization.BigCodec_NNX.criterions.mel_loss_jax import MultiResolutionMelSpectrogramLoss
-from AudioTokenization.BigCodec_NNX.criterions.gan_loss_jax import GANLoss
-from AudioTokenization.BigCodec_NNX.criterions.mel_loss_jax import L1Loss
-# from AudioTokenization.BigCodec_NNX.vq.codec_encoder_jax import BigCodecEncoder
-# from AudioTokenization.BigCodec_NNX.vq.codec_decoder_jax import CodecDecoder
-from AudioTokenization.BigCodec_NNX.module.mpd_jax import HiFiGANMultiPeriodDiscriminator
-from AudioTokenization.BigCodec_NNX.module.mstft_jax import SpecDiscriminator
-from AudioTokenization.BigCodec_NNX.vq.codec_encoder_jax import ConformerEncoderSTFT as ConformerEncoderSTFT
-from AudioTokenization.BigCodec_NNX.vq.codec_decoder_jax import ConformerDecoderISTFT as ConformerDecoderISTFT
-from AudioTokenization.BigCodec_NNX.dtp.tome_ops_jax import ToMeK2New
-from AudioTokenization.BigCodec_NNX.vq.module_jax import Downsample, Upsample
-from AudioTokenization.BigCodec_NNX import dtp
+from criterions.mel_loss_jax import MultiResolutionMelSpectrogramLoss
+from criterions.gan_loss_jax import GANLoss
+from criterions.mel_loss_jax import L1Loss
+# from vq.codec_encoder_jax import BigCodecEncoder
+# from vq.codec_decoder_jax import CodecDecoder
+from module.mpd_jax import HiFiGANMultiPeriodDiscriminator
+from module.mstft_jax import SpecDiscriminator
+from vq.codec_encoder_jax import ConformerEncoderSTFT as ConformerEncoderSTFT
+from vq.codec_decoder_jax import ConformerDecoderISTFT as ConformerDecoderISTFT
+from dtp.tome_ops_jax import ToMeK2New
+from vq.module_jax import Downsample, Upsample
+import dtp
 
 class CodecModule(nnx.Module):
     """

@@ -4,6 +4,11 @@ librosa
 einops
 torch
 pytorch_lightning
+transformers
 hydra-core
 torchaudio
 einx
+pystoi
+matplotlib
+wandb
+vector_quantize_pytorch

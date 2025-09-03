@@ -1,5 +1,8 @@
 import sys, os
 sys.path.insert(0, '/home/hoyeol')
+# We'll manage precedence for these two explicitly right before dynamic imports
+SSL_PATH = '/home/hoyeol/AudioTokenization/BigCodec_SSL'
+NNX_PATH = '/home/hoyeol/AudioTokenization/BigCodec_NNX'
 os.environ.setdefault('JAX_PLATFORMS', 'cpu')
 
 from omegaconf import OmegaConf
@@ -7,10 +10,36 @@ import numpy as np
 
 import torch
 from flax import nnx
+import importlib.util
 
-from AudioTokenization.CP.lightning_module import CodecLightningModule as PT_Codec
-from AudioTokenization.BigCodec_NNX.codec_module import CodecModule as JX_Codec
 from AudioTokenization.utils.torch_nnx_port import Torch2NNX
+
+
+def load_module_from_path(name: str, path: str):
+    spec = importlib.util.spec_from_file_location(name, path)
+    if spec is None or spec.loader is None:
+        raise ImportError(f"Cannot load module {name} from {path}")
+    module = importlib.util.module_from_spec(spec)
+    spec.loader.exec_module(module)
+    return module
+
+
+def _prefer_paths_prepend(preferred_paths):
+    """Move preferred_paths (in order) to the front of sys.path (after '/home/hoyeol')."""
+    # Keep top-level '/home/hoyeol' at index 0 if present
+    top = ['/home/hoyeol'] if sys.path and sys.path[0] == '/home/hoyeol' else []
+    rest = [p for p in sys.path if p not in preferred_paths and p not in top]
+    sys.path[:] = top + list(preferred_paths) + rest
+
+
+def _clear_conflicting_packages():
+    """Ensure top-level ambiguous package names will be re-imported from the right path."""
+    targets = ('vq', 'module', 'criterions', 'dtp')
+    for modname in list(sys.modules.keys()):
+        for tgt in targets:
+            if modname == tgt or modname.startswith(tgt + '.'):
+                del sys.modules[modname]
+                break
 
 
 def _np(x):
@@ -33,8 +62,24 @@ def _stats(a, b):
 
 
 def main():
-    cfg_path = '/home/hoyeol/AudioTokenization/ckpts/config.yaml'
+    cfg_path = '/home/hoyeol/outputs/2025-09-03/07-10-33/hydra/config.yaml'
     cfg = OmegaConf.load(cfg_path)
+
+    # Dynamically load PT and JAX modules to avoid package path issues
+    _prefer_paths_prepend([SSL_PATH])
+    _clear_conflicting_packages()
+    pt_mod = load_module_from_path(
+        'pt_lightning', '/home/hoyeol/AudioTokenization/BigCodec_SSL/lightning_module.py'
+    )
+    # Now prepare env for JAX side and import
+    _prefer_paths_prepend([NNX_PATH])
+    _clear_conflicting_packages()
+    jx_mod = load_module_from_path(
+        'jx_codec_module', '/home/hoyeol/AudioTokenization/BigCodec_NNX/codec_module.py'
+    )
+
+    PT_Codec = getattr(pt_mod, 'CodecLightningModule')
+    JX_Codec = getattr(jx_mod, 'CodecModule')
 
     pt = PT_Codec(cfg=cfg)
     jx = JX_Codec(cfg=cfg, rngs=nnx.Rngs(0))

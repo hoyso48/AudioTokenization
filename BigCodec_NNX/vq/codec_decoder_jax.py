@@ -5,9 +5,9 @@ from flax import nnx
 
 from .fsq_jax import FSQ
 from .residual_vq_jax import ResidualVQ
-from AudioTokenization.BigCodec_NNX.vq.module_jax import ConformerBackbone, RMSNorm
-from AudioTokenization.BigCodec_NNX.common.conv_weightnorm import WNConv1d
-from AudioTokenization.BigCodec_NNX.common.spectral import _get_window
+from .module_jax import ConformerBackbone, RMSNorm
+from common.conv_weightnorm import WNConv1d
+from common.spectral import _get_window
 
 
 class ISTFT(nnx.Module):

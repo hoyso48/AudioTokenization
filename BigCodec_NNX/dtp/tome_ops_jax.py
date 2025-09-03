@@ -4,6 +4,7 @@ from typing import Tuple
 import jax
 import jax.numpy as jnp
 from flax import nnx
+import numpy as np
 
 
 def _normalize(x: jax.Array, axis: int = -1, eps: float = 1e-8) -> jax.Array:
@@ -80,12 +81,10 @@ class ToMeK2New(nnx.Module):
         if total_to_merge == 0 or N < 2:
             return x, btree_map, jnp.zeros((B,), dtype=dtype)
 
-        # Compute merges per iteration as in torch version
+        # Compute merges per iteration (static, python ints)
         steps = self.num_iterations + 1
-        # Equivalent of np.diff(np.linspace(0, total_to_merge, steps, dtype=int))
-        boundaries = jnp.linspace(0, float(total_to_merge), steps)
-        boundaries = jnp.floor(boundaries).astype(jnp.int32)
-        merges_per_iter = jnp.diff(boundaries)  # (num_iterations,)
+        boundaries = np.linspace(0, total_to_merge, steps, dtype=np.int32)
+        merges_per_iter = np.diff(boundaries).astype(int).tolist()  # list[int]
 
         size = jnp.ones((B, N), dtype=dtype)
         orig_idx = jnp.broadcast_to(jnp.arange(N, dtype=jnp.int32)[None, :], (B, N))
@@ -98,7 +97,7 @@ class ToMeK2New(nnx.Module):
         size_curr: jax.Array = size
         orig_idx_curr: jax.Array = orig_idx
 
-        for k in list(map(int, list(merges_per_iter))):
+        for k in merges_per_iter:
             if k == 0:
                 continue
             Bc, Nc, Cc = x_curr.shape
@@ -140,12 +139,8 @@ class ToMeK2New(nnx.Module):
                 used = used | upd_dst | upd_src
 
             valid_merge = sel_src != -1
-            if not bool(jnp.any(valid_merge)):
-                break
-            per_batch_counts = jnp.sum(valid_merge, axis=1)  # (B,)
-            m = int(jnp.min(per_batch_counts))
-            if m == 0:
-                break
+            # Assume static plan guarantees exactly k merges per iteration across all batches
+            m = k
 
             step_min = jnp.min(vals_per_slot[:, :m], axis=1)
             min_sim = jnp.minimum(min_sim, step_min)
@@ -209,9 +204,14 @@ class ToMeK2New(nnx.Module):
             return accum / counts[:, None]
 
         merged_x = jax.vmap(merge_batch)(x, root_indices)
+        # Pack roots in stable order without boolean indexing (JIT-friendly)
         root_mask = direct_to_root_map == 0
-        root_tokens = merged_x[root_mask].reshape(B, -1, C)
-        return root_tokens
+        base = jnp.broadcast_to(jnp.arange(N, dtype=jnp.int32)[None, :], (B, N))
+        key = jnp.where(root_mask, 0, 1) * N + base
+        order = jnp.argsort(key, axis=1)
+        R = N - int(self.r * N)
+        gather_idx = order[:, :R]
+        return _take_along_axis_3d(merged_x, gather_idx)
 
     def btree_to_root_map(self, merge_btree: jax.Array) -> jax.Array:
         """
@@ -225,10 +225,7 @@ class ToMeK2New(nnx.Module):
         for _ in range(self.num_iterations):
             current_dest = arange_N + direct
             next_hop = merge_btree[b_idx, current_dest]
-            needs = next_hop != 0
-            if not bool(jnp.any(needs)):
-                break
-            direct = direct + next_hop
+            direct = direct + jnp.where(next_hop != 0, next_hop, jnp.zeros_like(next_hop))
         return direct
 
     def unmerge(self, y: jax.Array, direct_to_root_map: jax.Array) -> jax.Array:
@@ -272,7 +269,7 @@ if __name__ == "__main__":
 
     torch_module = load_module_from_path(
         "torch_tome_ops",
-        "/home/hoyeol/AudioTokenization/CP/dtp/tome_ops.py",
+        "/home/hoyeol/AudioTokenization/BigCodec_SSL/dtp/tome_ops.py",
     )
 
     TorchToMeK2New = torch_module.ToMeK2New

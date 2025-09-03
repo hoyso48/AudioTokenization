@@ -3,8 +3,8 @@ import jax.numpy as jnp
 from typing import Optional
 from flax import nnx
 
-from AudioTokenization.BigCodec_NNX.common.spectral import Spectrogram
-from AudioTokenization.BigCodec_NNX.common.conv_weightnorm import WNConv1d
+from common.spectral import Spectrogram
+from common.conv_weightnorm import WNConv1d
 from .module_jax import ConformerBackbone, RMSNorm
 
 

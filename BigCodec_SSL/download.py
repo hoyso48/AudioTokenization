@@ -12,8 +12,8 @@ if __name__ == "__main__":
 
     # 모든 서브셋 리스트
     subsets = [
-        # "dev-clean",
-        # "dev-other",
+        "dev-clean",
+        "dev-other",
         "test-clean",
         "test-other",
         "train-clean-100",

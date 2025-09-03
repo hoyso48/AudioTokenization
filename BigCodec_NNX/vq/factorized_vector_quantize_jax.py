@@ -6,7 +6,7 @@ import jax
 import jax.numpy as jnp
 from flax import nnx  # Use the stable flax.nnx
 from einops import rearrange # Make sure einops is installed for JAX
-from AudioTokenization.BigCodec_NNX.common.conv_weightnorm import WNConv1d
+from common.conv_weightnorm import WNConv1d
 
 # Helper NNX Identity module
 class Identity(nnx.Module):
