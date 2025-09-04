@@ -209,8 +209,9 @@ class CodecLightningModule(pl.LightningModule):
             if tomecfg.proj:
                 self.tome_proj = nn.Linear(enccfg.out_channels, tomecfg.proj_dim)
         else:
-            self.downsample = Downsample(in_channels=enccfg.out_channels, out_channels=enccfg.out_channels, stride=2)
-            self.upsample = Upsample(in_channels=deccfg.in_channels, out_channels=deccfg.in_channels, stride=2)
+            stride = tomecfg.conv_stride
+            self.downsample = Downsample(in_channels=enccfg.out_channels, out_channels=enccfg.out_channels, stride=stride)
+            self.upsample = Upsample(in_channels=deccfg.in_channels, out_channels=deccfg.in_channels, stride=stride)
 
     def construct_criteria(self):
         cfg = self.cfg.train

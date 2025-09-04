@@ -12,3 +12,4 @@ pesq
 pystoi
 matplotlib
 wandb
+vector_quantize_pytorch

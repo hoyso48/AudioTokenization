@@ -863,139 +863,119 @@ class ToMeK2New(nn.Module):
         super().__init__()
         self.r = r
         self.num_iterations = num_iterations
-    
-    @torch.no_grad()
+
     def compute_merge(self, x: torch.Tensor) -> Tuple[torch.Tensor, torch.Tensor, torch.Tensor]:
         B, N, C = x.shape
         device = x.device
         dtype = x.dtype
-        btree_map = torch.zeros(B, N, device=device, dtype=torch.int64)
+        with torch.no_grad():
+            btree_map = torch.zeros(B, N, device=device, dtype=torch.int64)
 
-        total_to_merge = int(self.r * N)
-        if total_to_merge == 0:
-            return x, btree_map, torch.zeros(B, device=device, dtype=dtype)
+            total_to_merge = int(self.r * N)
+            if total_to_merge == 0:
+                return x, btree_map, torch.zeros(B, device=device, dtype=dtype)
 
-        merges_per_iter = np.diff(np.linspace(0, total_to_merge, self.num_iterations + 1, dtype=int))
+            merges_per_iter = np.diff(np.linspace(0, total_to_merge, self.num_iterations + 1, dtype=int))
 
-        size = torch.ones(B, N, device=device, dtype=dtype)
-        orig_idx = torch.arange(N, device=device).expand(B, -1)
+            size = torch.ones(B, N, device=device, dtype=dtype)
+            orig_idx = torch.arange(N, device=device).expand(B, -1)
 
-        min_sim = torch.full((B,), float('inf'), device=device, dtype=dtype)
-        total_selected = 0
-        for k in merges_per_iter:
-            if k == 0:
-                continue
+            min_sim = torch.full((B,), float('inf'), device=device, dtype=dtype)
+            total_selected = 0
+            for k in merges_per_iter:
+                if k == 0:
+                    continue
 
-            current_N = x.shape[1]
-            if current_N < 2:
-                break
-            # Similarity between adjacent tokens
-            x_norm = F.normalize(x, dim=-1)
-            sim = (x_norm[:, :-1, :] * x_norm[:, 1:, :]).sum(dim=-1)  # (B, current_N-1)
-
-            # Greedy non-overlapping selection: pick top-1 per step, k steps
-            sel_dst = torch.full((B, k), -1, device=device, dtype=torch.long)
-            sel_src = torch.full((B, k), -1, device=device, dtype=torch.long)
-
-            # Token usage mask to prevent chains and multiple usage within the iteration
-            used = torch.zeros(B, current_N, dtype=torch.bool, device=device)
-
-            sim_work = sim.clone()
-            vals_per_slot = torch.full((B, k), float('-inf'), device=device, dtype=sim.dtype) if k > 0 else None
-            for t in range(k):
-                # Invalidate pairs touching already used tokens
-                pair_valid = (~used[:, :-1]) & (~used[:, 1:])
-                masked = sim_work.masked_fill(~pair_valid, float('-inf'))
-
-                # Top-1 per batch
-                top_val, top_idx = masked.max(dim=1)
-                can_pick = top_val.isfinite()
-                if not can_pick.any():
+                current_N = x.shape[1]
+                if current_N < 2:
                     break
+                # Similarity between adjacent tokens
+                x_norm = F.normalize(x.detach(), dim=-1)
+                sim = (x_norm[:, :-1, :] * x_norm[:, 1:, :]).sum(dim=-1)  # (B, current_N-1)
 
-                dst_sel = top_idx
-                src_sel = top_idx + 1
+                # Greedy non-overlapping selection: pick top-1 per step, k steps
+                sel_dst = torch.full((B, k), -1, device=device, dtype=torch.long)
+                sel_src = torch.full((B, k), -1, device=device, dtype=torch.long)
 
-                sel_dst[can_pick, t] = dst_sel[can_pick]
-                sel_src[can_pick, t] = src_sel[can_pick]
-                vals_per_slot[can_pick, t] = top_val[can_pick]
+                # Token usage mask to prevent chains and multiple usage within the iteration
+                used = torch.zeros(B, current_N, dtype=torch.bool, device=device)
 
-                # Mark tokens as used
-                used.scatter_(1, dst_sel.unsqueeze(1), True)
-                used.scatter_(1, src_sel.unsqueeze(1), True)
+                sim_work = sim.clone()
+                vals_per_slot = torch.full((B, k), float('-inf'), device=device, dtype=sim.dtype) if k > 0 else None
+                for t in range(k):
+                    # Invalidate pairs touching already used tokens
+                    pair_valid = (~used[:, :-1]) & (~used[:, 1:])
+                    masked = sim_work.masked_fill(~pair_valid, float('-inf'))
 
-            # Equalize across batch
-            valid_merge = (sel_src != -1)
-            if not valid_merge.any():
-                break
-            per_batch_counts = valid_merge.sum(dim=1)
-            m = int(per_batch_counts.min().item())
-            if m == 0:
-                break
-            step_min = vals_per_slot[:, :m].min(dim=1).values
-            min_sim = torch.minimum(min_sim, step_min.to(dtype))
-            total_selected += m
+                    # Top-1 per batch
+                    top_val, top_idx = masked.max(dim=1)
+                    can_pick = top_val.isfinite()
+                    if not can_pick.any():
+                        break
 
-            # Apply merges (vectorized)
-            sel_dst = sel_dst[:, :m]
-            sel_src = sel_src[:, :m]
+                    dst_sel = top_idx
+                    src_sel = top_idx + 1
 
-            # Update btree_map (offset is always -1 for adjacent merge)
-            src_orig_idx = orig_idx.gather(1, sel_src)
-            btree_map.scatter_(1, src_orig_idx, torch.full_like(src_orig_idx, -1))
+                    sel_dst[can_pick, t] = dst_sel[can_pick]
+                    sel_src[can_pick, t] = src_sel[can_pick]
+                    vals_per_slot[can_pick, t] = top_val[can_pick]
 
-            # Update features and sizes
-            dst_size_i = size.gather(1, sel_dst)
-            src_size_i = size.gather(1, sel_src)
-            dst_feat_i = x.gather(1, sel_dst.unsqueeze(-1).expand(-1, -1, C))
-            src_feat_i = x.gather(1, sel_src.unsqueeze(-1).expand(-1, -1, C))
+                    # Mark tokens as used
+                    used.scatter_(1, dst_sel.unsqueeze(1), True)
+                    used.scatter_(1, src_sel.unsqueeze(1), True)
 
-            denom = size
-            denom_add = torch.zeros_like(size)
-            denom_add.scatter_add_(1, sel_dst, src_size_i)
-            denom = denom + denom_add
+                # Equalize across batch
+                valid_merge = (sel_src != -1)
+                if not valid_merge.any():
+                    break
+                per_batch_counts = valid_merge.sum(dim=1)
+                m = int(per_batch_counts.min().item())
+                if m == 0:
+                    break
+                step_min = vals_per_slot[:, :m].min(dim=1).values
+                min_sim = torch.minimum(min_sim, step_min.to(dtype))
+                total_selected += m
 
-            numer = x * size.unsqueeze(-1)
-            contrib = src_feat_i * src_size_i.unsqueeze(-1)
-            add = torch.zeros_like(x)
-            add.scatter_add_(1, sel_dst.unsqueeze(-1).expand(-1, -1, C), contrib)
-            numer = numer + add
+                # Apply merges (vectorized)
+                sel_dst = sel_dst[:, :m]
+                sel_src = sel_src[:, :m]
 
-            x = numer / denom.unsqueeze(-1)
-            size = denom
+                # Update btree_map (offset is always -1 for adjacent merge)
+                src_orig_idx = orig_idx.gather(1, sel_src)
+                btree_map.scatter_(1, src_orig_idx, torch.full_like(src_orig_idx, -1))
 
-            # Remove merged src tokens
-            remove_mask = torch.ones(B, current_N, dtype=torch.bool, device=device)
-            remove_mask.scatter_(1, sel_src, False)
-            x = x[remove_mask].view(B, -1, C)
-            size = size[remove_mask].view(B, -1)
-            orig_idx = orig_idx[remove_mask].view(B, -1)
+                # Update features and sizes
+                dst_size_i = size.gather(1, sel_dst)
+                src_size_i = size.gather(1, sel_src)
+                dst_feat_i = x.gather(1, sel_dst.unsqueeze(-1).expand(-1, -1, C))
+                src_feat_i = x.gather(1, sel_src.unsqueeze(-1).expand(-1, -1, C))
 
-        if total_selected == 0:
-            avg_sim = torch.zeros(B, device=device, dtype=dtype)
-        else:
-            avg_sim = min_sim
-        return x, btree_map, avg_sim
+                denom = size
+                denom_add = torch.zeros_like(size)
+                denom_add.scatter_add_(1, sel_dst, src_size_i)
+                denom = denom + denom_add
 
-    @torch.no_grad()
-    def btree_to_root_map(self, merge_btree: torch.Tensor) -> torch.Tensor:
-        B, N = merge_btree.shape
-        device = merge_btree.device
-        
-        direct_to_root_map = merge_btree.clone()
-        
-        b_idx = torch.arange(B, device=device).view(B, 1)
-        arange_N = torch.arange(N, device=device).view(1, N)
+                numer = x * size.unsqueeze(-1)
+                contrib = src_feat_i * src_size_i.unsqueeze(-1)
+                add = torch.zeros_like(x)
+                add.scatter_add_(1, sel_dst.unsqueeze(-1).expand(-1, -1, C), contrib)
+                numer = numer + add
 
-        for _ in range(self.num_iterations):
-            current_dest = arange_N + direct_to_root_map
-            next_hop_offsets = merge_btree[b_idx, current_dest]
-            needs_update = next_hop_offsets != 0
-            if not needs_update.any():
-                break
-            direct_to_root_map += next_hop_offsets
-        
-        return direct_to_root_map
+                x = numer / denom.unsqueeze(-1)
+                size = denom
+
+                # Remove merged src tokens
+                remove_mask = torch.ones(B, current_N, dtype=torch.bool, device=device)
+                remove_mask.scatter_(1, sel_src, False)
+                x = x[remove_mask].view(B, -1, C)
+                size = size[remove_mask].view(B, -1)
+                orig_idx = orig_idx[remove_mask].view(B, -1)
+
+            if total_selected == 0:
+                avg_sim = torch.zeros(B, device=device, dtype=dtype)
+            else:
+                avg_sim = min_sim
+            return x, btree_map, avg_sim
 
     def merge(self, x: torch.Tensor, direct_to_root_map: torch.Tensor) -> torch.Tensor:
         """
@@ -1020,7 +1000,29 @@ class ToMeK2New(nn.Module):
         root_tokens = merged_x[root_mask].view(B, -1, C)
         return root_tokens
 
-    def unmerge(self, y: torch.Tensor, direct_to_root_map: torch.Tensor) -> torch.Tensor:
+    @staticmethod
+    @torch.no_grad()
+    def btree_to_root_map(merge_btree: torch.Tensor) -> torch.Tensor:
+        B, N = merge_btree.shape
+        device = merge_btree.device
+        
+        direct_to_root_map = merge_btree.clone()
+        
+        b_idx = torch.arange(B, device=device).view(B, 1)
+        arange_N = torch.arange(N, device=device).view(1, N)
+
+        for _ in range(N):
+            current_dest = arange_N + direct_to_root_map
+            next_hop_offsets = merge_btree[b_idx, current_dest]
+            needs_update = next_hop_offsets != 0
+            if not needs_update.any():
+                break
+            direct_to_root_map += next_hop_offsets
+        
+        return direct_to_root_map
+
+    @staticmethod
+    def unmerge(y: torch.Tensor, direct_to_root_map: torch.Tensor) -> torch.Tensor:
         B, N_original = direct_to_root_map.shape
         if y.shape[1] == N_original:
             return y
@@ -1201,7 +1203,7 @@ class OurToMe2(nn.Module):
         self.r = r
         self.num_iterations = num_iterations
 
-    def merge(self, x: torch.Tensor) -> Tuple[torch.Tensor, torch.Tensor, torch.Tensor]:
+    def compute_merge(self, x: torch.Tensor) -> Tuple[torch.Tensor, torch.Tensor, torch.Tensor]:
         B, N, C = x.shape
         device = x.device
         dtype = x.dtype
@@ -1259,36 +1261,36 @@ class OurToMe2(nn.Module):
                 min_sim = torch.minimum(min_sim, step_min.to(dtype))
                 total_selected += m
 
-            # Update btree_map: offset is always -1
-            src_orig_idx = orig_idx.gather(1, sel_src)
-            btree_map.scatter_(1, src_orig_idx, torch.full_like(src_orig_idx, -1))
+                # Update btree_map: offset is always -1
+                src_orig_idx = orig_idx.gather(1, sel_src)
+                btree_map.scatter_(1, src_orig_idx, torch.full_like(src_orig_idx, -1))
 
-            # Differentiable feature/size updates
-            # dst_size_i = size.gather(1, sel_dst)
-            src_size_i = size.gather(1, sel_src)
-            # dst_feat_i = x.gather(1, sel_dst.unsqueeze(-1).expand(-1, -1, C))
-            src_feat_i = x.gather(1, sel_src.unsqueeze(-1).expand(-1, -1, C))
+                # Differentiable feature/size updates
+                # dst_size_i = size.gather(1, sel_dst)
+                src_size_i = size.gather(1, sel_src)
+                # dst_feat_i = x.gather(1, sel_dst.unsqueeze(-1).expand(-1, -1, C))
+                src_feat_i = x.gather(1, sel_src.unsqueeze(-1).expand(-1, -1, C))
 
-            denom = size
-            denom_add = torch.zeros_like(size)
-            denom_add.scatter_add_(1, sel_dst, src_size_i)
-            denom = denom + denom_add
+                denom = size
+                denom_add = torch.zeros_like(size)
+                denom_add.scatter_add_(1, sel_dst, src_size_i)
+                denom = denom + denom_add
 
-            numer = x * size.unsqueeze(-1)
-            contrib = src_feat_i * src_size_i.unsqueeze(-1)
-            add = torch.zeros_like(x)
-            add.scatter_add_(1, sel_dst.unsqueeze(-1).expand(-1, -1, C), contrib)
-            numer = numer + add
+                numer = x * size.unsqueeze(-1)
+                contrib = src_feat_i * src_size_i.unsqueeze(-1)
+                add = torch.zeros_like(x)
+                add.scatter_add_(1, sel_dst.unsqueeze(-1).expand(-1, -1, C), contrib)
+                numer = numer + add
 
-            x = numer / denom.unsqueeze(-1)
-            size = denom
+                x = numer / denom.unsqueeze(-1)
+                size = denom
 
-            # Remove merged src tokens
-            remove_mask = torch.ones(B, current_N, dtype=torch.bool, device=device)
-            remove_mask.scatter_(1, sel_src, False)
-            x = x[remove_mask].view(B, -1, C)
-            size = size[remove_mask].view(B, -1)
-            orig_idx = orig_idx[remove_mask].view(B, -1)
+                # Remove merged src tokens
+                remove_mask = torch.ones(B, current_N, dtype=torch.bool, device=device)
+                remove_mask.scatter_(1, sel_src, False)
+                x = x[remove_mask].view(B, -1, C)
+                size = size[remove_mask].view(B, -1)
+                orig_idx = orig_idx[remove_mask].view(B, -1)
 
         if total_selected == 0:
             avg_sim = torch.zeros(B, device=device, dtype=dtype)
@@ -1296,9 +1298,68 @@ class OurToMe2(nn.Module):
             avg_sim = min_sim
         return x, btree_map, avg_sim
 
-    # Reuse btree_to_root_map and unmerge helpers from ToMeTopK
-    btree_to_root_map = staticmethod(ToMeTopK.btree_to_root_map)
-    unmerge = staticmethod(ToMeTopK.unmerge)
+    def merge(self, x: torch.Tensor, direct_to_root_map: torch.Tensor) -> torch.Tensor:
+        """
+        Differentiable single-step merge given a direct-to-root map.
+        Returns the merged tensor containing only root tokens, in order.
+        """
+        B, N, C = x.shape
+        size = torch.ones(B, N, 1, device=x.device, dtype=x.dtype)
+
+        root_indices = torch.arange(N, device=x.device).expand(B, -1) + direct_to_root_map
+
+        merged_x = torch.zeros_like(x)
+        merged_size = torch.zeros_like(size)
+
+        root_indices_expanded = root_indices.unsqueeze(-1).expand(-1, -1, C)
+        merged_x.scatter_add_(1, root_indices_expanded, x * size)
+        merged_size.scatter_add_(1, root_indices.unsqueeze(-1), size)
+
+        merged_x = merged_x / (merged_size + 1e-8)
+
+        root_mask = (direct_to_root_map == 0)
+        root_tokens = merged_x[root_mask].view(B, -1, C)
+        return root_tokens
+
+    @staticmethod
+    @torch.no_grad()
+    def btree_to_root_map(merge_btree: torch.Tensor) -> torch.Tensor:
+        B, N = merge_btree.shape
+        device = merge_btree.device
+        
+        direct_to_root_map = merge_btree.clone()
+        
+        b_idx = torch.arange(B, device=device).view(B, 1)
+        arange_N = torch.arange(N, device=device).view(1, N)
+
+        for _ in range(N):
+            current_dest = arange_N + direct_to_root_map
+            next_hop_offsets = merge_btree[b_idx, current_dest]
+            needs_update = next_hop_offsets != 0
+            if not needs_update.any():
+                break
+            direct_to_root_map += next_hop_offsets
+        
+        return direct_to_root_map
+
+    @staticmethod
+    def unmerge(y: torch.Tensor, direct_to_root_map: torch.Tensor) -> torch.Tensor:
+        B, N_original = direct_to_root_map.shape
+        if y.shape[1] == N_original:
+            return y
+        
+        _, _, C = y.shape
+        device = y.device
+        
+        unmerged_x = torch.zeros(B, N_original, C, device=device, dtype=y.dtype)
+        root_mask = (direct_to_root_map == 0)
+        unmerged_x[root_mask] = y.flatten(0, 1)
+
+        source_indices = torch.arange(N_original, device=device).view(1, -1) + direct_to_root_map
+        source_indices_expanded = source_indices.unsqueeze(-1).expand(-1, -1, C)
+
+        final_x = torch.gather(unmerged_x, 1, source_indices_expanded)
+        return final_x
 
 # Generalized subgroup-based variant (group_size>=2). For group_size==2 it matches OurToMe2.
 class OurToMeK(nn.Module):
