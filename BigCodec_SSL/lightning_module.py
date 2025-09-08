@@ -208,6 +208,10 @@ class CodecLightningModule(pl.LightningModule):
             self.tome = getattr(dtp.tome_ops, tomecfg.class_name)(**tomecfg.tome_params)
             if tomecfg.proj:
                 self.tome_proj = nn.Linear(enccfg.out_channels, tomecfg.proj_dim)
+            else:
+                self.tome_proj = nn.Identity()
+            if tomecfg.masking_upsampler:
+                self.masking_upsampler = GeneralizedToMeMaskingUpsampler(deccfg.in_channels, kernel_size=2)
         else:
             stride = tomecfg.conv_stride
             self.downsample = Downsample(in_channels=enccfg.out_channels, out_channels=enccfg.out_channels, stride=stride)

@@ -1,0 +1,76 @@
+codec_encoder:
+  type: 'conformer_stft'
+  hop_length: 160 #256
+  n_fft: 640 #1024
+  window_size: 640 #1024
+  dim: 256
+  n_layers_stage0: 3
+  n_layers_stage1: 6
+  r: 0.5
+  n_head: 4
+  ffn_mult: 4
+  conv_kernel_size: 31
+  dropout: 0.1
+  original_max_position_embeddings: 400
+  max_position_embeddings: 8192
+  base: 10000
+  causal: False
+  out_channels: 256
+
+codec_decoder:
+  type: 'conformer_istft'
+  in_channels: 256
+  hop_length: 160 #256
+  n_fft: 640 #1024
+  window_size: 640 #1024
+  dim: 256
+  n_layers_stage0: 6
+  n_layers_stage1: 3
+  r: 0.5
+  n_head: 4
+  ffn_mult: 4
+  conv_kernel_size: 31
+  dropout: 0.1
+  original_max_position_embeddings: 400
+  max_position_embeddings: 8192
+  base: 10000
+  causal: False
+  vq_num_quantizers: 1 # 8
+  vq_commit_weight: 0.5
+  vq_weight_init: False
+  fsq: False
+  fsq_levels: [4,4,4,4,4,4,4,4]
+  vq_full_commit_loss: False
+  codebook_size: 16384 # 1024
+  codebook_dim: 8
+
+tome:
+  use_tome: True
+  masking_upsampler: True
+  class_name: 'ToMeK2New'
+  tome_params:
+    num_iterations: 4
+    r: 0.5
+  proj: False
+  proj_dim: 256
+  conv_stride: 2
+
+mpd:
+  periods: [2, 3, 5]
+  max_downsample_channels: 256
+  channels: 8
+  channel_increasing_factor: 4
+
+mstft:
+  stft_params:
+    fft_sizes: [256, 512, 1024]
+    hop_sizes: [64, 128, 256]
+    win_lengths: [256, 512, 1024]
+    window: hann_window
+  in_channels: 1
+  out_channels: 1
+  kernel_sizes: [5, 3]
+  channels: 8
+  max_downsample_channels: 256
+  downsample_scales: [2, 2, 2]
+  use_weight_norm: True

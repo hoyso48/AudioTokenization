@@ -864,6 +864,7 @@ class ToMeK2New(nn.Module):
         self.r = r
         self.num_iterations = num_iterations
 
+    @torch.compile
     def compute_merge(self, x: torch.Tensor) -> Tuple[torch.Tensor, torch.Tensor, torch.Tensor]:
         B, N, C = x.shape
         device = x.device
@@ -977,6 +978,7 @@ class ToMeK2New(nn.Module):
                 avg_sim = min_sim
             return x, btree_map, avg_sim
 
+    @torch.compile
     def merge(self, x: torch.Tensor, direct_to_root_map: torch.Tensor) -> torch.Tensor:
         """
         Differentiable single-step merge given a direct-to-root map.
@@ -1000,9 +1002,9 @@ class ToMeK2New(nn.Module):
         root_tokens = merged_x[root_mask].view(B, -1, C)
         return root_tokens
 
-    @staticmethod
+    @torch.compile
     @torch.no_grad()
-    def btree_to_root_map(merge_btree: torch.Tensor) -> torch.Tensor:
+    def btree_to_root_map(self, merge_btree: torch.Tensor) -> torch.Tensor:
         B, N = merge_btree.shape
         device = merge_btree.device
         
@@ -1011,7 +1013,7 @@ class ToMeK2New(nn.Module):
         b_idx = torch.arange(B, device=device).view(B, 1)
         arange_N = torch.arange(N, device=device).view(1, N)
 
-        for _ in range(N):
+        for _ in range(self.num_iterations):
             current_dest = arange_N + direct_to_root_map
             next_hop_offsets = merge_btree[b_idx, current_dest]
             needs_update = next_hop_offsets != 0
@@ -1021,8 +1023,8 @@ class ToMeK2New(nn.Module):
         
         return direct_to_root_map
 
-    @staticmethod
-    def unmerge(y: torch.Tensor, direct_to_root_map: torch.Tensor) -> torch.Tensor:
+    @torch.compile
+    def unmerge(self, y: torch.Tensor, direct_to_root_map: torch.Tensor) -> torch.Tensor:
         B, N_original = direct_to_root_map.shape
         if y.shape[1] == N_original:
             return y
@@ -1194,7 +1196,7 @@ class OurToMe2(nn.Module):
     - Outputs btree_map with offsets in {0, -1}.
     - Unmerge is compatible with ToMeTopK.btree_to_root_map()/unmerge.
     """
-    def __init__(self, r: float, num_iterations: int):
+    def __init__(self, r: float, num_iterations: int, shift_offset: bool = True):
         super().__init__()
         if not (0.0 < r < 1.0):
             raise ValueError("r must be in (0,1)")
@@ -1202,7 +1204,9 @@ class OurToMe2(nn.Module):
             raise ValueError("num_iterations must be >=1")
         self.r = r
         self.num_iterations = num_iterations
+        self.shift_offset = shift_offset
 
+    @torch.compile
     def compute_merge(self, x: torch.Tensor) -> Tuple[torch.Tensor, torch.Tensor, torch.Tensor]:
         B, N, C = x.shape
         device = x.device
@@ -1229,7 +1233,7 @@ class OurToMe2(nn.Module):
                     break
                 # Normalize features for similarity calculation (no grad)
                 x_norm = F.normalize(x.detach(), dim=-1)
-                if it % 2 == 0:
+                if it % 2 == 0 or not self.shift_offset:
                     # Even dst: pairs (0,1),(2,3),...
                     dst_base = torch.arange(0, current_N - 1, 2, device=device)
                     src_base = dst_base + 1
@@ -1298,6 +1302,7 @@ class OurToMe2(nn.Module):
             avg_sim = min_sim
         return x, btree_map, avg_sim
 
+    @torch.compile
     def merge(self, x: torch.Tensor, direct_to_root_map: torch.Tensor) -> torch.Tensor:
         """
         Differentiable single-step merge given a direct-to-root map.
@@ -1321,9 +1326,9 @@ class OurToMe2(nn.Module):
         root_tokens = merged_x[root_mask].view(B, -1, C)
         return root_tokens
 
-    @staticmethod
+    @torch.compile
     @torch.no_grad()
-    def btree_to_root_map(merge_btree: torch.Tensor) -> torch.Tensor:
+    def btree_to_root_map(self, merge_btree: torch.Tensor) -> torch.Tensor:
         B, N = merge_btree.shape
         device = merge_btree.device
         
@@ -1332,7 +1337,7 @@ class OurToMe2(nn.Module):
         b_idx = torch.arange(B, device=device).view(B, 1)
         arange_N = torch.arange(N, device=device).view(1, N)
 
-        for _ in range(N):
+        for _ in range(self.num_iterations):
             current_dest = arange_N + direct_to_root_map
             next_hop_offsets = merge_btree[b_idx, current_dest]
             needs_update = next_hop_offsets != 0
@@ -1342,8 +1347,8 @@ class OurToMe2(nn.Module):
         
         return direct_to_root_map
 
-    @staticmethod
-    def unmerge(y: torch.Tensor, direct_to_root_map: torch.Tensor) -> torch.Tensor:
+    @torch.compile
+    def unmerge(self, y: torch.Tensor, direct_to_root_map: torch.Tensor) -> torch.Tensor:
         B, N_original = direct_to_root_map.shape
         if y.shape[1] == N_original:
             return y
@@ -1479,6 +1484,198 @@ class OurToMeK(nn.Module):
     btree_to_root_map = staticmethod(ToMeTopK.btree_to_root_map)
     unmerge = staticmethod(ToMeTopK.unmerge)
 
+
+class OurToMeNew(nn.Module):
+    def __init__(self, r: float, num_iterations: int):
+        super().__init__()
+        if not (0.0 < r < 1.0):
+            raise ValueError("r must be in (0,1)")
+        if num_iterations < 1:
+            raise ValueError("num_iterations must be >=1")
+        self.r = r
+        self.num_iterations = num_iterations
+
+    @torch.compile
+    def compute_merge(self, x: torch.Tensor) -> Tuple[torch.Tensor, torch.Tensor, torch.Tensor]:
+        B, N, C = x.shape
+        device = x.device
+        dtype = x.dtype
+        btree_map = torch.zeros(B, N, device=device, dtype=torch.int64)
+
+        total_to_merge = int(self.r * N)
+        if total_to_merge == 0:
+            return x, btree_map, torch.zeros(B, device=device, dtype=dtype)
+
+        merges_per_iter = np.diff(np.linspace(0, total_to_merge, self.num_iterations + 1, dtype=int))
+
+        size = torch.ones(B, N, device=device, dtype=dtype)
+        orig_idx = torch.arange(N, device=device).expand(B, -1)
+
+        min_sim = torch.full((B,), float('inf'), device=device, dtype=dtype)
+        total_selected = 0
+        for k in merges_per_iter:
+            if k == 0:
+                continue
+            with torch.no_grad():
+                current_N = x.shape[1]
+                if current_N < 2:
+                    break
+                x_norm = F.normalize(x.detach(), dim=-1)
+
+                # even<-odd candidates: dst at even positions, src = dst+1
+                dst_even = torch.arange(0, current_N - 1, 2, device=device)
+                src_even = dst_even + 1
+                P_even = dst_even.numel()
+
+                # odd<-even candidates: dst at odd positions, src = dst+1
+                dst_odd = torch.arange(1, current_N - 1, 2, device=device)
+                src_odd = dst_odd + 1
+                P_odd = dst_odd.numel()
+
+                if P_even == 0 and P_odd == 0:
+                    break
+
+                # Similarities
+                vals_even = None
+                idx_even = None
+                m_even = 0
+                sum_even = torch.tensor(0.0, device=device, dtype=x_norm.dtype)
+                if P_even > 0:
+                    sims_even = (x_norm[:, dst_even, :] * x_norm[:, src_even, :]).sum(dim=-1)  # (B, P_even)
+                    k_even = int(min(k, P_even))
+                    top_even, top_idx_even = torch.topk(sims_even, k=k_even, dim=1)
+                    per_b_even = torch.isfinite(top_even).sum(dim=1)
+                    m_even = int(per_b_even.min().item()) if k_even > 0 else 0
+                    if m_even > 0:
+                        vals_even = top_even[:, :m_even]
+                        idx_even = top_idx_even[:, :m_even]
+                        sum_even = vals_even.sum()
+
+                vals_odd = None
+                idx_odd = None
+                m_odd = 0
+                sum_odd = torch.tensor(0.0, device=device, dtype=x_norm.dtype)
+                if P_odd > 0:
+                    sims_odd = (x_norm[:, dst_odd, :] * x_norm[:, src_odd, :]).sum(dim=-1)  # (B, P_odd)
+                    k_odd = int(min(k, P_odd))
+                    top_odd, top_idx_odd = torch.topk(sims_odd, k=k_odd, dim=1)
+                    per_b_odd = torch.isfinite(top_odd).sum(dim=1)
+                    m_odd = int(per_b_odd.min().item()) if k_odd > 0 else 0
+                    if m_odd > 0:
+                        vals_odd = top_odd[:, :m_odd]
+                        idx_odd = top_idx_odd[:, :m_odd]
+                        sum_odd = vals_odd.sum()
+
+                # Choose orientation by higher total similarity sum
+                use_even = (sum_even >= sum_odd)
+                if m_even == 0 and m_odd == 0:
+                    break
+
+                if use_even and m_even > 0:
+                    sel_dst = dst_even.unsqueeze(0).expand(B, -1).gather(1, idx_even)
+                    sel_src = src_even.unsqueeze(0).expand(B, -1).gather(1, idx_even)
+                    step_vals = vals_even
+                    m = m_even
+                else:
+                    sel_dst = dst_odd.unsqueeze(0).expand(B, -1).gather(1, idx_odd)
+                    sel_src = src_odd.unsqueeze(0).expand(B, -1).gather(1, idx_odd)
+                    step_vals = vals_odd
+                    m = m_odd
+
+                # Record btree links (offset -1)
+                src_orig_idx = orig_idx.gather(1, sel_src)
+                btree_map.scatter_(1, src_orig_idx, torch.full_like(src_orig_idx, -1))
+
+                # Feature/size updates
+                src_size_i = size.gather(1, sel_src)
+                src_feat_i = x.gather(1, sel_src.unsqueeze(-1).expand(-1, -1, C))
+
+                denom = size
+                denom_add = torch.zeros_like(size)
+                denom_add.scatter_add_(1, sel_dst, src_size_i)
+                denom = denom + denom_add
+
+                numer = x * size.unsqueeze(-1)
+                contrib = src_feat_i * src_size_i.unsqueeze(-1)
+                add = torch.zeros_like(x)
+                add.scatter_add_(1, sel_dst.unsqueeze(-1).expand(-1, -1, C), contrib)
+                numer = numer + add
+
+                x = numer / denom.unsqueeze(-1)
+                size = denom
+
+                # Remove merged sources
+                remove_mask = torch.ones(B, current_N, dtype=torch.bool, device=device)
+                remove_mask.scatter_(1, sel_src, False)
+                x = x[remove_mask].view(B, -1, C)
+                size = size[remove_mask].view(B, -1)
+                orig_idx = orig_idx[remove_mask].view(B, -1)
+
+                # Min similarity accumulation
+                step_min = step_vals.min(dim=1).values
+                min_sim = torch.minimum(min_sim, step_min.to(dtype))
+                total_selected += m
+
+        if total_selected == 0:
+            avg_sim = torch.zeros(B, device=device, dtype=dtype)
+        else:
+            avg_sim = min_sim
+        return x, btree_map, avg_sim
+
+    @torch.compile
+    def merge(self, x: torch.Tensor, direct_to_root_map: torch.Tensor) -> torch.Tensor:
+        B, N, C = x.shape
+        size = torch.ones(B, N, 1, device=x.device, dtype=x.dtype)
+
+        root_indices = torch.arange(N, device=x.device).expand(B, -1) + direct_to_root_map
+
+        merged_x = torch.zeros_like(x)
+        merged_size = torch.zeros_like(size)
+
+        root_indices_expanded = root_indices.unsqueeze(-1).expand(-1, -1, C)
+        merged_x.scatter_add_(1, root_indices_expanded, x * size)
+        merged_size.scatter_add_(1, root_indices.unsqueeze(-1), size)
+
+        merged_x = merged_x / (merged_size + 1e-8)
+
+        root_mask = (direct_to_root_map == 0)
+        root_tokens = merged_x[root_mask].view(B, -1, C)
+        return root_tokens
+
+    @torch.no_grad()
+    @torch.compile
+    def btree_to_root_map(self, merge_btree: torch.Tensor) -> torch.Tensor:
+        B, N = merge_btree.shape
+        device = merge_btree.device
+        direct_to_root_map = merge_btree.clone()
+        b_idx = torch.arange(B, device=device).view(B, 1)
+        arange_N = torch.arange(N, device=device).view(1, N)
+        for _ in range(self.num_iterations):
+            current_dest = arange_N + direct_to_root_map
+            next_hop_offsets = merge_btree[b_idx, current_dest]
+            needs_update = next_hop_offsets != 0
+            if not needs_update.any():
+                break
+            direct_to_root_map += next_hop_offsets
+        return direct_to_root_map
+
+    @torch.compile
+    def unmerge(self, y: torch.Tensor, direct_to_root_map: torch.Tensor) -> torch.Tensor:
+        B, N_original = direct_to_root_map.shape
+        if y.shape[1] == N_original:
+            return y
+        _, _, C = y.shape
+        device = y.device
+        unmerged_x = torch.zeros(B, N_original, C, device=device, dtype=y.dtype)
+        root_mask = (direct_to_root_map == 0)
+        unmerged_x[root_mask] = y.flatten(0, 1)
+        source_indices = torch.arange(N_original, device=device).view(1, -1) + direct_to_root_map
+        source_indices_expanded = source_indices.unsqueeze(-1).expand(-1, -1, C)
+        final_x = torch.gather(unmerged_x, 1, source_indices_expanded)
+        return final_x
+
+        
 # Backward-compatibility alias for tests expecting GeneralizedToMe
 class GeneralizedToMe(ToMeChained):
     pass
+

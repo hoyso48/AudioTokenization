@@ -46,12 +46,14 @@ codec_decoder:
 
 tome:
   use_tome: True
-  class_name: 'ToMeK2New'
+  masking_upsampler: True
+  class_name: 'OurToMe2'
   tome_params:
-    num_iterations: 8
+    num_iterations: 4
     r: 0.5
-  proj: True
-  proj_dim: 512
+    shift_offset: True
+  proj: False
+  proj_dim: 256
   conv_stride: 2
 
 mpd:

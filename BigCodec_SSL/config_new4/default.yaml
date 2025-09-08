@@ -3,7 +3,7 @@ defaults:
   - dataset: default
   - model: base
   - train: default
-name: debug-sqeezeformer-600k-vq16384-100hz-tome50hzToMeK2Newiter8-maskingupsampler-noproj-2stage
+name: base-sqeezeformer-bs64-600k-vq16384-100hz-tome50hzToMeK2Newiter4-2stage-bf16mixed
 log_dir: pl_log
 debug: false
 resume_ckpt: null
