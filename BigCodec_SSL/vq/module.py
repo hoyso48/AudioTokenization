@@ -727,58 +727,65 @@ class ConformerLayer(nn.Module):
         self.ffn2 = FeedForward(dim, mult=ffn_mult, dropout=dropout)
         self.conv_first = conv_first
 
-        # self.conv_norm_in = RMSNorm(dim)
         # self.ffn1_norm_in = RMSNorm(dim)
         # self.attn_norm_in = RMSNorm(dim)
-        # self.ffn2_norm_in = RMSNorm(dim)
-        # self.final_norm = RMSNorm(dim)
 
-        self.conv_norm_out = RMSNorm(dim)
-        self.ffn1_norm_out = RMSNorm(dim)
-        self.attn_norm_out = RMSNorm(dim)
-        self.ffn2_norm_out = RMSNorm(dim)
-        self.conv_scale = LayerScale(dim)
-        self.ffn1_scale = LayerScale(dim)
-        self.attn_scale = LayerScale(dim)
-        self.ffn2_scale = LayerScale(dim)
+        self.conv_norm_in = RMSNorm(dim)
+        self.ffn1_norm_in = RMSNorm(dim)
+        self.attn_norm_in = RMSNorm(dim)
+        self.ffn2_norm_in = RMSNorm(dim)
+        self.final_norm = RMSNorm(dim)
+
+        # self.conv_norm_out = RMSNorm(dim)
+        # self.ffn1_norm_out = RMSNorm(dim)
+        # self.attn_norm_out = RMSNorm(dim)
+        # self.ffn2_norm_out = RMSNorm(dim)
+        # self.conv_scale = LayerScale(dim)
+        # self.ffn1_scale = LayerScale(dim)
+        # self.attn_scale = LayerScale(dim)
+        # self.ffn2_scale = LayerScale(dim)
         
         self.dropout = nn.Dropout(dropout)
 
     def forward(self, x):
+        if self.conv_first:
+            x = x + self.conv(self.conv_norm_in(x))
+        else:
+            x = x + self.dropout(self.self_attn(self.attn_norm_in(x)))
+
+        x = x + self.ffn1(self.ffn1_norm_in(x))
+
+        if self.conv_first:
+            x = x + self.dropout(self.self_attn(self.attn_norm_in(x)))
+        else:
+            x = x + self.conv(self.conv_norm_in(x))
+
+        x = x + self.ffn2(self.ffn2_norm_in(x))
+        x = self.final_norm(x)
+
         # if self.conv_first:
-        #     x = x + self.conv(self.conv_norm_in(x))
+        #     x = x + self.conv_scale(self.conv(x))
+        #     x = self.conv_norm_out(x)
         # else:
-        #     x = x + self.dropout(self.self_attn(self.attn_norm_in(x)))
+        #     x = x + self.attn_scale(self.dropout(self.self_attn(x)))
+        #     x = self.attn_norm_out(x)
+
+        # x = x + self.ffn1_scale(self.ffn1(x))
+        # x = self.ffn1_norm_out(x)
+
+        # if self.conv_first:
+        #     x = x + self.attn_scale(self.dropout(self.self_attn(x)))
+        #     x = self.attn_norm_out(x)
+        # else:
+        #     x = x + self.conv_scale(self.conv(x))
+        #     x = self.conv_norm_out(x)
+
+        # x = x + self.ffn2_scale(self.ffn2(x))
+        # x = self.ffn2_norm_out(x)
+
+        # x = x + self.dropout(self.self_attn(self.attn_norm_in(x)))
 
         # x = x + self.ffn1(self.ffn1_norm_in(x))
-
-        # if self.conv_first:
-        #     x = x + self.dropout(self.self_attn(self.attn_norm_in(x)))
-        # else:
-        #     x = x + self.conv(self.conv_norm_in(x))
-
-        # x = x + self.ffn2(self.ffn2_norm_in(x))
-        # x = self.final_norm(x)
-
-        if self.conv_first:
-            x = x + self.conv_scale(self.conv(x))
-            x = self.conv_norm_out(x)
-        else:
-            x = x + self.attn_scale(self.dropout(self.self_attn(x)))
-            x = self.attn_norm_out(x)
-
-        x = x + self.ffn1_scale(self.ffn1(x))
-        x = self.ffn1_norm_out(x)
-
-        if self.conv_first:
-            x = x + self.attn_scale(self.dropout(self.self_attn(x)))
-            x = self.attn_norm_out(x)
-        else:
-            x = x + self.conv_scale(self.conv(x))
-            x = self.conv_norm_out(x)
-
-        x = x + self.ffn2_scale(self.ffn2(x))
-        x = self.ffn2_norm_out(x)
 
         return x
 

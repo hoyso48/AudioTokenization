@@ -12,7 +12,7 @@ import torchaudio
 from torchaudio.transforms import Resample
 
 # Local ToMe implementations
-from dtp.tome_ops import ToMeChained, ToMeGreedy, ToMeK2New, OurToMe2, ToMeK2V2, OurToMe3
+from dtp.tome_ops import ToMeChained, ToMeGreedy, ToMeK2New, OurToMe2, ToMeK2V2, ToPrK2New, ToPrPLETopK, ToPrCPRRTopK, ToPrK2NewChunk
 
 # Prefer existing speaker verification loader (WavLM features via s3prl) if available
 def _load_sv_model(device: torch.device, checkpoint_path: str):
@@ -174,27 +174,27 @@ def benchmark_tome_k2new(tokens: torch.Tensor, r: float, num_iterations: int, de
     }
 
 
-def benchmark_tome_k2v2(tokens: torch.Tensor, r: float, num_iterations: int, device: torch.device) -> Dict[str, Any]:
-    model = ToMeK2V2(r=r, num_iterations=num_iterations).to(device)
-    x = tokens.clone()
-    _maybe_synchronize(device)
-    t0 = time.time()
-    with torch.no_grad():
-        merged_x, btree_map, avg_sim = model.compute_merge(x)
-        direct_to_root = model.btree_to_root_map(btree_map)
-        unmerged_x = model.unmerge(merged_x, direct_to_root)
-    _maybe_synchronize(device)
-    dt = (time.time() - t0) * 1000.0
-    cos = cosine_similarity_mean(unmerged_x, tokens)
-    return {
-        "method": "ToMeK2V2",
-        "num_iterations": num_iterations,
-        "runtime_ms": dt,
-        "avg_sim_mean": avg_sim.mean().item(),
-        "cos_sim_unmerged_vs_original": cos,
-        "n_before": tokens.shape[1],
-        "n_after": merged_x.shape[1],
-    }
+# def benchmark_tome_k2v2(tokens: torch.Tensor, r: float, num_iterations: int, device: torch.device) -> Dict[str, Any]:
+#     model = ToMeK2V2(r=r, num_iterations=num_iterations).to(device)
+#     x = tokens.clone()
+#     _maybe_synchronize(device)
+#     t0 = time.time()
+#     with torch.no_grad():
+#         merged_x, btree_map, avg_sim = model.compute_merge(x)
+#         direct_to_root = model.btree_to_root_map(btree_map)
+#         unmerged_x = model.unmerge(merged_x, direct_to_root)
+#     _maybe_synchronize(device)
+#     dt = (time.time() - t0) * 1000.0
+#     cos = cosine_similarity_mean(unmerged_x, tokens)
+#     return {
+#         "method": "ToMeK2V2",
+#         "num_iterations": num_iterations,
+#         "runtime_ms": dt,
+#         "avg_sim_mean": avg_sim.mean().item(),
+#         "cos_sim_unmerged_vs_original": cos,
+#         "n_before": tokens.shape[1],
+#         "n_after": merged_x.shape[1],
+#     }
 
 
 def benchmark_our_tome2(tokens: torch.Tensor, r: float, num_iterations: int, device: torch.device) -> Dict[str, Any]:
@@ -220,8 +220,29 @@ def benchmark_our_tome2(tokens: torch.Tensor, r: float, num_iterations: int, dev
     }
 
 
-def benchmark_our_tome3(tokens: torch.Tensor, r: float, num_iterations: int, device: torch.device) -> Dict[str, Any]:
-    model = OurToMe3(r=r, num_iterations=num_iterations).to(device)
+# def benchmark_our_tome3(tokens: torch.Tensor, r: float, num_iterations: int, device: torch.device) -> Dict[str, Any]:
+#     model = OurToMe3(r=r, num_iterations=num_iterations).to(device)
+#     x = tokens.clone()
+#     _maybe_synchronize(device)
+#     t0 = time.time()
+#     with torch.no_grad():
+#         merged_x, btree_map, avg_sim = model.compute_merge(x)
+#         direct_to_root = model.btree_to_root_map(btree_map)
+#         unmerged_x = model.unmerge(merged_x, direct_to_root)
+#     _maybe_synchronize(device)
+#     dt = (time.time() - t0) * 1000.0
+#     cos = cosine_similarity_mean(unmerged_x, tokens)
+#     return {
+#         "method": "OurToMe3",
+#         "num_iterations": num_iterations,
+#         "runtime_ms": dt,
+#         "avg_sim_mean": avg_sim.mean().item(),
+#         "cos_sim_unmerged_vs_original": cos,
+#         "n_before": tokens.shape[1],
+#         "n_after": merged_x.shape[1],
+#     }
+def benchmark_topr_k2new(tokens: torch.Tensor, r: float, num_iterations: int, device: torch.device) -> Dict[str, Any]:
+    model = ToPrK2New(r=r, num_iterations=num_iterations).to(device)
     x = tokens.clone()
     _maybe_synchronize(device)
     t0 = time.time()
@@ -233,8 +254,78 @@ def benchmark_our_tome3(tokens: torch.Tensor, r: float, num_iterations: int, dev
     dt = (time.time() - t0) * 1000.0
     cos = cosine_similarity_mean(unmerged_x, tokens)
     return {
-        "method": "OurToMe3",
+        "method": "ToPrK2New",
         "num_iterations": num_iterations,
+        "runtime_ms": dt,
+        "avg_sim_mean": avg_sim.mean().item(),
+        "cos_sim_unmerged_vs_original": cos,
+        "n_before": tokens.shape[1],
+        "n_after": merged_x.shape[1],
+    }
+
+
+def benchmark_topr_k2chunk(tokens: torch.Tensor, r: float, num_iterations: int, chunk_size: int, device: torch.device) -> Dict[str, Any]:
+    model = ToPrK2NewChunk(r=r, num_iterations=num_iterations, chunk_size=chunk_size).to(device)
+    x = tokens.clone()
+    _maybe_synchronize(device)
+    t0 = time.time()
+    with torch.no_grad():
+        merged_x, btree_map, avg_sim = model.compute_merge(x)
+        direct_to_root = model.btree_to_root_map(btree_map)
+        unmerged_x = model.unmerge(merged_x, direct_to_root)
+    _maybe_synchronize(device)
+    dt = (time.time() - t0) * 1000.0
+    cos = cosine_similarity_mean(unmerged_x, tokens)
+    return {
+        "method": "ToPrK2NewChunk",
+        "num_iterations": num_iterations,
+        "runtime_ms": dt,
+        "avg_sim_mean": avg_sim.mean().item(),
+        "cos_sim_unmerged_vs_original": cos,
+        "n_before": tokens.shape[1],
+        "n_after": merged_x.shape[1],
+        "chunk_size": chunk_size,
+    }
+
+
+def benchmark_topr_ple(tokens: torch.Tensor, r: float, beta: float, device: torch.device) -> Dict[str, Any]:
+    model = ToPrPLETopK(r=r, beta=beta, use_bin_argmax=True).to(device)
+    x = tokens.clone()
+    _maybe_synchronize(device)
+    t0 = time.time()
+    with torch.no_grad():
+        merged_x, btree_map, avg_sim = model.compute_merge(x)
+        direct_to_root = model.btree_to_root_map(btree_map)
+        unmerged_x = model.unmerge(merged_x, direct_to_root)
+    _maybe_synchronize(device)
+    dt = (time.time() - t0) * 1000.0
+    cos = cosine_similarity_mean(unmerged_x, tokens)
+    return {
+        "method": "ToPrPLETopK",
+        "num_iterations": None,
+        "runtime_ms": dt,
+        "avg_sim_mean": avg_sim.mean().item(),
+        "cos_sim_unmerged_vs_original": cos,
+        "n_before": tokens.shape[1],
+        "n_after": merged_x.shape[1],
+    }
+
+
+def benchmark_topr_cprr(tokens: torch.Tensor, r: float, beta: float, bins: int, device: torch.device) -> Dict[str, Any]:
+    model = ToPrCPRRTopK(r=r, beta=beta, bins=bins).to(device)
+    x = tokens.clone()
+    _maybe_synchronize(device)
+    t0 = time.time()
+    with torch.no_grad():
+        merged_x, btree_map, avg_sim = model.compute_merge(x)
+        direct_to_root = model.btree_to_root_map(btree_map)
+        unmerged_x = model.unmerge(merged_x, direct_to_root)
+    _maybe_synchronize(device)
+    dt = (time.time() - t0) * 1000.0
+    cos = cosine_similarity_mean(unmerged_x, tokens)
+    return {
+        "method": "ToPrCPRRTopK",
+        "num_iterations": bins,
         "runtime_ms": dt,
         "avg_sim_mean": avg_sim.mean().item(),
         "cos_sim_unmerged_vs_original": cos,
@@ -255,6 +346,7 @@ def run_benchmark(
     use_sv_loader: bool = True,
     sv_checkpoint: str = "/home/hoyso/projects/AudioTokenization/BigCodec_SSL/wavlm_large_finetune.pth",
     seed: int = 1337,
+    chunk_size: int = 50,
 ) -> List[Dict[str, Any]]:
     if iterations_list is None:
         iterations_list = [2, 4, 8, 16]
@@ -282,13 +374,17 @@ def run_benchmark(
     # Methods without num_iterations
     results.append(benchmark_tome_chained(tokens, r=r, kernel_size=2, device=device))
     results.append(benchmark_tome_greedy(tokens, r=r, kernel_size=2, device=device))
+    results.append(benchmark_topr_ple(tokens, r=r, beta=1.0, device=device))
 
     # Methods with num_iterations
     for iters in iterations_list:
         results.append(benchmark_tome_k2new(tokens, r=r, num_iterations=iters, device=device))
-        results.append(benchmark_tome_k2v2(tokens, r=r, num_iterations=iters, device=device))
+        # results.append(benchmark_tome_k2v2(tokens, r=r, num_iterations=iters, device=device))
         results.append(benchmark_our_tome2(tokens, r=r, num_iterations=iters, device=device))
-        results.append(benchmark_our_tome3(tokens, r=r, num_iterations=iters, device=device))
+        # results.append(benchmark_our_tome3(tokens, r=r, num_iterations=iters, device=device))
+        results.append(benchmark_topr_k2new(tokens, r=r, num_iterations=iters, device=device))
+        results.append(benchmark_topr_cprr(tokens, r=r, beta=1.0, bins=max(1, int((r * tokens.shape[1]) ** 0.5)), device=device))
+        results.append(benchmark_topr_k2chunk(tokens, r=r, num_iterations=iters, chunk_size=chunk_size, device=device))
 
     return results
 
@@ -302,6 +398,7 @@ def print_results(results: List[Dict[str, Any]]) -> None:
         "runtime_ms",
         "avg_sim_mean",
         "cos_sim_unmerged_vs_original",
+        "chunk_size",
     ]
     print("\n=== ToMe Benchmark Results ===")
     print("\t".join(headers))
@@ -314,6 +411,7 @@ def print_results(results: List[Dict[str, Any]]) -> None:
             f"{r['runtime_ms']:.2f}",
             f"{r['avg_sim_mean']:.6f}",
             f"{r['cos_sim_unmerged_vs_original']:.6f}",
+            str(r.get("chunk_size", "-")),
         ]
         print("\t".join(row))
 
@@ -329,14 +427,17 @@ def save_csv(results: List[Dict[str, Any]], out_path: str) -> None:
         "runtime_ms",
         "avg_sim_mean",
         "cos_sim_unmerged_vs_original",
+        "chunk_size",
     ]
     with open(out_path, "w", newline="") as f:
         writer = csv.DictWriter(f, fieldnames=headers)
         writer.writeheader()
         for r in results:
             row = r.copy()
-            if row["num_iterations"] is None:
+            if row.get("num_iterations") is None:
                 row["num_iterations"] = ""
+            if "chunk_size" not in row:
+                row["chunk_size"] = ""
             writer.writerow(row)
     print(f"Saved results to {out_path}")
 
@@ -347,7 +448,7 @@ def parse_args() -> argparse.Namespace:
     parser.add_argument("--device", type=str, default="cpu", help="cpu or cuda[:id]")
     parser.add_argument("--sample_rate", type=int, default=16000)
     parser.add_argument("--seconds", type=int, default=4)
-    parser.add_argument("--batch_size", type=int, default=64)
+    parser.add_argument("--batch_size", type=int, default=16)
     parser.add_argument("--r", type=float, default=0.5)
     parser.add_argument("--iters", type=int, nargs="*", default=[2, 4, 8, 16])
     parser.add_argument("--hf_model", type=str, default="microsoft/wavlm-large")
@@ -355,6 +456,7 @@ def parse_args() -> argparse.Namespace:
     parser.add_argument("--sv_checkpoint", type=str, default="/home/hoyso/projects/AudioTokenization/BigCodec_SSL/wavlm_large_finetune.pth")
     parser.add_argument("--seed", type=int, default=1337)
     parser.add_argument("--out_csv", type=str, default="")
+    parser.add_argument("--chunk_size", type=int, default=50, help="Chunk size for ToPrK2NewChunk")
     return parser.parse_args()
 
 
@@ -372,6 +474,7 @@ def main() -> None:
         use_sv_loader=args.use_sv,
         sv_checkpoint=args.sv_checkpoint,
         seed=args.seed,
+        chunk_size=args.chunk_size,
     )
     print_results(results)
     if args.out_csv:

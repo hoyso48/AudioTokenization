@@ -5,7 +5,8 @@ import torch
 import torch.nn as nn
 import torch.nn.functional as F
 from einops import rearrange
-from torch.nn.utils import weight_norm
+# from torch.nn.utils import weight_norm
+# from torch.nn.utils.parametrizations import weight_norm
 
 class FactorizedVectorQuantize(nn.Module):
     def __init__(self, dim, codebook_size, codebook_dim, commitment, **kwargs):
@@ -15,8 +16,8 @@ class FactorizedVectorQuantize(nn.Module):
         self.commitment = commitment
         
         if dim != self.codebook_dim:
-            self.in_proj = weight_norm(nn.Linear(dim, self.codebook_dim))
-            self.out_proj = weight_norm(nn.Linear(self.codebook_dim, dim))
+            self.in_proj = nn.Linear(dim, self.codebook_dim)
+            self.out_proj = nn.Linear(self.codebook_dim, dim)
         else:
             self.in_proj = nn.Identity()
             self.out_proj = nn.Identity()

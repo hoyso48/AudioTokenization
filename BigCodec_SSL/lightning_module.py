@@ -179,6 +179,7 @@ class CodecLightningModule(pl.LightningModule):
                     max_downsample_channels=mpdcfg.max_downsample_channels,
                     channels=mpdcfg.channels,
                     channel_increasing_factor=mpdcfg.channel_increasing_factor,
+                    use_weight_norm=mpdcfg.use_weight_norm,
                 )
         mstftcfg = self.cfg.model.mstft
         self.spec_discriminator = SpecDiscriminator(
@@ -246,7 +247,7 @@ class CodecLightningModule(pl.LightningModule):
         metrics['avg_sim'] = MeanMetric()
         return torchmetrics.MetricCollection(prefix=prefix, metrics=metrics)
     
-    # @torch.compile
+    @torch.compile
     def forward(self, batch):
         if self.cfg.train.use_semantic:
             wav = batch['wav']
@@ -326,7 +327,7 @@ class CodecLightningModule(pl.LightningModule):
         y_ = self.decoder(vq_post_emb, vq=False).squeeze(1)  # [B, T]
         return y_
 
-    # @torch.compile
+    @torch.compile
     def compute_disc_loss(self, batch, output):
         y, y_ = output['gt_wav'], output['gen_wav']
         y_ = y_.detach()
@@ -435,7 +436,7 @@ class CodecLightningModule(pl.LightningModule):
         output_dict['gen_loss'] = gen_loss
         return output_dict
     
-    # @torch.compile
+    @torch.compile
     def training_step(self, batch, batch_idx):
         output = self(batch)
         

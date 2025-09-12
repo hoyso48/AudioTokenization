@@ -244,6 +244,7 @@ class ISTFTHead(FourierHead):
         self.out = torch.nn.Linear(dim, out_dim)
         self.istft = ISTFT(n_fft=n_fft, hop_length=hop_length, win_length=n_fft, padding=padding)
 
+    @torch.compiler.disable(recursive=False)
     def forward(self, x: torch.Tensor) -> torch.Tensor:
         """
         Forward pass of the ISTFTHead module.

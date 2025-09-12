@@ -1,6 +1,6 @@
 import unittest
 import torch
-from .tome_ops import GeneralizedToMe, OurToMeK, OurToMe2
+from tome_ops import GeneralizedToMe, OurToMeK, OurToMe2, ToPrK2New, ToPrPLETopK, ToPrCPRRTopK, ToPrK2NewChunk
 from typing import Tuple, Callable
 
 class TestGeneralizedToMe(unittest.TestCase):
@@ -174,6 +174,217 @@ class TestOurToMeK(unittest.TestCase):
 
         self.assertTrue(torch.allclose(merged_x.cpu(), expected_merged_x))
 
+
+
+class TestToPrK2New(unittest.TestCase):
+
+    def setUp(self):
+        print(f"\n--- Running test: {self._testMethodName} ---")
+
+    def test_initialization(self):
+        try:
+            ToPrK2New(r=0.25, num_iterations=2)
+        except ValueError:
+            self.fail("ToPrK2New raised ValueError unexpectedly.")
+
+    def test_r_zero_case(self):
+        B, N, C = 2, 10, 4
+        x = torch.randn(B, N, C)
+        model = ToPrK2New(r=0.0, num_iterations=2)
+        with torch.no_grad():
+            merged_x, btree, avg_sim = model.compute_merge(x.clone())
+            direct = model.btree_to_root_map(btree)
+            unmerged_x = model.unmerge(merged_x, direct)
+        self.assertEqual(merged_x.shape, x.shape)
+        self.assertTrue(torch.all(btree == 0))
+        self.assertTrue(torch.allclose(unmerged_x, x))
+
+    def test_prune_behavior_simple(self):
+        B, N, C = 1, 8, 4
+        r = 0.25  # prune 2 tokens
+        model = ToPrK2New(r=r, num_iterations=1)
+
+        # Deterministic input: two strong adjacent pairs (2,3) and (4,5)
+        x = torch.zeros(B, N, C, dtype=torch.float32)
+        x[0, 2] = torch.tensor([1.0, 0.0, 0.0, 0.0])
+        x[0, 3] = torch.tensor([1.0, 0.0, 0.0, 0.0])
+        x[0, 4] = torch.tensor([0.0, 1.0, 0.0, 0.0])
+        x[0, 5] = torch.tensor([0.0, 1.0, 0.0, 0.0])
+        x[0, 0] = torch.tensor([0.0, 0.0, 1.0, 0.0])
+        x[0, 1] = torch.tensor([0.0, 0.0, 0.0, 1.0])
+        x[0, 6] = torch.tensor([0.0, 0.0, 1.0, 0.0])
+        x[0, 7] = torch.tensor([0.0, 0.0, 0.0, 1.0])
+
+        with torch.no_grad():
+            merged_x, btree, avg_sim = model.compute_merge(x.clone())
+            direct = model.btree_to_root_map(btree)
+            unmerged_x = model.unmerge(merged_x, direct)
+
+        # Expect pruning of src indices 3 and 5 (adjacent merges into 2 and 4), so btree has -1 there
+        expected_btree = torch.zeros(B, N, dtype=torch.long)
+        expected_btree[0, 3] = -1
+        expected_btree[0, 5] = -1
+        self.assertTrue(torch.equal(btree.cpu(), expected_btree))
+
+        # merged_x keeps original root tokens [0,1,2,4,6,7] with original values
+        expected_merged_x = torch.stack(
+            [x[0, 0], x[0, 1], x[0, 2], x[0, 4], x[0, 6], x[0, 7]]
+        ).unsqueeze(0)
+        self.assertEqual(merged_x.shape, expected_merged_x.shape)
+        self.assertTrue(torch.allclose(merged_x.cpu(), expected_merged_x))
+
+        # Unmerged should copy root token into pruned positions (no averaging)
+        expected_unmerged_x = x.clone()
+        expected_unmerged_x[0, 3] = x[0, 2]
+        expected_unmerged_x[0, 5] = x[0, 4]
+        self.assertTrue(torch.allclose(unmerged_x.cpu(), expected_unmerged_x))
+
+
+class TestToPrK2NewChunk(unittest.TestCase):
+
+    def setUp(self):
+        print(f"\n--- Running test: {self._testMethodName} ---")
+
+    def test_initialization(self):
+        try:
+            ToPrK2NewChunk(r=0.25, num_iterations=2, chunk_size=4)
+        except ValueError:
+            self.fail("ToPrK2NewChunk raised ValueError unexpectedly.")
+
+    def test_r_zero_case(self):
+        B, N, C = 2, 10, 4
+        x = torch.randn(B, N, C)
+        model = ToPrK2NewChunk(r=0.0, num_iterations=2, chunk_size=4)
+        with torch.no_grad():
+            merged_x, btree, avg_sim = model.compute_merge(x.clone())
+            direct = model.btree_to_root_map(btree)
+            unmerged_x = model.unmerge(merged_x, direct)
+        self.assertEqual(merged_x.shape, x.shape)
+        self.assertTrue(torch.all(btree == 0))
+        self.assertTrue(torch.allclose(unmerged_x, x))
+
+    def test_prune_behavior_simple_chunked(self):
+        B, N, C = 1, 8, 4
+        r = 0.25  # prune 2 tokens
+        chunk_size = 4  # two chunks of length 4
+        model = ToPrK2NewChunk(r=r, num_iterations=1, chunk_size=chunk_size)
+
+        # Deterministic input: two strong adjacent pairs (2,3) and (4,5)
+        x = torch.zeros(B, N, C, dtype=torch.float32)
+        x[0, 2] = torch.tensor([1.0, 0.0, 0.0, 0.0])
+        x[0, 3] = torch.tensor([1.0, 0.0, 0.0, 0.0])
+        x[0, 4] = torch.tensor([0.0, 1.0, 0.0, 0.0])
+        x[0, 5] = torch.tensor([0.0, 1.0, 0.0, 0.0])
+        x[0, 0] = torch.tensor([0.0, 0.0, 1.0, 0.0])
+        x[0, 1] = torch.tensor([0.0, 0.0, 0.0, 1.0])
+        x[0, 6] = torch.tensor([0.0, 0.0, 1.0, 0.0])
+        x[0, 7] = torch.tensor([0.0, 0.0, 0.0, 1.0])
+
+        with torch.no_grad():
+            merged_x, btree, avg_sim = model.compute_merge(x.clone())
+            direct = model.btree_to_root_map(btree)
+            unmerged_x = model.unmerge(merged_x, direct)
+
+        # Expect pruning of src indices 3 and 5 (one per chunk)
+        expected_btree = torch.zeros(B, N, dtype=torch.long)
+        expected_btree[0, 3] = -1
+        expected_btree[0, 5] = -1
+        self.assertTrue(torch.equal(btree.cpu(), expected_btree))
+
+        # merged_x keeps original root tokens [0,1,2,4,6,7] with original values
+        expected_merged_x = torch.stack(
+            [x[0, 0], x[0, 1], x[0, 2], x[0, 4], x[0, 6], x[0, 7]]
+        ).unsqueeze(0)
+        self.assertEqual(merged_x.shape, expected_merged_x.shape)
+        self.assertTrue(torch.allclose(merged_x.cpu(), expected_merged_x))
+
+        # Unmerged should copy root token into pruned positions (no averaging)
+        expected_unmerged_x = x.clone()
+        expected_unmerged_x[0, 3] = x[0, 2]
+        expected_unmerged_x[0, 5] = x[0, 4]
+        self.assertTrue(torch.allclose(unmerged_x.cpu(), expected_unmerged_x))
+
+class TestToPrPLETopK(unittest.TestCase):
+
+    def setUp(self):
+        print(f"\n--- Running test: {self._testMethodName} ---")
+
+    def test_counts_and_unmerge(self):
+        B, N, C = 1, 8, 4
+        r = 0.25  # prune 2 tokens => keep 6
+        model = ToPrPLETopK(r=r, beta=1.0, eps=1e-9, use_bin_argmax=False)
+
+        # Deterministic input
+        x = torch.zeros(B, N, C, dtype=torch.float32)
+        x[0, 2] = torch.tensor([1.0, 0.0, 0.0, 0.0])
+        x[0, 3] = torch.tensor([1.0, 0.0, 0.0, 0.0])
+        x[0, 4] = torch.tensor([0.0, 1.0, 0.0, 0.0])
+        x[0, 5] = torch.tensor([0.0, 1.0, 0.0, 0.0])
+        x[0, 0] = torch.tensor([0.0, 0.0, 1.0, 0.0])
+        x[0, 1] = torch.tensor([0.0, 0.0, 0.0, 1.0])
+        x[0, 6] = torch.tensor([0.0, 0.0, 1.0, 0.0])
+        x[0, 7] = torch.tensor([0.0, 0.0, 0.0, 1.0])
+
+        with torch.no_grad():
+            merged_x, btree, avg_sim = model.compute_merge(x.clone())
+            direct = model.btree_to_root_map(btree)
+            unmerged_x = model.unmerge(merged_x, direct)
+
+        # counts
+        kept = (btree == 0).sum().item()
+        self.assertEqual(kept, N - int(r * N))
+        self.assertEqual(merged_x.shape, (B, N - int(r * N), C))
+        # semantics: 0/-1 only, first token kept
+        self.assertTrue(torch.all((btree == 0) | (btree == -1)))
+        self.assertEqual(btree[0, 0].item(), 0)
+
+        # unmerge correctness: each pruned position copies from nearest kept on the left
+        for j in range(N):
+            if btree[0, j].item() == -1:
+                k = j - 1
+                while k >= 0 and btree[0, k].item() != 0:
+                    k -= 1
+                self.assertTrue(torch.allclose(unmerged_x[0, j], x[0, k]))
+
+        # avg_sim non-negative
+        self.assertGreaterEqual(avg_sim.item(), 0.0)
+
+
+class TestToPrCPRRTopK(unittest.TestCase):
+
+    def setUp(self):
+        print(f"\n--- Running test: {self._testMethodName} ---")
+
+    def test_counts_and_unmerge(self):
+        B, N, C = 1, 12, 4
+        r = 0.33  # floor(r*N) = floor(3.96)=3, keep 9
+        model = ToPrCPRRTopK(r=r, beta=1.0, eps=1e-9, bins=None)
+
+        # Deterministic input with multiple transitions
+        x = torch.zeros(B, N, C, dtype=torch.float32)
+        for i in range(N):
+            x[0, i, i % C] = 1.0
+
+        with torch.no_grad():
+            merged_x, btree, avg_sim = model.compute_merge(x.clone())
+            direct = model.btree_to_root_map(btree)
+            unmerged_x = model.unmerge(merged_x, direct)
+
+        kept = (btree == 0).sum().item()
+        self.assertEqual(kept, N - int(r * N))
+        self.assertEqual(merged_x.shape, (B, N - int(r * N), C))
+        self.assertTrue(torch.all((btree == 0) | (btree == -1)))
+        self.assertEqual(btree[0, 0].item(), 0)
+
+        # unmerge correctness under left-chain
+        for j in range(N):
+            if btree[0, j].item() == -1:
+                k = j - 1
+                while k >= 0 and btree[0, k].item() != 0:
+                    k -= 1
+                self.assertTrue(torch.allclose(unmerged_x[0, j], x[0, k]))
+
+        self.assertGreaterEqual(avg_sim.item(), 0.0)
 
 
 if __name__ == '__main__':

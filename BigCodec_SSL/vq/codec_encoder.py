@@ -489,15 +489,16 @@ class ConformerEncoderSTFT(nn.Module):
         if stage == 0:
             stft_result = self.stft(x)  # (B, n_fft//2+1, n_frames)
             
-            # Convert complex to real and imaginary parts
-            real_part = stft_result.real  # (B, n_fft//2+1, n_frames)
-            imag_part = stft_result.imag  # (B, n_fft//2+1, n_frames)
+            # # Convert complex to real and imaginary parts
+            # real_part = stft_result.real  # (B, n_fft//2+1, n_frames)
+            # imag_part = stft_result.imag  # (B, n_fft//2+1, n_frames)
             
-            # Concatenate real and imaginary parts
-            stft_features = torch.cat([real_part, imag_part], dim=1)  # (B, 2*(n_fft//2+1), n_frames)
+            # # Concatenate real and imaginary parts
+            # stft_features = torch.cat([real_part, imag_part], dim=1)  # (B, 2*(n_fft//2+1), n_frames)
+            stft_features = torch.view_as_real(stft_result).permute(0, 2, 1, 3).flatten(2)
             
             # Input projection
-            x = self.input_proj(stft_features.transpose(1, 2))  # (B, n_frames, dim)
+            x = self.input_proj(stft_features)  # (B, n_frames, dim)
             x = self.input_norm(x)
             
             # Conformer backbone
