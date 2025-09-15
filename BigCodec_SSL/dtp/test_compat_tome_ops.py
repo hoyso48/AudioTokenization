@@ -1,6 +1,6 @@
 import unittest
 import torch
-from tome_ops import ToPrK2New, ToPrK2NewChunk
+from tome_ops import ToPrK2New, ToPrK2NewChunk, ToPrPLETopK, PLETopK
 
 class TestToPrK2NewChunkCompatibility(unittest.TestCase):
     def test_chunk_equals_full_when_chunk_size_is_N(self):
@@ -40,6 +40,41 @@ class TestToPrK2NewChunkCompatibility(unittest.TestCase):
                                     self.assertTrue(torch.allclose(x_full_un, x_chunk_un, atol=1e-6, rtol=1e-5))
                                     # avg_sim equality
                                     self.assertTrue(torch.allclose(m_full, m_chunk, atol=1e-6, rtol=1e-5))
+
+
+class TestPLEPreCompatibility(unittest.TestCase):
+    def test_ple_pre_equals_topr_ple_beta1(self):
+        torch.manual_seed(0)
+        seeds = [0, 1]
+        batches = [1, 2]
+        lengths = [7, 16, 31]
+        channels = [8, 16]
+        ratios = [0.25, 0.5, 0.75]
+
+        for seed in seeds:
+            g = torch.Generator().manual_seed(seed)
+            for B in batches:
+                for N in lengths:
+                    for C in channels:
+                        for r in ratios:
+                            if N >= 2 and not (r >= (1.0 / float(N)) and r < 1.0):
+                                continue
+                            with self.subTest(seed=seed, B=B, N=N, C=C, r=r):
+                                x = torch.randn(B, N, C, generator=g)
+                                ple_ref = ToPrPLETopK(r=r, beta=1.0, eps=1e-12, use_bin_argmax=True)
+                                ple_pre = PLETopK(r=r, fallback='pre')
+                                with torch.no_grad():
+                                    xr, br, mr = ple_ref.compute_merge(x.clone())
+                                    xp, bp, mp = ple_pre.compute_merge(x.clone())
+                                self.assertEqual(xr.shape, xp.shape)
+                                self.assertTrue(torch.allclose(xr, xp, atol=1e-6, rtol=1e-5))
+                                rr = ple_ref.btree_to_root_map(br)
+                                rp = ple_pre.btree_to_root_map(bp)
+                                self.assertTrue(torch.equal(rr, rp))
+                                xr_un = ple_ref.unmerge(xr, rr)
+                                xp_un = ple_pre.unmerge(xp, rp)
+                                self.assertEqual(xr_un.shape, xp_un.shape)
+                                self.assertTrue(torch.allclose(xr_un, xp_un, atol=1e-6, rtol=1e-5))
 
 
 if __name__ == '__main__':

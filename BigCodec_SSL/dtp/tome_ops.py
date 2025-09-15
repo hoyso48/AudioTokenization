@@ -1185,6 +1185,147 @@ class ToPrK2New(nn.Module):
         return final_x
 
 
+class ToPrGreedy(nn.Module):
+    """
+    Greedy pruning variant (kernel_size fixed to 2).
+
+    - One-by-one greedy selection: at each step pick the adjacent pair with maximum cosine similarity
+      and delete the right token (src). No averaging is performed.
+    - Maintains and updates only local similarities after each deletion for efficiency.
+    - API mirrors other pruning classes:
+        - compute_merge(x) -> (merged_x, btree_map, avg_sim)
+        - merge(x, direct_to_root_map) -> gather kept tokens (no averaging)
+        - btree_to_root_map(merge_btree) -> resolve immediate -1 links to nearest left root
+        - unmerge(y, direct_to_root_map) -> copy kept tokens back to original length
+    """
+    def __init__(self, r: float):
+        super().__init__()
+        self.r = float(r)
+
+    @torch.no_grad()
+    def compute_merge(self, x: torch.Tensor) -> Tuple[torch.Tensor, torch.Tensor, torch.Tensor]:
+        B, N, C = x.shape
+        device = x.device
+        dtype = x.dtype
+
+        btree_map = torch.zeros(B, N, device=device, dtype=torch.int64)
+
+        total_to_prune = int(self.r * N)
+        if N == 0 or total_to_prune == 0:
+            avg_sim = torch.zeros(B, device=device, dtype=dtype)
+            return x, btree_map, avg_sim
+
+        # Map current sequence positions to original indices
+        orig_idx = torch.arange(N, device=device).expand(B, -1)
+
+        # Precompute normalization once; reuse via gathers
+        base_norm = F.normalize(x.detach(), dim=-1)
+
+        # Initial adjacent similarities
+        current_N = orig_idx.shape[1]
+        if current_N > 1:
+            curr_norm = base_norm.gather(1, orig_idx.unsqueeze(-1).expand(-1, -1, C))
+            sim = (curr_norm[:, :-1, :] * curr_norm[:, 1:, :]).sum(dim=-1)  # (B, current_N-1)
+        else:
+            sim = torch.empty(B, 0, device=device, dtype=dtype)
+
+        min_sim = torch.full((B,), float('inf'), device=device, dtype=dtype)
+        total_selected = 0
+
+        for _ in range(total_to_prune):
+            current_N = orig_idx.shape[1]
+            if current_N < 2:
+                break
+            M = current_N - 1
+            if M == 0:
+                break
+
+            # Top-1 adjacent pair per batch
+            top_val, p_idx = sim.max(dim=1)  # p_idx in [0, M-1] denotes pair (p, p+1)
+            can_pick = top_val.isfinite()
+            if not can_pick.any():
+                break
+
+            dst_idx = p_idx  # left token index
+            src_idx = p_idx + 1  # right token index to delete
+
+            # Track min similarity across selected pairs
+            min_sim = torch.minimum(min_sim, top_val.to(dtype))
+            total_selected += 1
+
+            # Update global btree with immediate-parent offset -1 at pruned source original positions
+            src_orig_idx = orig_idx.gather(1, src_idx.unsqueeze(-1))
+            btree_map.scatter_(1, src_orig_idx, torch.full_like(src_orig_idx, -1))
+
+            # Remove selected src tokens from the sequence
+            remove_mask = torch.ones(B, current_N, dtype=torch.bool, device=device)
+            remove_mask.scatter_(1, src_idx.unsqueeze(1), False)
+            orig_idx = orig_idx[remove_mask].view(B, current_N - 1)
+
+            # Incremental similarity update
+            if M == 1:
+                # No pairs remain after this deletion
+                sim = sim[:, :0]
+                continue
+
+            new_M = M - 1
+            drop_right_exists = (p_idx < (M - 1))  # whether pair (src, src+1) existed
+            keep_mask = torch.ones(B, M, dtype=torch.bool, device=device)
+            drop_idx = torch.where(drop_right_exists, p_idx + 1, p_idx)
+            keep_mask.scatter_(1, drop_idx.unsqueeze(1), False)
+
+            new_sim = sim[keep_mask].view(B, new_M)
+
+            # For rows where a new left-right pair forms, update its similarity at position p_idx
+            upd_batches = torch.nonzero(drop_right_exists, as_tuple=False).squeeze(1)
+            if upd_batches.numel() > 0:
+                left_pos = dst_idx[upd_batches]
+                right_pos = left_pos + 1
+                left_orig = orig_idx[upd_batches, left_pos]
+                right_orig = orig_idx[upd_batches, right_pos]
+                left_vec = base_norm[upd_batches, left_orig, :]
+                right_vec = base_norm[upd_batches, right_orig, :]
+                new_vals = (left_vec * right_vec).sum(dim=-1)
+                new_sim[upd_batches, p_idx[upd_batches]] = new_vals.to(dtype)
+
+            sim = new_sim
+
+        # Gather kept tokens in order
+        merged_x = x.gather(1, orig_idx.unsqueeze(-1).expand(-1, -1, C))
+
+        avg_sim = torch.zeros(B, device=device, dtype=dtype) if total_selected == 0 else min_sim
+        return merged_x, btree_map, avg_sim
+
+    def merge(self, x: torch.Tensor, direct_to_root_map: torch.Tensor) -> torch.Tensor:
+        B, N, C = x.shape
+        root_mask = (direct_to_root_map == 0)
+        root_tokens = x[root_mask].view(B, -1, C)
+        return root_tokens
+
+    @torch.no_grad()
+    def btree_to_root_map(self, merge_btree: torch.Tensor) -> torch.Tensor:
+        B, N = merge_btree.shape
+        device = merge_btree.device
+        idx = torch.arange(N, device=device, dtype=merge_btree.dtype).view(1, N).expand(B, -1)
+        is_root = (merge_btree == 0)
+        masked = torch.where(is_root, idx + 1, torch.zeros_like(merge_btree))
+        last_root_pos_plus1, _ = torch.cummax(masked, dim=1)
+        last_root_pos = last_root_pos_plus1 - 1
+        direct_to_root_map = last_root_pos - idx
+        return direct_to_root_map
+
+    def unmerge(self, y: torch.Tensor, direct_to_root_map: torch.Tensor) -> torch.Tensor:
+        B, N_original = direct_to_root_map.shape
+        if y.shape[1] == N_original:
+            return y
+        _, _, C = y.shape
+        root_mask = (direct_to_root_map == 0)
+        root_rank_map = torch.cumsum(root_mask.to(torch.int32), dim=1) - 1
+        source_indices = torch.arange(N_original, device=y.device).view(1, -1) + direct_to_root_map
+        root_ranks = torch.gather(root_rank_map, 1, source_indices).clamp_min(0)
+        final_x = torch.gather(y, 1, root_ranks.unsqueeze(-1).expand(-1, -1, C))
+        return final_x
+
 class ToPrK2NewChunk(nn.Module):
     """
     Chunked pruning variant of k=2 ToPrK2New.
@@ -2337,3 +2478,406 @@ class OurToMeK(nn.Module):
 # Backward-compatibility alias for tests expecting GeneralizedToMe
 class GeneralizedToMe(ToMeChained):
     pass
+
+class PLETopK(nn.Module):
+    """
+    Minimal Path-Length Equalization Top-K pruning (argmax mode only).
+    - Fixed beta=1, use_bin_argmax=True
+    - avg_sim is always zeros
+    - Strict kept-count check: raises if selected kept tokens != M = N - floor(r*N)
+    Semantics:
+      - Always keep token 0; last token may be pruned.
+      - For each batch, partition the cumulative path-length axis into M bins;
+        for interior bins k=1..M-1, pick the pair with maximum dissimilarity and
+        keep its right token.
+    """
+    def __init__(self, r: float, fallback: Optional[str] = None):
+        super().__init__()
+        self.r = float(r)
+        if fallback is not None:
+            valid = {None, 'pre', 'post', 'max', 'random'}
+            if fallback not in valid:
+                raise ValueError(f"PLETopK: invalid fallback='{fallback}', must be one of {valid}")
+        self.fallback = fallback
+        # Removed undefined noise_scale; no noise used in this implementation
+        
+    @torch.no_grad()
+    def compute_merge(self, x: torch.Tensor) -> Tuple[torch.Tensor, torch.Tensor, torch.Tensor]:
+        B, N, C = x.shape
+        device = x.device
+        dtype = x.dtype
+
+        if N == 0:
+            btree_map = torch.zeros(B, 0, device=device, dtype=torch.int64)
+            avg_sim = torch.zeros(B, device=device, dtype=dtype)
+            return x, btree_map, avg_sim
+
+        # r guard: for N>=2, require r in [1/N, 1.0)
+        if N >= 2:
+            if not (self.r >= (1.0 / float(N)) and self.r < 1.0):
+                raise RuntimeError(
+                    f"PLETopK: invalid r for N (requires r in [1/N,1.0) when N>=2). r={self.r}, N={N}"
+                )
+
+        # Number to prune and keep (always keep at least one token: token 0)
+        K = int(min(max(math.floor(self.r * N), 0), N - 1))
+        M = N - K
+
+        x_norm = F.normalize(x, dim=-1)
+        if N > 1:
+            d = 1.0 - (x_norm[:, :-1, :] * x_norm[:, 1:, :]).sum(dim=-1)  # (B, N-1)
+        else:
+            d = torch.zeros(B, 0, device=device, dtype=dtype)
+
+        # Cumulative path length with beta=1 (weights = d + eps)
+        if N > 1:
+            w = d + 1e-12
+            w = w.clamp(0,1) #handling negative similarity
+            D = torch.zeros(B, N, device=device, dtype=dtype)
+            D[:, 1:] = torch.cumsum(w, dim=1)
+            L = D[:, -1]  # (B,)
+        else:
+            D = torch.zeros(B, 1, device=device, dtype=dtype)
+            L = torch.zeros(B, device=device, dtype=dtype)
+
+        btree_map = torch.zeros(B, N, device=device, dtype=torch.int64)
+
+        if M <= 1:
+            # Keep only the first token (token 0)
+            if N > 1:
+                btree_map[:, 1:] = -1
+            merged_x = x[:, :1, :]
+            avg_sim = torch.zeros(B, device=device, dtype=dtype)
+            return merged_x, btree_map, avg_sim
+
+        # Argmax mode over equal path-length bins
+        interior = M - 1
+        # Bin width per batch; avoid division by zero when L == 0
+        t = torch.where(L > 0, L / float(M), torch.ones_like(L))
+
+        pair_right = D[:, 1:]  # (B, N-1)
+        bin_idx = torch.clamp((pair_right / t.view(B, 1)).floor().long(), min=0, max=M - 1)
+
+        d_mask = d.clone()
+        if d_mask.numel() > 0:
+            d_mask[:, 0] = float('-inf')  # exclude pair 0 to avoid duplicate seed interaction
+
+        bins = torch.arange(1, M, device=device, dtype=bin_idx.dtype).view(1, interior, 1)
+        mask3 = (bin_idx.unsqueeze(1) == bins)  # (B, interior, N-1)
+
+        d_exp = d_mask.unsqueeze(1).expand(-1, interior, -1)
+        neg_inf = torch.full_like(d_exp, float('-inf'))
+        masked_scores = torch.where(mask3, d_exp, neg_inf)
+
+        vals, idxs = masked_scores.max(dim=2)  # (B, interior)
+        has_any = vals.isfinite()
+
+        # Build keep mask: token 0 plus right tokens of chosen pairs
+        keep_int = torch.zeros(B, N, device=device, dtype=torch.int64)
+        keep_int[:, 0] = 1
+
+        if interior > 0:
+            chosen_pairs = torch.where(has_any, idxs, torch.zeros_like(idxs))
+            chosen_tokens = (chosen_pairs + 1).clamp(1, N - 1)
+            keep_int.scatter_(1, chosen_tokens, 1)
+
+        kept_counts = keep_int.sum(dim=1)
+        expected_kept = int(M)
+        missing = (expected_kept - kept_counts).clamp_min(0)
+        if (missing != 0).any():
+            if self.fallback is None:
+                short = missing.tolist()
+                raise RuntimeError(f"PLETopK: kept length mismatch per batch (missing={short}); r={self.r}, N={N}, expected_kept={expected_kept}")
+            # Apply fallback to fill missing selections
+            avail = (keep_int[:, 1:] == 0)  # (B, N-1)
+            Bidx = torch.arange(B, device=device)
+            max_need = int(missing.max().item())
+            if max_need > 0:
+                if self.fallback == 'pre':
+                    pos = torch.arange(1, N, device=device).view(1, -1).expand(B, -1)
+                    scores = torch.where(avail, -pos.to(dtype), torch.full((B, N - 1), float('-inf'), device=device, dtype=dtype))
+                elif self.fallback == 'post':
+                    pos = torch.arange(1, N, device=device).view(1, -1).expand(B, -1)
+                    scores = torch.where(avail, pos.to(dtype), torch.full((B, N - 1), float('-inf'), device=device, dtype=dtype))
+                elif self.fallback == 'max':
+                    # Use d as score for token j (j>=1) via pair index j-1
+                    d_pad = d  # (B, N-1)
+                    scores = torch.where(avail, d_pad, torch.full((B, N - 1), float('-inf'), device=device, dtype=dtype))
+                elif self.fallback == 'random':
+                    rnd = torch.rand(B, N - 1, device=device, dtype=dtype)
+                    scores = torch.where(avail, rnd, torch.full((B, N - 1), float('-inf'), device=device, dtype=dtype))
+                else:
+                    scores = torch.full((B, N - 1), float('-inf'), device=device, dtype=dtype)
+
+                vals, cols = torch.topk(scores, k=max_need, dim=1)
+                # Build mask to take only the first missing[b] extras per batch
+                use_mask = (torch.arange(max_need, device=device).view(1, -1) < missing.view(B, 1))
+                extras = torch.where(use_mask, cols, torch.zeros_like(cols))  # tokens 1..N-1
+                add_vals = use_mask.long()
+                keep_int.scatter_add_(1, (extras + 1).long(), add_vals)
+
+        keep = keep_int.bool()
+        btree_map[~keep] = -1
+        merged_x = x[keep].view(B, M, C)
+        avg_sim = torch.zeros(B, device=device, dtype=dtype)
+        return merged_x, btree_map, avg_sim
+
+    def merge(self, x: torch.Tensor, direct_to_root_map: torch.Tensor) -> torch.Tensor:
+        B, N, C = x.shape
+        root_mask = (direct_to_root_map == 0)
+        root_tokens = x[root_mask].view(B, -1, C)
+        return root_tokens
+
+    @torch.no_grad()
+    def btree_to_root_map(self, merge_btree: torch.Tensor) -> torch.Tensor:
+        B, N = merge_btree.shape
+        device = merge_btree.device
+        idx = torch.arange(N, device=device, dtype=merge_btree.dtype).view(1, N).expand(B, -1)
+        is_root = (merge_btree == 0)
+        masked = torch.where(is_root, idx + 1, torch.zeros_like(merge_btree))
+        last_root_pos_plus1, _ = torch.cummax(masked, dim=1)
+        last_root_pos = last_root_pos_plus1 - 1
+        direct_to_root_map = last_root_pos - idx
+        return direct_to_root_map
+
+    def unmerge(self, y: torch.Tensor, direct_to_root_map: torch.Tensor) -> torch.Tensor:
+        B, N_original = direct_to_root_map.shape
+        if y.shape[1] == N_original:
+            return y
+        _, _, C = y.shape
+        root_mask = (direct_to_root_map == 0)
+        root_rank_map = torch.cumsum(root_mask.to(torch.int32), dim=1) - 1
+        source_indices = torch.arange(N_original, device=y.device).view(1, -1) + direct_to_root_map
+        root_ranks = torch.gather(root_rank_map, 1, source_indices).clamp_min(0)
+        final_x = torch.gather(y, 1, root_ranks.unsqueeze(-1).expand(-1, -1, C))
+        return final_x
+
+
+class PLETopKChunk(nn.Module):
+    """
+    Chunked variant of PLETopK using the chunking scheme from ToPrK2NewChunk.
+
+    - Splits the input sequence into fixed-length chunks (last chunk may be shorter)
+    - Assigns per-chunk prune quotas q_c via floor(r*L_c) and largest-remainder so
+      sum_c q_c = floor(r*N). For each chunk, selects exactly M_c = L_c - q_c kept
+      tokens using PLE argmax semantics (always keep the chunk's first token).
+    - Returns (merged_x, merge_btree, avg_sim). merge_btree is {0 for kept, -1 pruned}.
+    - avg_sim is zeros (matches PLETopK semantics).
+
+    Parameters mirror PLETopK, with additional chunk_size (default 100).
+    """
+    def __init__(self, r: float, eps: float = 1e-12,
+                 fallback: Optional[str] = None, chunk_size: int = 100):
+        super().__init__()
+        self.r = float(r)
+        self.eps = float(eps)
+        if fallback is not None:
+            valid = {None, 'pre', 'post', 'max', 'random'}
+            if fallback not in valid:
+                raise ValueError(f"PLETopKChunk: invalid fallback='{fallback}', must be one of {valid}")
+        self.fallback = fallback
+        if chunk_size < 2:
+            raise ValueError("chunk_size must be >= 2")
+        self.chunk_size = int(chunk_size)
+
+    @torch.no_grad()
+    def compute_merge(self, x: torch.Tensor) -> Tuple[torch.Tensor, torch.Tensor, torch.Tensor]:
+        B, N, C = x.shape
+        device = x.device
+        dtype = x.dtype
+
+        if N == 0:
+            btree_map = torch.zeros(B, 0, device=device, dtype=torch.int64)
+            avg_sim = torch.zeros(B, device=device, dtype=dtype)
+            return x, btree_map, avg_sim
+
+        # r guard similar to PLETopK: when N>=2, require r in [1/N, 1.0)
+        if N >= 2:
+            if not (self.r >= (1.0 / float(N)) and self.r < 1.0):
+                raise RuntimeError(
+                    f"PLETopKChunk: invalid r for N (requires r in [1/N,1.0) when N>=2). r={self.r}, N={N}"
+                )
+
+        total_to_prune = int(math.floor(self.r * N))
+        expected_kept = N - total_to_prune
+
+        # Precompute normalization once; reuse within chunks via gathers
+        base_norm = F.normalize(x.detach(), dim=-1)
+
+        btree_map = torch.zeros(B, N, device=device, dtype=torch.int64)
+        kept_chunks: list[torch.Tensor] = []
+
+        # Chunk partition
+        starts = list(range(0, N, self.chunk_size))
+        lens = [min(self.chunk_size, N - s) for s in starts]
+
+        # Largest-remainder distribution of per-chunk prune quotas
+        raw = [self.r * float(Lc) for Lc in lens]
+        q_floor = [int(math.floor(v)) for v in raw]
+        sum_floor = int(sum(q_floor))
+        remainder = total_to_prune - sum_floor
+        if remainder > 0:
+            frac = [(raw[i] - float(q_floor[i]), i) for i in range(len(lens))]
+            frac.sort(key=lambda t: t[0], reverse=True)
+            for k in range(min(remainder, len(frac))):
+                idx = frac[k][1]
+                q_floor[idx] += 1
+
+        # Light safety: ensure at least one kept per chunk (for r<1 this holds, but clamp anyway)
+        for ci in range(len(lens)):
+            Lc = lens[ci]
+            if Lc <= 0:
+                continue
+            q_floor[ci] = int(max(0, min(q_floor[ci], Lc - 1)))
+
+        for ci, s in enumerate(starts):
+            Lc = lens[ci]
+            e = s + Lc
+            x_chunk = x[:, s:e, :]
+            if Lc <= 0:
+                continue
+
+            # Per-chunk kept count
+            q_c = int(q_floor[ci])
+            M_c = Lc - q_c
+
+            # Trivial
+            if M_c <= 1:
+                # Keep only the first token in the chunk
+                if Lc > 1:
+                    btree_map[:, s+1:e] = -1
+                kept_chunks.append(x_chunk[:, :1, :])
+                continue
+
+            # Use precomputed normalization for current tokens
+            orig_idx = torch.arange(s, e, device=device).expand(B, -1)
+            curr_norm = base_norm.gather(1, orig_idx.unsqueeze(-1).expand(-1, -1, C))
+
+            # Dissimilarities within chunk
+            if Lc > 1:
+                d = 1.0 - (curr_norm[:, :-1, :] * curr_norm[:, 1:, :]).sum(dim=-1)  # (B, Lc-1)
+            else:
+                d = torch.zeros(B, 0, device=device, dtype=dtype)
+
+            # Cumulative path length per chunk (match PLETopK semantics)
+            if Lc > 1:
+                w = (d + self.eps).clamp(0, 1)
+                D = torch.zeros(B, Lc, device=device, dtype=dtype)
+                D[:, 1:] = torch.cumsum(w, dim=1)
+                L = D[:, -1]
+            else:
+                D = torch.zeros(B, 1, device=device, dtype=dtype)
+                L = torch.zeros(B, device=device, dtype=dtype)
+
+            # Build keep mask per chunk
+            keep_int = torch.zeros(B, Lc, device=device, dtype=torch.int64)
+            keep_int[:, 0] = 1  # always keep first token of the chunk
+
+            interior = M_c - 1
+            if Lc > 1 and interior > 0:
+                # Equal path-length bins (argmax mode)
+                t = torch.where(L > 0, L / float(M_c), torch.ones_like(L))
+                pair_right = D[:, 1:]  # (B, Lc-1)
+                bin_idx = torch.clamp((pair_right / t.view(B, 1)).floor().long(), min=0, max=M_c - 1)
+
+                d_mask = d.clone()
+                if d_mask.numel() > 0:
+                    d_mask[:, 0] = float('-inf')  # exclude pair 0 to avoid duplicate seed
+
+                bins = torch.arange(1, M_c, device=device, dtype=bin_idx.dtype).view(1, interior, 1)
+                mask3 = (bin_idx.unsqueeze(1) == bins)  # (B, interior, Lc-1)
+                d_exp = d_mask.unsqueeze(1).expand(-1, interior, -1)
+                neg_inf = torch.full_like(d_exp, float('-inf'))
+                masked_scores = torch.where(mask3, d_exp, neg_inf)
+
+                vals, idxs = masked_scores.max(dim=2)  # (B, interior)
+                has_any = vals.isfinite()
+                chosen = torch.where(has_any, idxs, torch.zeros_like(idxs))
+                chosen_tokens = (chosen + 1).clamp(1, Lc - 1)
+                keep_int.scatter_(1, chosen_tokens, 1)
+
+                # Ensure exactly M_c kept per batch
+                kept_counts = keep_int.sum(dim=1)
+                expected_kept_chunk = int(M_c)
+                missing = (expected_kept_chunk - kept_counts).clamp_min(0)
+                if (missing != 0).any():
+                    if self.fallback is None:
+                        short = missing.tolist()
+                        raise RuntimeError(
+                            f"PLETopKChunk: kept length mismatch per batch in chunk {ci} (missing={short}); "
+                            f"r={self.r}, Lc={Lc}, expected_kept={expected_kept_chunk}"
+                        )
+                    avail = (keep_int[:, 1:] == 0)  # (B, Lc-1)
+                    max_need = int(missing.max().item())
+                    if max_need > 0:
+                        if self.fallback == 'pre':
+                            pos = torch.arange(1, Lc, device=device).view(1, -1).expand(B, -1)
+                            scores = torch.where(avail, -pos.to(dtype), torch.full((B, Lc - 1), float('-inf'), device=device, dtype=dtype))
+                        elif self.fallback == 'post':
+                            pos = torch.arange(1, Lc, device=device).view(1, -1).expand(B, -1)
+                            scores = torch.where(avail, pos.to(dtype), torch.full((B, Lc - 1), float('-inf'), device=device, dtype=dtype))
+                        elif self.fallback == 'max':
+                            scores = torch.where(avail, d, torch.full((B, Lc - 1), float('-inf'), device=device, dtype=dtype))
+                        elif self.fallback == 'random':
+                            rnd = torch.rand(B, Lc - 1, device=device, dtype=dtype)
+                            scores = torch.where(avail, rnd, torch.full((B, Lc - 1), float('-inf'), device=device, dtype=dtype))
+                        else:
+                            scores = torch.full((B, Lc - 1), float('-inf'), device=device, dtype=dtype)
+
+                        vals2, cols = torch.topk(scores, k=max_need, dim=1)
+                        use_mask = (torch.arange(max_need, device=device).view(1, -1) < missing.view(B, 1))
+                        extras = torch.where(use_mask, cols, torch.zeros_like(cols))  # tokens 1..Lc-1
+                        add_vals = use_mask.long()
+                        keep_int.scatter_add_(1, (extras + 1).long(), add_vals)
+
+            # Write per-chunk btree and gather kept tokens in order
+            keep = keep_int.bool()
+            chunk_btree = torch.zeros(B, Lc, device=device, dtype=torch.int64)
+            chunk_btree[~keep] = -1
+            btree_map[:, s:e] = chunk_btree
+
+            y_chunk = x_chunk[keep].view(B, M_c, C)
+            kept_chunks.append(y_chunk)
+
+        merged_x = torch.cat(kept_chunks, dim=1) if len(kept_chunks) > 0 else x[:, :0, :]
+
+        # Strict kept-count check across chunks
+        actual_kept = int(merged_x.shape[1])
+        if actual_kept != expected_kept:
+            raise RuntimeError(
+                f"PLETopKChunk: kept length mismatch (actual={actual_kept}, expected={expected_kept}); "
+                f"r={self.r}, N={N}, chunk_size={self.chunk_size}"
+            )
+
+        avg_sim = torch.zeros(B, device=device, dtype=dtype)
+        return merged_x, btree_map, avg_sim
+
+    def merge(self, x: torch.Tensor, direct_to_root_map: torch.Tensor) -> torch.Tensor:
+        B, N, C = x.shape
+        root_mask = (direct_to_root_map == 0)
+        root_tokens = x[root_mask].view(B, -1, C)
+        return root_tokens
+
+    @torch.no_grad()
+    def btree_to_root_map(self, merge_btree: torch.Tensor) -> torch.Tensor:
+        B, N = merge_btree.shape
+        device = merge_btree.device
+        idx = torch.arange(N, device=device, dtype=merge_btree.dtype).view(1, N).expand(B, -1)
+        is_root = (merge_btree == 0)
+        masked = torch.where(is_root, idx + 1, torch.zeros_like(merge_btree))
+        last_root_pos_plus1, _ = torch.cummax(masked, dim=1)
+        last_root_pos = last_root_pos_plus1 - 1
+        direct_to_root_map = last_root_pos - idx
+        return direct_to_root_map
+
+    def unmerge(self, y: torch.Tensor, direct_to_root_map: torch.Tensor) -> torch.Tensor:
+        B, N_original = direct_to_root_map.shape
+        if y.shape[1] == N_original:
+            return y
+        _, _, C = y.shape
+        root_mask = (direct_to_root_map == 0)
+        root_rank_map = torch.cumsum(root_mask.to(torch.int32), dim=1) - 1
+        source_indices = torch.arange(N_original, device=y.device).view(1, -1) + direct_to_root_map
+        root_ranks = torch.gather(root_rank_map, 1, source_indices).clamp_min(0)
+        final_x = torch.gather(y, 1, root_ranks.unsqueeze(-1).expand(-1, -1, C))
+        return final_x

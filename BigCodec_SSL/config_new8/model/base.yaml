@@ -47,11 +47,11 @@ codec_decoder:
 tome:
   use_tome: True
   masking_upsampler: True
-  class_name: 'ToPrPLETopK'
+  class_name: 'PLETopKChunk'
   tome_params:
     r: 0.5
-    use_bin_argmax: True
-    beta: 1.0
+    chunk_size: 200
+    fallback: 'post'
   proj: False
   proj_dim: 256
   conv_stride: 2

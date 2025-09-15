@@ -163,19 +163,16 @@ def compute_pair_metrics(gt_wav: torch.Tensor, pred_wav: torch.Tensor,
                          asr_model, processor,
                          spk_model, mcd_compare,
                          pred_path: str) -> Dict[str, Optional[float]]:
-    # Align
     T = min(gt_wav.size(1), pred_wav.size(1))
     gt = gt_wav[:, :T]
     pr = pred_wav[:, :T]
 
-    # Torchmetrics accumulators (single sample)
     stoi_metric = ShortTimeObjectiveIntelligibility(fs=16000, extended=False)
     pesq_wb_metric = PerceptualEvaluationSpeechQuality(fs=16000, mode='wb')
     pesq_nb_metric = PerceptualEvaluationSpeechQuality(fs=8000, mode='nb')
     si_snr_metric = ScaleInvariantSignalNoiseRatio()
     si_sdr_metric = ScaleInvariantSignalDistortionRatio()
 
-    # Compute
     stoi_metric.update(pr.unsqueeze(0), gt.unsqueeze(0))
     stoi_val = float(stoi_metric.compute().item())
 
@@ -217,15 +214,6 @@ def compute_pair_metrics(gt_wav: torch.Tensor, pred_wav: torch.Tensor,
         except Exception as e:
             print(f"[Error] Speaker similarity failed for {pred_path}: {e}")
 
-    mcd_val = None
-    if mcd_compare is not None:
-        try:
-            # mcd_compare expects files; to avoid temp files, we saved 16k wavs already
-            # so we will ask caller to pass file paths and call mcd outside if desired
-            pass
-        except Exception as e:
-            print(f"[Warning] MCD failed for {pred_path}: {e}")
-
     return {
         "stoi": stoi_val,
         "pesq_wb": pesq_wb_val,
@@ -233,7 +221,6 @@ def compute_pair_metrics(gt_wav: torch.Tensor, pred_wav: torch.Tensor,
         "si_snr": si_snr_val,
         "si_sdr": si_sdr_val,
         "speaker_similarity": spk_sim_val,
-        # "mcd": mcd_val,  # handled separately using file paths
     }
 
 
@@ -263,7 +250,7 @@ class AudioDataset(Dataset):
         if self.length_mode == "pad":
             wav_proc, _ = pad_to_multiple_1d(wav_1d, self.multiple_of)
             proc_len = int(wav_proc.shape[-1])
-        else:  # truncate like data_module
+        else:  # truncate
             proc_len = (orig_len // self.multiple_of) * self.multiple_of if self.multiple_of > 0 else orig_len
             wav_proc = wav_1d[:proc_len]
         return {"wav": wav_proc, "path": path, "orig_length": orig_len, "proc_length": proc_len}
@@ -288,7 +275,6 @@ def run_save_stage(args, cfg, model, input_paths: List[str], eval_dir: Path, gt_
     print('total to be evaluated:', len(ds))
     dl = DataLoader(ds, batch_size=1, shuffle=False, num_workers=args.num_workers, pin_memory=True, collate_fn=AudioDataset.collate_fn)
 
-    # Codebook stats (computed only here)
     codebook_perplexity = CodebookPerplexity(codebook_size=cfg.model.codec_decoder.codebook_size)
     codebook_utilization = CodebookUtilization(codebook_size=cfg.model.codec_decoder.codebook_size)
 
@@ -300,12 +286,11 @@ def run_save_stage(args, cfg, model, input_paths: List[str], eval_dir: Path, gt_
     ensure_parent_dir(manifest_path)
 
     device_type = 'cuda' if ('cuda' in str(args.device)) else 'cpu'
-
     from contextlib import nullcontext
 
     with open(manifest_path, "w") as mf:
         for batch in tqdm(dl, total=len(ds)):
-            wav = batch["wav"].to(args.device)  # [1, T]
+            wav = batch["wav"].to(args.device)
             paths = batch["paths"]
             orig_lengths = batch["orig_lengths"].tolist()
             proc_lengths = batch["proc_lengths"].tolist()
@@ -320,17 +305,15 @@ def run_save_stage(args, cfg, model, input_paths: List[str], eval_dir: Path, gt_
                 with ac:
                     out = model({"wav": wav})
 
-            y_ref = out['gt_wav']        # [1, 1, T]
-            y_rec = out['gen_wav']       # [1, 1, T]
+            y_ref = out['gt_wav']
+            y_rec = out['gen_wav']
             vq_code = out.get('vq_code', None)
             avg_sim_val = out.get('avg_sim', None)
 
-            # Choose cut length based on mode
             cut_len = int(proc_lengths[0]) if args.length_mode == "truncate" else int(orig_lengths[0])
             y_ref = y_ref[:, :, :cut_len]
             y_rec = y_rec[:, :, :cut_len]
 
-            # Save 16k wavs (ensure float32 for torchaudio and numpy compatibility)
             y_ref_16 = torchaudio.functional.resample(y_ref.detach().to(torch.float32).cpu(), target_sr, 16000)
             y_rec_16 = torchaudio.functional.resample(y_rec.detach().to(torch.float32).cpu(), target_sr, 16000)
 
@@ -347,7 +330,6 @@ def run_save_stage(args, cfg, model, input_paths: List[str], eval_dir: Path, gt_
             ensure_parent_dir(pred_16k_path)
             torchaudio.save(str(pred_16k_path), y_rec_16[0].to(torch.float32).detach().cpu(), sample_rate=16000)
 
-            # Codebook stats
             if vq_code is not None:
                 try:
                     codebook_perplexity.update(vq_code.detach().cpu())
@@ -361,7 +343,6 @@ def run_save_stage(args, cfg, model, input_paths: List[str], eval_dir: Path, gt_
                 except Exception as e:
                     print(f"[Error] avg_sim extraction failed for {src_path}: {e}")
 
-            # Transcript path
             transcript_text = load_transcript_for_audio(src_path)
             transcript_path = None
             if transcript_text is not None:
@@ -373,7 +354,6 @@ def run_save_stage(args, cfg, model, input_paths: List[str], eval_dir: Path, gt_
                 if tp.is_file():
                     transcript_path = str(tp.resolve())
 
-            # Write manifest line
             record = {
                 "orig_path": str(src_path.resolve()),
                 "gt_16k_path": str(gt_16k_path) if gt_16k_path is not None else None,
@@ -383,7 +363,6 @@ def run_save_stage(args, cfg, model, input_paths: List[str], eval_dir: Path, gt_
             }
             mf.write(json.dumps(record) + "\n")
 
-    # Aggregate codebook metrics
     stats = {
         "codebook_perplexity": None,
         "codebook_utilization": None,
@@ -405,7 +384,6 @@ def run_save_stage(args, cfg, model, input_paths: List[str], eval_dir: Path, gt_
 
 
 def run_metrics_stage(args, manifest_path: Path, eval_dir: Path) -> Dict[str, Optional[float]]:
-    # ASR & speaker & MCD tools
     processor = Wav2Vec2Processor.from_pretrained("facebook/hubert-large-ls960-ft")
     asr_model = HubertForCTC.from_pretrained("facebook/hubert-large-ls960-ft").to(args.device).eval()
 
@@ -425,7 +403,6 @@ def run_metrics_stage(args, manifest_path: Path, eval_dir: Path) -> Dict[str, Op
         print(f"[Warning] mel_cepstral_distance unavailable: {e}")
         mcd_compare = None
 
-    # Aggregators
     stoi_vals: List[float] = []
     pesq_wb_vals: List[Optional[float]] = []
     pesq_nb_vals: List[Optional[float]] = []
@@ -433,9 +410,8 @@ def run_metrics_stage(args, manifest_path: Path, eval_dir: Path) -> Dict[str, Op
     si_sdr_vals: List[float] = []
     spk_sim_vals: List[Optional[float]] = []
     mcd_vals: List[Optional[float]] = []
-    wer_vals: List[Optional[float]] = []
+    wer_frac_vals: List[Optional[float]] = []
 
-    # Read, compute per-sample, and rewrite manifest with metrics
     lines = open(manifest_path, "r").read().splitlines()
     updated_records: List[Dict[str, object]] = []
 
@@ -465,10 +441,8 @@ def run_metrics_stage(args, manifest_path: Path, eval_dir: Path) -> Dict[str, Op
             print(f"[Error] Failed to load audio (gt={gt_path}, pred={pred_path}): {e}")
             continue
 
-        # Pair metrics (except MCD & WER)
         pair = compute_pair_metrics(gt_wav, pred_wav, asr_model, processor, spk_model, mcd_compare, pred_path)
 
-        # MCD via file paths if available
         mcd_val = None
         if mcd_compare is not None:
             try:
@@ -477,8 +451,7 @@ def run_metrics_stage(args, manifest_path: Path, eval_dir: Path) -> Dict[str, Op
             except Exception as e:
                 print(f"[Warning] MCD failed for {pred_path}: {e}")
 
-        # WER via HuBERT-CTC
-        wer_val = None
+        wer_frac = None
         if transcript_path and Path(transcript_path).is_file():
             try:
                 with open(transcript_path, "r") as tf:
@@ -494,11 +467,10 @@ def run_metrics_stage(args, manifest_path: Path, eval_dir: Path) -> Dict[str, Op
                         logits = asr_model(inputs).logits
                         predicted_ids = torch.argmax(logits, dim=-1)
                         hyp_text = processor.decode(predicted_ids[0].detach().cpu())
-                    wer_val = float(compute_wer(ref_line, hyp_text))
+                    wer_frac = float(compute_wer(ref_line, hyp_text))
             except Exception as e:
                 print(f"[Warning] WER failed for {pred_path}: {e}")
 
-        # Update record with per-sample metrics
         rec.update({
             "stoi": pair["stoi"],
             "pesq_wb": pair["pesq_wb"],
@@ -507,11 +479,11 @@ def run_metrics_stage(args, manifest_path: Path, eval_dir: Path) -> Dict[str, Op
             "si_sdr": pair["si_sdr"],
             "speaker_similarity": pair["speaker_similarity"],
             "mcd": mcd_val,
-            "wer": wer_val,
+            "wer_fraction": wer_frac,
+            "wer": (wer_frac * 100.0) if wer_frac is not None else None,
         })
         updated_records.append(rec)
 
-        # Aggregate
         if pair["stoi"] is not None: stoi_vals.append(pair["stoi"]) 
         pesq_wb_vals.append(pair["pesq_wb"]) 
         pesq_nb_vals.append(pair["pesq_nb"]) 
@@ -519,14 +491,12 @@ def run_metrics_stage(args, manifest_path: Path, eval_dir: Path) -> Dict[str, Op
         if pair["si_sdr"] is not None: si_sdr_vals.append(pair["si_sdr"]) 
         spk_sim_vals.append(pair["speaker_similarity"]) 
         mcd_vals.append(mcd_val)
-        wer_vals.append(wer_val)
+        wer_frac_vals.append(wer_frac)
 
-    # Rewrite manifest with metrics
     with open(manifest_path, "w") as mf:
         for rec in updated_records:
             mf.write(json.dumps(rec) + "\n")
 
-    # Aggregate means ignoring None
     def mean_ignore_none(values: List[Optional[float]]) -> Optional[float]:
         arr = [v for v in values if v is not None]
         return float(np.mean(arr)) if len(arr) > 0 else None
@@ -540,13 +510,26 @@ def run_metrics_stage(args, manifest_path: Path, eval_dir: Path) -> Dict[str, Op
         "pesq_nb": mean_ignore_none(pesq_nb_vals),
         "speaker_similarity": mean_ignore_none(spk_sim_vals),
         "mcd": mean_ignore_none(mcd_vals),
-        "wer": mean_ignore_none(wer_vals),
+        "wer_fraction": mean_ignore_none(wer_frac_vals),
+        "wer": (mean_ignore_none(wer_frac_vals) * 100.0) if mean_ignore_none(wer_frac_vals) is not None else None,
     }
 
     with open(eval_dir / "audio_metrics.json", "w") as f:
         json.dump(metrics, f, indent=2)
 
     return metrics
+
+
+def load_save_stage_stats_if_any(eval_dir: Path) -> Dict[str, Optional[float]]:
+    stats_path = eval_dir / "save_stage_stats.json"
+    if not stats_path.is_file():
+        return {}
+    try:
+        with open(stats_path, "r") as f:
+            return json.load(f)
+    except Exception as e:
+        print(f"[Warning] Failed to load save_stage_stats.json: {e}")
+        return {}
 
 
 def main():
@@ -586,7 +569,6 @@ def main():
     input_paths = resolve_with_dataset_roots(raw_paths, cfg)
 
     if args.stage in ("save", "all"):
-        # Model
         model = CodecLightningModule(cfg=cfg).to(args.device).eval()
         state = torch.load(str(ckpt_path), map_location="cpu", weights_only=False)
         state_dict = state.get("state_dict", state)
@@ -596,7 +578,7 @@ def main():
 
         save_stats = run_save_stage(args, cfg, model, input_paths, eval_dir, gt_out_dir, pred_out_dir, manifest_path)
     else:
-        save_stats = {}
+        save_stats = load_save_stage_stats_if_any(eval_dir)
 
     if args.stage in ("metrics", "all"):
         if not manifest_path.is_file():
@@ -605,7 +587,6 @@ def main():
     else:
         audio_metrics = {}
 
-    # Combine stage metrics
     final_metrics = {}
     final_metrics.update(audio_metrics)
     final_metrics.update({

@@ -46,14 +46,23 @@ def authenticate_with_google_drive(
     if os.path.exists(credentials_path):
         gauth.LoadCredentialsFile(credentials_path)
 
+    # Ensure offline access and manage saving ourselves to avoid backend config error
+    gauth.settings['get_refresh_token'] = True
+    gauth.settings['save_credentials'] = False  # we'll call SaveCredentialsFile() explicitly
+
+    has_refresh = (
+        getattr(gauth, 'credentials', None) is not None
+        and getattr(gauth.credentials, 'refresh_token', None)
+    )
+
     if gauth.credentials is None:
-        # First-time auth
+        gauth.CommandLineAuth()
+    elif not has_refresh:
+        # Existing token without refresh token: re-consent to obtain one
         gauth.CommandLineAuth()
     elif getattr(gauth, "access_token_expired", False):
-        # Refresh expired token
         gauth.Refresh()
     else:
-        # Re-authorize with existing valid token
         gauth.Authorize()
 
     # Persist credentials for reuse

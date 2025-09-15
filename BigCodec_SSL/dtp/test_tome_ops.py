@@ -1,6 +1,6 @@
 import unittest
 import torch
-from tome_ops import GeneralizedToMe, OurToMeK, OurToMe2, ToPrK2New, ToPrPLETopK, ToPrCPRRTopK, ToPrK2NewChunk
+from tome_ops import GeneralizedToMe, OurToMeK, OurToMe2, ToPrK2New, ToPrPLETopK, ToPrCPRRTopK, ToPrK2NewChunk, ToPrGreedy
 from typing import Tuple, Callable
 
 class TestGeneralizedToMe(unittest.TestCase):
@@ -239,6 +239,69 @@ class TestToPrK2New(unittest.TestCase):
         expected_unmerged_x[0, 5] = x[0, 4]
         self.assertTrue(torch.allclose(unmerged_x.cpu(), expected_unmerged_x))
 
+
+class TestToPrGreedy(unittest.TestCase):
+
+    def setUp(self):
+        print(f"\n--- Running test: {self._testMethodName} ---")
+
+    def test_initialization(self):
+        try:
+            ToPrGreedy(r=0.25)
+        except ValueError:
+            self.fail("ToPrGreedy raised ValueError unexpectedly.")
+
+    def test_r_zero_case(self):
+        B, N, C = 2, 10, 4
+        x = torch.randn(B, N, C)
+        model = ToPrGreedy(r=0.0)
+        with torch.no_grad():
+            merged_x, btree, avg_sim = model.compute_merge(x.clone())
+            direct = model.btree_to_root_map(btree)
+            unmerged_x = model.unmerge(merged_x, direct)
+        self.assertEqual(merged_x.shape, x.shape)
+        self.assertTrue(torch.all(btree == 0))
+        self.assertTrue(torch.allclose(unmerged_x, x))
+
+    def test_prune_behavior_simple(self):
+        B, N, C = 1, 8, 4
+        r = 0.25  # prune 2 tokens
+        model = ToPrGreedy(r=r)
+
+        # Deterministic input: two strong adjacent pairs (2,3) and (4,5)
+        x = torch.zeros(B, N, C, dtype=torch.float32)
+        x[0, 2] = torch.tensor([1.0, 0.0, 0.0, 0.0])
+        x[0, 3] = torch.tensor([1.0, 0.0, 0.0, 0.0])
+        x[0, 4] = torch.tensor([0.0, 1.0, 0.0, 0.0])
+        x[0, 5] = torch.tensor([0.0, 1.0, 0.0, 0.0])
+        x[0, 0] = torch.tensor([0.0, 0.0, 1.0, 0.0])
+        x[0, 1] = torch.tensor([0.0, 0.0, 0.0, 1.0])
+        x[0, 6] = torch.tensor([0.0, 0.0, 1.0, 0.0])
+        x[0, 7] = torch.tensor([0.0, 0.0, 0.0, 1.0])
+
+        with torch.no_grad():
+            merged_x, btree, avg_sim = model.compute_merge(x.clone())
+            direct = model.btree_to_root_map(btree)
+            unmerged_x = model.unmerge(merged_x, direct)
+
+        # Expect pruning of src indices 3 and 5
+        expected_btree = torch.zeros(B, N, dtype=torch.long)
+        expected_btree[0, 3] = -1
+        expected_btree[0, 5] = -1
+        self.assertTrue(torch.equal(btree.cpu(), expected_btree))
+
+        # merged_x keeps original root tokens [0,1,2,4,6,7] with original values
+        expected_merged_x = torch.stack(
+            [x[0, 0], x[0, 1], x[0, 2], x[0, 4], x[0, 6], x[0, 7]]
+        ).unsqueeze(0)
+        self.assertEqual(merged_x.shape, expected_merged_x.shape)
+        self.assertTrue(torch.allclose(merged_x.cpu(), expected_merged_x))
+
+        # Unmerged should copy root token into pruned positions (no averaging)
+        expected_unmerged_x = x.clone()
+        expected_unmerged_x[0, 3] = x[0, 2]
+        expected_unmerged_x[0, 5] = x[0, 4]
+        self.assertTrue(torch.allclose(unmerged_x.cpu(), expected_unmerged_x))
 
 class TestToPrK2NewChunk(unittest.TestCase):
 

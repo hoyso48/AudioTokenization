@@ -1,6 +1,6 @@
 import os
 import sys
-sys.path.append('/home/hoyso/projects/AudioTokenization/BigCodec_SSL')
+# sys.path.append('/home/hoyso/projects/AudioTokenization/BigCodec_SSL')
 import time
 import argparse
 import random
@@ -12,7 +12,7 @@ import torchaudio
 from torchaudio.transforms import Resample
 
 # Local ToMe implementations
-from dtp.tome_ops import ToMeChained, ToMeGreedy, ToMeK2New, OurToMe2, ToMeK2V2, ToPrK2New, ToPrPLETopK, ToPrCPRRTopK, ToPrK2NewChunk
+from dtp.tome_ops import ToMeChained, ToMeGreedy, ToMeK2New, OurToMe2, ToPrK2New, ToPrPLETopK, ToPrCPRRTopK, ToPrK2NewChunk, ToPrGreedy
 
 # Prefer existing speaker verification loader (WavLM features via s3prl) if available
 def _load_sv_model(device: torch.device, checkpoint_path: str):
@@ -264,6 +264,29 @@ def benchmark_topr_k2new(tokens: torch.Tensor, r: float, num_iterations: int, de
     }
 
 
+def benchmark_topr_greedy(tokens: torch.Tensor, r: float, device: torch.device) -> Dict[str, Any]:
+    model = ToPrGreedy(r=r).to(device)
+    x = tokens.clone()
+    _maybe_synchronize(device)
+    t0 = time.time()
+    with torch.no_grad():
+        merged_x, btree_map, avg_sim = model.compute_merge(x)
+        direct_to_root = model.btree_to_root_map(btree_map)
+        unmerged_x = model.unmerge(merged_x, direct_to_root)
+    _maybe_synchronize(device)
+    dt = (time.time() - t0) * 1000.0
+    cos = cosine_similarity_mean(unmerged_x, tokens)
+    return {
+        "method": "ToPrGreedy",
+        "num_iterations": None,
+        "runtime_ms": dt,
+        "avg_sim_mean": avg_sim.mean().item(),
+        "cos_sim_unmerged_vs_original": cos,
+        "n_before": tokens.shape[1],
+        "n_after": merged_x.shape[1],
+    }
+
+
 def benchmark_topr_k2chunk(tokens: torch.Tensor, r: float, num_iterations: int, chunk_size: int, device: torch.device) -> Dict[str, Any]:
     model = ToPrK2NewChunk(r=r, num_iterations=num_iterations, chunk_size=chunk_size).to(device)
     x = tokens.clone()
@@ -344,7 +367,7 @@ def run_benchmark(
     iterations_list: Optional[List[int]] = None,
     hf_model_name: str = "microsoft/wavlm-large",
     use_sv_loader: bool = True,
-    sv_checkpoint: str = "/home/hoyso/projects/AudioTokenization/BigCodec_SSL/wavlm_large_finetune.pth",
+    sv_checkpoint: str = "wavlm_large_finetune.pth",
     seed: int = 1337,
     chunk_size: int = 50,
 ) -> List[Dict[str, Any]]:
@@ -375,6 +398,7 @@ def run_benchmark(
     results.append(benchmark_tome_chained(tokens, r=r, kernel_size=2, device=device))
     results.append(benchmark_tome_greedy(tokens, r=r, kernel_size=2, device=device))
     results.append(benchmark_topr_ple(tokens, r=r, beta=1.0, device=device))
+    results.append(benchmark_topr_greedy(tokens, r=r, device=device))
 
     # Methods with num_iterations
     for iters in iterations_list:
@@ -444,7 +468,7 @@ def save_csv(results: List[Dict[str, Any]], out_path: str) -> None:
 
 def parse_args() -> argparse.Namespace:
     parser = argparse.ArgumentParser(description="Benchmark ToMe variants on WavLM tokens.")
-    parser.add_argument("--filelist", type=str, default="/home/hoyso/projects/AudioTokenization/BigCodec_SSL/filelists/librispeech_test_clean.txt")
+    parser.add_argument("--filelist", type=str, default="librispeech_test_clean.txt")
     parser.add_argument("--device", type=str, default="cpu", help="cpu or cuda[:id]")
     parser.add_argument("--sample_rate", type=int, default=16000)
     parser.add_argument("--seconds", type=int, default=4)
@@ -453,7 +477,7 @@ def parse_args() -> argparse.Namespace:
     parser.add_argument("--iters", type=int, nargs="*", default=[2, 4, 8, 16])
     parser.add_argument("--hf_model", type=str, default="microsoft/wavlm-large")
     parser.add_argument("--use_sv", action="store_true", help="Use speaker_verification WavLM loader first")
-    parser.add_argument("--sv_checkpoint", type=str, default="/home/hoyso/projects/AudioTokenization/BigCodec_SSL/wavlm_large_finetune.pth")
+    parser.add_argument("--sv_checkpoint", type=str, default="wavlm_large_finetune.pth")
     parser.add_argument("--seed", type=int, default=1337)
     parser.add_argument("--out_csv", type=str, default="")
     parser.add_argument("--chunk_size", type=int, default=50, help="Chunk size for ToPrK2NewChunk")
