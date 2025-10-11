@@ -2,10 +2,10 @@ import numpy as np
 import torch
 import torch.nn as nn
 from .residual_vq import ResidualVQ
-from .module import WNConv1d, DecoderBlock, ResLSTM, ConformerBackbone, RMSNorm
+from .module import WNConv1d, DecoderBlock, ResLSTM, ConformerBackbone, RMSNorm, ConvUpsample, UnPatchify
 from .alias_free_torch import *
 from . import activations
-from vector_quantize_pytorch import FSQ
+from vector_quantize_pytorch import FSQ, SimVQ
 
 def init_weights(m):
     if isinstance(m, nn.Conv1d):
@@ -241,7 +241,10 @@ class ISTFTHead(FourierHead):
     def __init__(self, dim: int, n_fft: int, hop_length: int, padding: str = "same"):
         super().__init__()
         out_dim = n_fft + 2
-        self.out = torch.nn.Linear(dim, out_dim)
+        if dim != out_dim:
+            self.out = nn.Linear(dim, out_dim)
+        else:
+            self.out = nn.Identity()
         self.istft = ISTFT(n_fft=n_fft, hop_length=hop_length, win_length=n_fft, padding=padding)
 
     @torch.compiler.disable(recursive=False)
@@ -256,7 +259,7 @@ class ISTFTHead(FourierHead):
         Returns:
             Tensor: Reconstructed time-domain audio signal of shape (B, T), where T is the length of the output signal.
         """
-        x_pred = self.out(x )
+        x_pred = self.out(x)
         # x_pred = x
         x_pred = x_pred.transpose(1, 2)
         mag, p = x_pred.chunk(2, dim=1)
@@ -408,6 +411,7 @@ class ConformerDecoderISTFT(nn.Module):
                  causal=False,
                  # Quantizer parameters
                  fsq=False,
+                 simvq=False,
                  fsq_levels=[4,4,4,8],
                  vq_num_quantizers=1,
                  vq_commit_weight=0.25,
@@ -420,6 +424,7 @@ class ConformerDecoderISTFT(nn.Module):
         self.hop_length = hop_length
         self.n_fft = n_fft
         self.fsq = fsq
+        self.simvq = simvq
         
         # Quantizer
         if fsq:
@@ -429,6 +434,11 @@ class ConformerDecoderISTFT(nn.Module):
                 dim = in_channels,
             )
             assert codebook_size == np.prod(fsq_levels), "codebook_size must be equal to the product of fsq_levels"
+        elif simvq:
+            self.quantizer = SimVQ(
+                dim=in_channels,
+                codebook_size=codebook_size,
+            )
         else:
             self.quantizer = ResidualVQ(
                 num_quantizers=vq_num_quantizers,
@@ -483,9 +493,17 @@ class ConformerDecoderISTFT(nn.Module):
             self.conformer_backbone_stage1 = nn.Identity()
 
         # self.input_norm = RMSNorm(dim)
+        # self.conv = ConvUpsample(dim, n_fft+2)
         
         # Use existing ISTFTHead
-        self.head = ISTFTHead(dim=dim, n_fft=n_fft, hop_length=hop_length, padding="same")
+        # self.head = ISTFTHead(dim=n_fft+2, n_fft=n_fft, hop_length=hop_length, padding="same")
+
+        self.conv = ConvUpsample(dim, dim)
+        # self.unpatchify = nn.ConvTranspose1d(dim, 1, kernel_size=hop_length, stride=hop_length)
+        
+        # 2d-patchify istft
+        self.unpatchify = UnPatchify(dim, 2, (4, (n_fft // 2) // 4))
+        self.head = ISTFTHead(dim=n_fft, n_fft=n_fft, hop_length=hop_length, padding="same")
         
         self.reset_parameters()
 
@@ -494,6 +512,9 @@ class ConformerDecoderISTFT(nn.Module):
             if self.fsq:
                 x, q = self.quantizer(x)
                 commit_loss = None
+            elif self.simvq:
+                x, q, commit_loss = self.quantizer(x)
+                commit_loss = [commit_loss]
             else:
                 x = x.transpose(1, 2)
                 x, q, commit_loss = self.quantizer(x)
@@ -514,10 +535,19 @@ class ConformerDecoderISTFT(nn.Module):
             # x = x.transpose(1, 2)  # (B, T, dim)
 
             # x = self.norm(x)
+            # x = self.conv(x)
             
             # Use ISTFTHead
+            # audio, x_pred = self.head(x)
+
+            # 1d-patchify
+            # audio = self.unpatchify(x.transpose(1, 2)).float()
+
+            B, T, C = x.shape
+            x = x.view(B, T//4, 4, C)
+            x = self.unpatchify(x) #(B, T, n_fft//2, 2)
+            x = x.view(B, T, -1) #(B, T, n_fft)
             audio, x_pred = self.head(x)
-            
             return audio
         else:
             raise ValueError(f"Unsupported stage: {stage}")

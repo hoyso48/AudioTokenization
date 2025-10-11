@@ -1,2 +1,2 @@
-from vq.codec_encoder import BigCodecEncoder, ConformerEncoderSTFT
-from vq.codec_decoder import BigCodecDecoder, ConformerDecoderISTFT
+from vq.codec_encoder import ConformerEncoderSTFT
+from vq.codec_decoder import ConformerDecoderISTFT

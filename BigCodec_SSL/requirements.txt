@@ -12,6 +12,5 @@ pesq
 pystoi
 matplotlib
 wandb
-fire
 mel-cepstral-distance
 vector_quantize_pytorch

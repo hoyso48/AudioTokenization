@@ -1033,6 +1033,256 @@ class ToMeK2New(nn.Module):
         return final_x
 
 
+class PLETopK2D(nn.Module):
+    """
+    2D extension of PLETopK for raster-ordered tokens.
+
+    - Input tokens are a rasterized 2D grid of width `token_width` (W). The
+      sequence has length N = H*W (or possibly N not divisible by W; handled without padding).
+    - For each position i in [1..N-1], define a 2D distance by combining left and up neighbors:
+        d2[i] = (1 - cos(x[i], x[i-1])) if i%W!=0 else 1  +  (1 - cos(x[i], x[i-W])) if i>=W else 1
+      i.e., missing neighbors contribute distance 1 (equivalent to similarity 0).
+    - The cumulative path length is built from w = d2 + eps (eps ~ 1e-12),
+      bins are chosen as in PLETopK, and the kept tokens are the right tokens
+      of boundaries.
+    - Semantics of outputs mirror PLETopK: btree_map in {0, -1}, direct_to_root_map
+      resolves to nearest kept on the left, unmerge copies kept tokens into pruned
+      positions.
+    """
+    def __init__(self, r: float, token_width: int, use_bin_argmax: bool = True,
+                 sample_bins_training: float = 0.0, fallback: Optional[str] = None):
+        super().__init__()
+        self.r = float(r)
+        if token_width < 1:
+            raise ValueError("token_width must be >= 1")
+        self.token_width = int(token_width)
+        if fallback is not None:
+            valid = {None, 'pre', 'post', 'max', 'random'}
+            if fallback not in valid:
+                raise ValueError(f"PLETopK2D: invalid fallback='{fallback}', must be one of {valid}")
+        self.fallback = fallback
+        self.use_bin_argmax = use_bin_argmax
+        self.sample_bins_training = sample_bins_training
+
+    @torch.no_grad()
+    def compute_merge(self, x: torch.Tensor) -> Tuple[torch.Tensor, torch.Tensor, torch.Tensor]:
+        B, N, C = x.shape
+        device = x.device
+        dtype = x.dtype
+
+        if N == 0:
+            btree_map = torch.zeros(B, 0, device=device, dtype=torch.int64)
+            avg_sim = torch.zeros(B, device=device, dtype=dtype)
+            return x, btree_map, avg_sim
+
+        # r guard: when N>=2, require r in [1/N, 1.0)
+        if N >= 2:
+            if not (self.r >= (1.0 / float(N)) and self.r < 1.0):
+                raise RuntimeError(
+                    f"PLETopK2D: invalid r for N (requires r in [1/N,1.0) when N>=2). r={self.r}, N={N}"
+                )
+
+        # Number to prune and keep (always keep at least token 0)
+        K = int(min(max(math.floor(self.r * N), 0), N - 1))
+        M = N - K
+
+        x_norm = F.normalize(x, dim=-1)
+
+        # 2D distances along raster order: for positions i in [1..N-1]
+        if N > 1:
+            # Left neighbor contribution (for i % W != 0)
+            sim_left = (x_norm[:, 1:, :] * x_norm[:, :-1, :]).sum(dim=-1)  # (B, N-1)
+            i_idx = torch.arange(1, N, device=device)
+            valid_left = (i_idx % self.token_width != 0)
+            d_left = torch.where(valid_left.view(1, -1).expand(B, -1), (1.0 - sim_left).to(dtype), torch.ones(B, N - 1, device=device, dtype=dtype))
+
+            # Up neighbor contribution (for i >= W)
+            d_up = torch.ones(B, N - 1, device=device, dtype=dtype)
+            W = self.token_width
+            if N > W:
+                sim_up_sub = (x_norm[:, W:, :] * x_norm[:, :-W, :]).sum(dim=-1)  # (B, N - W)
+                d_up[:, W - 1:] = (1.0 - sim_up_sub).to(dtype)
+
+            d = d_left + d_up  # (B, N-1)
+        else:
+            d = torch.zeros(B, 0, device=device, dtype=dtype)
+
+        # Cumulative path length with eps=1e-12 (match PLETopK semantics)
+        if N > 1:
+            w = d + 1e-12
+            D = torch.zeros(B, N, device=device, dtype=dtype)
+            D[:, 1:] = torch.cumsum(w, dim=1)
+            L = D[:, -1]
+        else:
+            D = torch.zeros(B, 1, device=device, dtype=dtype)
+            L = torch.zeros(B, device=device, dtype=dtype)
+
+        btree_map = torch.zeros(B, N, device=device, dtype=torch.int64)
+
+        if M <= 1:
+            if N > 1:
+                btree_map[:, 1:] = -1
+            merged_x = x[:, :1, :]
+            avg_sim = torch.zeros(B, device=device, dtype=dtype)
+            return merged_x, btree_map, avg_sim
+
+        # Training-time: random-boundary PLE
+        if self.training and torch.rand(1).item() < self.sample_bins_training:
+            interior = M - 1
+            keep_int = torch.zeros(B, N, device=device, dtype=torch.int64)
+            keep_int[:, 0] = 1
+
+            if interior > 0 and N > 1:
+                if self.use_bin_argmax:
+                    num_candidates = max(N - 2, 0)  # tokens 1..N-2
+                    if num_candidates > 0:
+                        candidates = torch.arange(1, N - 1, device=device)
+                        rand_scores = torch.rand(B, num_candidates, device=device)
+                        order = torch.argsort(rand_scores, dim=1)
+                        boundaries = candidates.view(1, -1).expand(B, -1).gather(1, order[:, :interior])
+                        boundaries = torch.sort(boundaries, dim=1).values
+
+                        # Build bin masks over pair indices [0..N-2]
+                        num_bins = interior + 1
+                        pair_idx = torch.arange(N - 1, device=device).view(1, 1, -1).expand(B, num_bins, -1)
+                        starts = torch.cat([torch.zeros(B, 1, device=device, dtype=boundaries.dtype), boundaries], dim=1).long()
+                        ends = torch.cat([boundaries - 1, torch.full((B, 1), N - 2, device=device, dtype=boundaries.dtype)], dim=1).long()
+                        start_exp = starts.unsqueeze(-1).expand(-1, -1, N - 1)
+                        end_exp = ends.unsqueeze(-1).expand(-1, -1, N - 1)
+                        mask3 = (pair_idx >= start_exp) & (pair_idx <= end_exp)
+
+                        # Argmax within INTERIOR bins only (exclude first bin to avoid duplicating token 0)
+                        d_exp = d.unsqueeze(1).expand(-1, num_bins, -1)
+                        neg_inf = torch.full_like(d_exp, float('-inf'))
+                        masked_scores = torch.where(mask3, d_exp, neg_inf)
+                        if num_bins > 1:
+                            masked_scores_int = masked_scores[:, 1:, :]  # (B, interior, N-1)
+                            vals_int, idxs_int = masked_scores_int.max(dim=2)
+                            chosen_tokens = (idxs_int + 1).clamp(1, N - 1)
+                            keep_int.scatter_(1, chosen_tokens, 1)
+                else:
+                    num_candidates = N - 1  # tokens 1..N-1
+                    candidates = torch.arange(1, N, device=device)
+                    rand_scores = torch.rand(B, num_candidates, device=device)
+                    order = torch.argsort(rand_scores, dim=1)
+                    chosen_tokens = candidates.view(1, -1).expand(B, -1).gather(1, order[:, :interior])
+                    keep_int.scatter_(1, chosen_tokens, 1)
+
+            keep = keep_int.bool()
+            btree_map[~keep] = -1
+            merged_x = x[keep].view(B, M, C)
+            avg_sim = torch.zeros(B, device=device, dtype=dtype)
+            return merged_x, btree_map, avg_sim
+
+        # Argmax mode over equal path-length bins (default)
+        interior = M - 1
+        t = torch.where(L > 0, L / float(M), torch.ones_like(L))
+
+        keep_int = torch.zeros(B, N, device=device, dtype=torch.int64)
+        keep_int[:, 0] = 1
+
+        pair_right = D[:, 1:]  # (B, N-1)
+        d_mask = d.clone()
+        if d_mask.numel() > 0:
+            d_mask[:, 0] = float('-inf')  # exclude pair 0 to avoid duplicating token 0
+
+        if interior > 0:
+            if self.use_bin_argmax:
+                bin_idx = torch.clamp((pair_right / t.view(B, 1)).floor().long(), min=0, max=M - 1)
+                bins = torch.arange(1, M, device=device, dtype=bin_idx.dtype).view(1, interior, 1)
+                mask3 = (bin_idx.unsqueeze(1) == bins)  # (B, interior, N-1)
+
+                d_exp = d_mask.unsqueeze(1).expand(-1, interior, -1)
+                neg_inf = torch.full_like(d_exp, float('-inf'))
+                masked_scores = torch.where(mask3, d_exp, neg_inf)
+
+                vals, idxs = masked_scores.max(dim=2)  # (B, interior)
+                has_any = vals.isfinite()
+                chosen_pairs = torch.where(has_any, idxs, torch.zeros_like(idxs))
+                chosen_tokens = (chosen_pairs + 1).clamp(1, N - 1)
+            else:
+                # First-crossing selection at targets k*(L/M), k=1..M-1
+                targets = (torch.arange(1, M, device=device, dtype=dtype).view(1, -1) * t.view(B, 1))
+                ge = D.unsqueeze(2) >= targets.unsqueeze(1)  # (B, N, interior)
+                j = ge.float().argmax(dim=1).clamp_(min=1, max=N - 1)  # first crossing positions
+                # Enforce strictly increasing j per row
+                ar = torch.arange(interior, device=device, dtype=j.dtype).view(1, -1)
+                s = (j - ar)
+                smax, _ = torch.cummax(s, dim=1)
+                j_strict = (smax + ar).clamp_(min=1, max=N - 1)
+                chosen_tokens = j_strict
+
+            keep_int.scatter_(1, chosen_tokens, 1)
+
+        # Ensure exactly M kept: fill missing via fallback or raise
+        kept_counts = keep_int.sum(dim=1)
+        expected_kept = int(M)
+        missing = (expected_kept - kept_counts).clamp_min(0)
+        if (missing != 0).any():
+            if self.fallback is None:
+                short = missing.tolist()
+                raise RuntimeError(f"PLETopK2D: kept length mismatch per batch (missing={short}); r={self.r}, N={N}, expected_kept={expected_kept}")
+            avail = (keep_int[:, 1:] == 0)  # (B, N-1)
+            max_need = int(missing.max().item())
+            if max_need > 0:
+                if self.fallback == 'pre':
+                    pos = torch.arange(1, N, device=device).view(1, -1).expand(B, -1)
+                    scores = torch.where(avail, -pos.to(dtype), torch.full((B, N - 1), float('-inf'), device=device, dtype=dtype))
+                elif self.fallback == 'post':
+                    pos = torch.arange(1, N, device=device).view(1, -1).expand(B, -1)
+                    scores = torch.where(avail, pos.to(dtype), torch.full((B, N - 1), float('-inf'), device=device, dtype=dtype))
+                elif self.fallback == 'max':
+                    scores = torch.where(avail, d, torch.full((B, N - 1), float('-inf'), device=device, dtype=dtype))
+                elif self.fallback == 'random':
+                    rnd = torch.rand(B, N - 1, device=device, dtype=dtype)
+                    scores = torch.where(avail, rnd, torch.full((B, N - 1), float('-inf'), device=device, dtype=dtype))
+                else:
+                    scores = torch.full((B, N - 1), float('-inf'), device=device, dtype=dtype)
+
+                vals2, cols = torch.topk(scores, k=max_need, dim=1)
+                use_mask = (torch.arange(max_need, device=device).view(1, -1) < missing.view(B, 1))
+                extras = torch.where(use_mask, cols, torch.zeros_like(cols))  # tokens 1..N-1
+                add_vals = use_mask.long()
+                keep_int.scatter_add_(1, (extras + 1).long(), add_vals)
+
+        keep = keep_int.bool()
+        btree_map[~keep] = -1
+        merged_x = x[keep].view(B, M, C)
+        avg_sim = torch.zeros(B, device=device, dtype=dtype)
+        return merged_x, btree_map, avg_sim
+
+    def merge(self, x: torch.Tensor, direct_to_root_map: torch.Tensor) -> torch.Tensor:
+        B, N, C = x.shape
+        root_mask = (direct_to_root_map == 0)
+        root_tokens = x[root_mask].view(B, -1, C)
+        return root_tokens
+
+    @torch.no_grad()
+    def btree_to_root_map(self, merge_btree: torch.Tensor) -> torch.Tensor:
+        B, N = merge_btree.shape
+        device = merge_btree.device
+        idx = torch.arange(N, device=device, dtype=merge_btree.dtype).view(1, N).expand(B, -1)
+        is_root = (merge_btree == 0)
+        masked = torch.where(is_root, idx + 1, torch.zeros_like(merge_btree))
+        last_root_pos_plus1, _ = torch.cummax(masked, dim=1)
+        last_root_pos = last_root_pos_plus1 - 1
+        direct_to_root_map = last_root_pos - idx
+        return direct_to_root_map
+
+    def unmerge(self, y: torch.Tensor, direct_to_root_map: torch.Tensor) -> torch.Tensor:
+        B, N_original = direct_to_root_map.shape
+        if y.shape[1] == N_original:
+            return y
+        _, _, C = y.shape
+        device = y.device
+        root_mask = (direct_to_root_map == 0)
+        root_rank_map = torch.cumsum(root_mask.to(torch.int32), dim=1) - 1
+        source_indices = torch.arange(N_original, device=device).view(1, -1) + direct_to_root_map
+        root_ranks = torch.gather(root_rank_map, 1, source_indices).clamp_min(0)
+        final_x = torch.gather(y, 1, root_ranks.unsqueeze(-1).expand(-1, -1, C))
+        return final_x
+
+
 class ToPrK2New(nn.Module):
     """
     Pruning-based k=2 variant mirroring ToMeK2New's selection but removes src tokens
@@ -2481,17 +2731,18 @@ class GeneralizedToMe(ToMeChained):
 
 class PLETopK(nn.Module):
     """
-    Minimal Path-Length Equalization Top-K pruning (argmax mode only).
-    - Fixed beta=1, use_bin_argmax=True
+    Minimal Path-Length Equalization Top-K pruning with two selection modes.
+    - Fixed beta=1; supports use_bin_argmax in {True, False}
+      - use_bin_argmax=True: bin-wise argmax over equal path-length bins (keep right tokens)
+      - use_bin_argmax=False: first-crossing selection at targets k*(L/M), k=1..M-1 (keep right tokens)
     - avg_sim is always zeros
     - Strict kept-count check: raises if selected kept tokens != M = N - floor(r*N)
     Semantics:
       - Always keep token 0; last token may be pruned.
-      - For each batch, partition the cumulative path-length axis into M bins;
-        for interior bins k=1..M-1, pick the pair with maximum dissimilarity and
-        keep its right token.
+      - Partition the cumulative path-length axis D into M bins; interior decisions follow the
+        chosen mode (bin-wise argmax or first-crossing). Right tokens of boundaries are kept.
     """
-    def __init__(self, r: float, fallback: Optional[str] = None):
+    def __init__(self, r: float, use_bin_argmax: bool = True, sample_bins_training: float = 0.0, fallback: Optional[str] = None):
         super().__init__()
         self.r = float(r)
         if fallback is not None:
@@ -2499,8 +2750,9 @@ class PLETopK(nn.Module):
             if fallback not in valid:
                 raise ValueError(f"PLETopK: invalid fallback='{fallback}', must be one of {valid}")
         self.fallback = fallback
-        # Removed undefined noise_scale; no noise used in this implementation
-        
+        self.use_bin_argmax = use_bin_argmax
+        self.sample_bins_training = sample_bins_training
+
     @torch.no_grad()
     def compute_merge(self, x: torch.Tensor) -> Tuple[torch.Tensor, torch.Tensor, torch.Tensor]:
         B, N, C = x.shape
@@ -2532,7 +2784,7 @@ class PLETopK(nn.Module):
         # Cumulative path length with beta=1 (weights = d + eps)
         if N > 1:
             w = d + 1e-12
-            w = w.clamp(0,1) #handling negative similarity
+            # w = w.clamp(0,1) #handling negative similarity
             D = torch.zeros(B, N, device=device, dtype=dtype)
             D[:, 1:] = torch.cumsum(w, dim=1)
             L = D[:, -1]  # (B,)
@@ -2550,37 +2802,106 @@ class PLETopK(nn.Module):
             avg_sim = torch.zeros(B, device=device, dtype=dtype)
             return merged_x, btree_map, avg_sim
 
+        # Training-time: random-boundary PLE
+        # - Keep token 0
+        # - Sample M-1 distinct interior boundary tokens from {1..N-2}
+        # - Build M bins over pair indices [0..N-2] using these boundaries
+        # - In each bin, choose the pair with maximum d; keep its right token (pair+1)
+        if self.training and torch.rand(1).item() < self.sample_bins_training:
+            interior = M - 1
+            keep_int = torch.zeros(B, N, device=device, dtype=torch.int64)
+            keep_int[:, 0] = 1
+
+            if interior > 0 and N > 1:
+                if self.use_bin_argmax:
+                    num_candidates = max(N - 2, 0)  # tokens 1..N-2
+                    if num_candidates > 0:
+                        candidates = torch.arange(1, N - 1, device=device)
+                        # Distinct random choices per batch via random scores argsort
+                        rand_scores = torch.rand(B, num_candidates, device=device)
+                        order = torch.argsort(rand_scores, dim=1)
+                        chosen = candidates.view(1, -1).expand(B, -1).gather(1, order[:, :interior])
+                        boundaries = torch.sort(chosen, dim=1).values  # ascending per batch
+
+                        # Build bin masks over pair indices [0..N-2]
+                        num_bins = interior + 1
+                        pair_idx = torch.arange(N - 1, device=device).view(1, 1, -1).expand(B, num_bins, -1)
+                        starts = torch.cat([torch.zeros(B, 1, device=device, dtype=boundaries.dtype), boundaries], dim=1).long()
+                        ends = torch.cat([boundaries - 1, torch.full((B, 1), N - 2, device=device, dtype=boundaries.dtype)], dim=1).long()
+                        start_exp = starts.unsqueeze(-1).expand(-1, -1, N - 1)
+                        end_exp = ends.unsqueeze(-1).expand(-1, -1, N - 1)
+                        mask3 = (pair_idx >= start_exp) & (pair_idx <= end_exp)
+
+                        # Argmax within INTERIOR bins only (exclude the first bin to avoid duplicating token 0)
+                        d_exp = d.unsqueeze(1).expand(-1, num_bins, -1)
+                        neg_inf = torch.full_like(d_exp, float('-inf'))
+                        masked_scores = torch.where(mask3, d_exp, neg_inf)
+                        if num_bins > 1:
+                            masked_scores_int = masked_scores[:, 1:, :]  # (B, interior, N-1)
+                            vals_int, idxs_int = masked_scores_int.max(dim=2)
+                            chosen_tokens = (idxs_int + 1).clamp(1, N - 1)
+                            keep_int.scatter_(1, chosen_tokens, 1)
+                else:
+                    num_candidates = N - 1  # tokens 1..N-1
+                    candidates = torch.arange(1, N, device=device)
+                    # Distinct random choices per batch via random scores argsort
+                    rand_scores = torch.rand(B, num_candidates, device=device)
+                    order = torch.argsort(rand_scores, dim=1)
+                    chosen_tokens = candidates.view(1, -1).expand(B, -1).gather(1, order[:, :interior])
+                    keep_int.scatter_(1, chosen_tokens, 1)
+
+            keep = keep_int.bool()
+            btree_map[~keep] = -1
+            merged_x = x[keep].view(B, M, C)
+            avg_sim = torch.zeros(B, device=device, dtype=dtype)
+            return merged_x, btree_map, avg_sim
+
         # Argmax mode over equal path-length bins
         interior = M - 1
         # Bin width per batch; avoid division by zero when L == 0
         t = torch.where(L > 0, L / float(M), torch.ones_like(L))
 
-        pair_right = D[:, 1:]  # (B, N-1)
-        bin_idx = torch.clamp((pair_right / t.view(B, 1)).floor().long(), min=0, max=M - 1)
-
-        d_mask = d.clone()
-        if d_mask.numel() > 0:
-            d_mask[:, 0] = float('-inf')  # exclude pair 0 to avoid duplicate seed interaction
-
-        bins = torch.arange(1, M, device=device, dtype=bin_idx.dtype).view(1, interior, 1)
-        mask3 = (bin_idx.unsqueeze(1) == bins)  # (B, interior, N-1)
-
-        d_exp = d_mask.unsqueeze(1).expand(-1, interior, -1)
-        neg_inf = torch.full_like(d_exp, float('-inf'))
-        masked_scores = torch.where(mask3, d_exp, neg_inf)
-
-        vals, idxs = masked_scores.max(dim=2)  # (B, interior)
-        has_any = vals.isfinite()
-
-        # Build keep mask: token 0 plus right tokens of chosen pairs
+        # Prepare keep mask: token 0 is always kept
         keep_int = torch.zeros(B, N, device=device, dtype=torch.int64)
         keep_int[:, 0] = 1
 
+        # Shared quantities
+        pair_right = D[:, 1:]  # (B, N-1)
+        d_mask = d.clone()
+        if d_mask.numel() > 0:
+            d_mask[:, 0] = float('-inf')  # exclude pair 0 when doing argmax mode
+
         if interior > 0:
-            chosen_pairs = torch.where(has_any, idxs, torch.zeros_like(idxs))
-            chosen_tokens = (chosen_pairs + 1).clamp(1, N - 1)
+            if self.use_bin_argmax:
+                # Bin-wise argmax selection
+                bin_idx = torch.clamp((pair_right / t.view(B, 1)).floor().long(), min=0, max=M - 1)
+                bins = torch.arange(1, M, device=device, dtype=bin_idx.dtype).view(1, interior, 1)
+                mask3 = (bin_idx.unsqueeze(1) == bins)  # (B, interior, N-1)
+
+                d_exp = d_mask.unsqueeze(1).expand(-1, interior, -1)
+                neg_inf = torch.full_like(d_exp, float('-inf'))
+                masked_scores = torch.where(mask3, d_exp, neg_inf)
+
+                vals, idxs = masked_scores.max(dim=2)  # (B, interior)
+                has_any = vals.isfinite()
+                chosen_pairs = torch.where(has_any, idxs, torch.zeros_like(idxs))
+                chosen_tokens = (chosen_pairs + 1).clamp(1, N - 1)
+            else:
+                # First-crossing selection at targets k*(L/M), k=1..M-1
+                targets = (torch.arange(1, M, device=device, dtype=dtype).view(1, -1) * t.view(B, 1))
+                ge = D.unsqueeze(2) >= targets.unsqueeze(1)  # (B, N, interior)
+                j = ge.float().argmax(dim=1).clamp_(min=1, max=N - 1)  # first crossing positions
+                # Enforce strictly increasing j per row to avoid duplicates
+                ar = torch.arange(interior, device=device, dtype=j.dtype).view(1, -1)
+                s = (j - ar)
+                smax, _ = torch.cummax(s, dim=1)
+                j_strict = (smax + ar).clamp_(min=1, max=N - 1)
+                chosen_tokens = j_strict
+
+            # Scatter interior selections
             keep_int.scatter_(1, chosen_tokens, 1)
 
+        # Ensure exactly M kept: fill missing via fallback or raise
         kept_counts = keep_int.sum(dim=1)
         expected_kept = int(M)
         missing = (expected_kept - kept_counts).clamp_min(0)
@@ -2588,9 +2909,7 @@ class PLETopK(nn.Module):
             if self.fallback is None:
                 short = missing.tolist()
                 raise RuntimeError(f"PLETopK: kept length mismatch per batch (missing={short}); r={self.r}, N={N}, expected_kept={expected_kept}")
-            # Apply fallback to fill missing selections
             avail = (keep_int[:, 1:] == 0)  # (B, N-1)
-            Bidx = torch.arange(B, device=device)
             max_need = int(missing.max().item())
             if max_need > 0:
                 if self.fallback == 'pre':
@@ -2600,17 +2919,14 @@ class PLETopK(nn.Module):
                     pos = torch.arange(1, N, device=device).view(1, -1).expand(B, -1)
                     scores = torch.where(avail, pos.to(dtype), torch.full((B, N - 1), float('-inf'), device=device, dtype=dtype))
                 elif self.fallback == 'max':
-                    # Use d as score for token j (j>=1) via pair index j-1
-                    d_pad = d  # (B, N-1)
-                    scores = torch.where(avail, d_pad, torch.full((B, N - 1), float('-inf'), device=device, dtype=dtype))
+                    scores = torch.where(avail, d, torch.full((B, N - 1), float('-inf'), device=device, dtype=dtype))
                 elif self.fallback == 'random':
                     rnd = torch.rand(B, N - 1, device=device, dtype=dtype)
                     scores = torch.where(avail, rnd, torch.full((B, N - 1), float('-inf'), device=device, dtype=dtype))
                 else:
                     scores = torch.full((B, N - 1), float('-inf'), device=device, dtype=dtype)
 
-                vals, cols = torch.topk(scores, k=max_need, dim=1)
-                # Build mask to take only the first missing[b] extras per batch
+                vals2, cols = torch.topk(scores, k=max_need, dim=1)
                 use_mask = (torch.arange(max_need, device=device).view(1, -1) < missing.view(B, 1))
                 extras = torch.where(use_mask, cols, torch.zeros_like(cols))  # tokens 1..N-1
                 add_vals = use_mask.long()

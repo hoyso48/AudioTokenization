@@ -365,8 +365,9 @@ class RMSNorm(torch.nn.Module):
         return x * torch.rsqrt(x.pow(2).mean(-1, keepdim=True) + self.eps)
 
     def forward(self, x):
-        output = self._norm(x.float()).type_as(x)
-        return output * self.weight
+        x, dtype = x.float(), x.dtype
+        output = self._norm(x)
+        return (output * self.weight).to(dtype)
 
 import torch
 import math
@@ -618,8 +619,8 @@ class SelfAttention(nn.Module):
         
         self.qkv_proj = nn.Linear(dim, 3 * dim, bias=False)
         self.out_proj = nn.Linear(dim, dim, bias=False)
-        # self.q_norm = RMSNorm(self.head_dim)
-        # self.k_norm = RMSNorm(self.head_dim)
+        self.q_norm = RMSNorm(self.head_dim)
+        self.k_norm = RMSNorm(self.head_dim)
         self.dropout = dropout
         self.rotary_emb = LlamaDynamicYaRNScaledRotaryEmbedding(self.head_dim, 
                                         max_position_embeddings=max_position_embeddings, 
@@ -639,8 +640,8 @@ class SelfAttention(nn.Module):
         qkv = self.qkv_proj(x)
         qkv = qkv.view(B, T, 3, self.n_head, self.head_dim)
         q, k, v = qkv.unbind(2)
-        q = q.transpose(1, 2)
-        k = k.transpose(1, 2)
+        q = self.q_norm(q).transpose(1, 2)
+        k = self.k_norm(k).transpose(1, 2)
         v = v.transpose(1, 2)
         
         cos, sin = self.rotary_emb(v, seq_len=T)
@@ -668,9 +669,9 @@ class SelfAttention(nn.Module):
         return out
 
 class LayerScale(nn.Module):
-    def __init__(self, d_model: int):
+    def __init__(self, d_model: int, gamma_init: float = 1e-5):
         super().__init__()
-        self.scale = nn.Parameter(torch.ones(d_model))
+        self.scale = nn.Parameter(torch.ones(d_model) * gamma_init)
 
     def forward(self, x):
         scale = self.scale.view(1, 1, -1)
@@ -723,18 +724,20 @@ class ConformerLayer(nn.Module):
         super().__init__()
         self.ffn1 = FeedForward(dim, mult=ffn_mult, dropout=dropout)
         self.self_attn = SelfAttention(dim, n_head=n_head, dropout=dropout, max_position_embeddings=max_position_embeddings, original_max_position_embeddings=original_max_position_embeddings, base=base, causal=causal)
-        self.conv = ConformerConvModule(dim, kernel_size=conv_kernel_size, dropout=dropout, causal=causal)
-        self.ffn2 = FeedForward(dim, mult=ffn_mult, dropout=dropout)
+        # self.conv = ConformerConvModule(dim, kernel_size=conv_kernel_size, dropout=dropout, causal=causal)
+        # self.ffn2 = FeedForward(dim, mult=ffn_mult, dropout=dropout)
         self.conv_first = conv_first
 
         # self.ffn1_norm_in = RMSNorm(dim)
         # self.attn_norm_in = RMSNorm(dim)
 
-        self.conv_norm_in = RMSNorm(dim)
+        # self.conv_norm_in = RMSNorm(dim)
         self.ffn1_norm_in = RMSNorm(dim)
         self.attn_norm_in = RMSNorm(dim)
-        self.ffn2_norm_in = RMSNorm(dim)
-        self.final_norm = RMSNorm(dim)
+        # self.ffn2_norm_in = RMSNorm(dim)
+        # self.final_norm = RMSNorm(dim)
+        # self.attn_scale = LayerScale(dim, gamma_init=1e-0)
+        # self.ffn1_scale = LayerScale(dim, gamma_init=1e-0)
 
         # self.conv_norm_out = RMSNorm(dim)
         # self.ffn1_norm_out = RMSNorm(dim)
@@ -748,20 +751,20 @@ class ConformerLayer(nn.Module):
         self.dropout = nn.Dropout(dropout)
 
     def forward(self, x):
-        if self.conv_first:
-            x = x + self.conv(self.conv_norm_in(x))
-        else:
-            x = x + self.dropout(self.self_attn(self.attn_norm_in(x)))
+        # if self.conv_first:
+        #     x = x + self.conv(self.conv_norm_in(x))
+        # else:
+        #     x = x + self.dropout(self.self_attn(self.attn_norm_in(x)))
 
-        x = x + self.ffn1(self.ffn1_norm_in(x))
+        # x = x + self.ffn1(self.ffn1_norm_in(x))
 
-        if self.conv_first:
-            x = x + self.dropout(self.self_attn(self.attn_norm_in(x)))
-        else:
-            x = x + self.conv(self.conv_norm_in(x))
+        # if self.conv_first:
+        #     x = x + self.dropout(self.self_attn(self.attn_norm_in(x)))
+        # else:
+        #     x = x + self.conv(self.conv_norm_in(x))
 
-        x = x + self.ffn2(self.ffn2_norm_in(x))
-        x = self.final_norm(x)
+        # x = x + self.ffn2(self.ffn2_norm_in(x))
+        # x = self.final_norm(x)
 
         # if self.conv_first:
         #     x = x + self.conv_scale(self.conv(x))
@@ -783,9 +786,9 @@ class ConformerLayer(nn.Module):
         # x = x + self.ffn2_scale(self.ffn2(x))
         # x = self.ffn2_norm_out(x)
 
-        # x = x + self.dropout(self.self_attn(self.attn_norm_in(x)))
+        x = x + self.dropout(self.self_attn(self.attn_norm_in(x)))
 
-        # x = x + self.ffn1(self.ffn1_norm_in(x))
+        x = x + self.ffn1(self.ffn1_norm_in(x))
 
         return x
 
@@ -796,10 +799,37 @@ class ConformerBackbone(nn.Module):
             ConformerLayer(dim, n_head, ffn_mult, conv_kernel_size, dropout, max_position_embeddings=max_position_embeddings, original_max_position_embeddings=original_max_position_embeddings, base=base, conv_first=conv_first, causal=causal)
             for _ in range(n_layers)
         ])
+        self.norm = RMSNorm(dim)
 
     def forward(self, x):
         for layer in self.layers:
             x = layer(x)
+        x = self.norm(x)
+        return x
+
+class Patchify(nn.Module):
+    def __init__(self, in_channels, out_channels, patch_size):
+        super().__init__()
+        self.patch_size = patch_size
+        self.conv = nn.Conv2d(in_channels, out_channels, kernel_size=patch_size, stride=patch_size)
+    
+    def forward(self, x):
+        x = x.permute(0, 3, 1, 2) #(B, H, W, C) -> (B, C, H, W)
+        x = self.conv(x) #(B, C, H//patch_size, W//patch_size)
+        x = x.permute(0, 2, 3, 1) #(B, H//patch_size, W//patch_size, C)
+        return x
+
+class UnPatchify(nn.Module):
+    def __init__(self, in_channels, out_channels, patch_size):
+        super().__init__()
+        self.patch_size = (patch_size, patch_size) if isinstance(patch_size, int) else patch_size
+        self.conv = nn.ConvTranspose2d(in_channels, out_channels, kernel_size=patch_size, stride=patch_size)
+    
+    def forward(self, x):
+        B, H, W, C = x.shape
+        x = x.permute(0, 3, 1, 2) #(B, C, H, W) -> (B, C, H, W)
+        x = self.conv(x) #(B, C, H*patch_size, W*patch_size)
+        x = x.permute(0, 2, 3, 1) #(B, H*patch_size, W*patch_size, C)
         return x
 
 class Downsample(nn.Module):
@@ -816,6 +846,50 @@ class Downsample(nn.Module):
         x = self.activation(x)
         return x
 
+class ConvDownsample(nn.Module):
+    def __init__(self, in_channels, out_channels, activation=nn.SiLU(), causal=False):
+        super().__init__()
+        self.causal = causal
+        if causal:
+            self.conv1 = CausalConv1d(in_channels, out_channels, kernel_size=3, stride=1, padding=1)
+            self.conv2 = CausalConv1d(out_channels, out_channels, kernel_size=3, stride=2, padding=1)
+        else:
+            self.conv1 = nn.Conv1d(in_channels, out_channels, kernel_size=3, stride=1, padding=1)
+            self.conv2 = nn.Conv1d(out_channels, out_channels, kernel_size=3, stride=2, padding=1)
+        self.activation = activation
+        self.norm = nn.LayerNorm(out_channels)
+    
+    def forward(self, x):
+        x = x.transpose(1, 2)
+        x = self.conv1(x)
+        x = self.conv2(x)
+        x = self.activation(x)
+        x = x.transpose(1, 2)
+        x = self.norm(x)
+        return x
+
+class ConvUpsample(nn.Module):
+    def __init__(self, in_channels, out_channels, activation=nn.SiLU(), causal=False):
+        super().__init__()
+        self.causal = causal
+        if self.causal:
+            self.conv1 = CausalConv1d(in_channels, in_channels, kernel_size=3, stride=1, padding=1)
+            self.conv2 = CausalConvTranspose1d(in_channels, out_channels, kernel_size=3, stride=2)
+        else:
+            self.conv1 = nn.Conv1d(in_channels, in_channels, kernel_size=3, stride=1, padding=1)
+            self.conv2 = nn.ConvTranspose1d(in_channels, out_channels, kernel_size=3, stride=2, padding=1, output_padding=1)
+        self.activation = activation
+        self.norm = nn.LayerNorm(out_channels)
+    
+    def forward(self, x):
+        x = x.transpose(1, 2)
+        x = self.conv1(x)
+        x = self.conv2(x)
+        x = self.activation(x)
+        x = x.transpose(1, 2)
+        x = self.norm(x)
+        return x
+        
 class Upsample(nn.Module):
     def __init__(self, in_channels, out_channels, stride=2, activation=nn.SiLU()):
         super().__init__()

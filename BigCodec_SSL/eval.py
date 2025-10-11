@@ -30,6 +30,12 @@ from lightning_module import (
     CodebookUtilization,
 )
 
+# jiwer is preferred for WER; gracefully fallback if unavailable
+try:
+    from jiwer import wer as jiwer_wer  # type: ignore
+except Exception:
+    jiwer_wer = None
+
 
 ALLOWED_AUDIO_EXTS = {".wav", ".flac"}
 
@@ -208,8 +214,8 @@ def compute_pair_metrics(gt_wav: torch.Tensor, pred_wav: torch.Tensor,
     if spk_model is not None:
         try:
             with torch.inference_mode():
-                emb_ref = spk_model(gt)
-                emb_rec = spk_model(pr)
+                emb_ref = spk_model(gt.to('cuda'))
+                emb_rec = spk_model(pr.to('cuda'))
             spk_sim_val = float(F.cosine_similarity(emb_ref, emb_rec).mean().item())
         except Exception as e:
             print(f"[Error] Speaker similarity failed for {pred_path}: {e}")
@@ -403,6 +409,15 @@ def run_metrics_stage(args, manifest_path: Path, eval_dir: Path) -> Dict[str, Op
         print(f"[Warning] mel_cepstral_distance unavailable: {e}")
         mcd_compare = None
 
+    # Initialize UTMOS model (optional)
+    try:
+        # Import from local UTMOS implementation
+        from UTMOS import UTMOSScore  # type: ignore
+        utmos_model = UTMOSScore(device=args.device)
+    except Exception as e:
+        print(f"[Warning] UTMOS init failed: {e}")
+        utmos_model = None
+
     stoi_vals: List[float] = []
     pesq_wb_vals: List[Optional[float]] = []
     pesq_nb_vals: List[Optional[float]] = []
@@ -411,6 +426,11 @@ def run_metrics_stage(args, manifest_path: Path, eval_dir: Path) -> Dict[str, Op
     spk_sim_vals: List[Optional[float]] = []
     mcd_vals: List[Optional[float]] = []
     wer_frac_vals: List[Optional[float]] = []
+    utmos_vals: List[Optional[float]] = []
+
+    # For corpus-level WER (not mean of per-sample)
+    corpus_refs: List[str] = []
+    corpus_hyps: List[str] = []
 
     lines = open(manifest_path, "r").read().splitlines()
     updated_records: List[Dict[str, object]] = []
@@ -451,7 +471,20 @@ def run_metrics_stage(args, manifest_path: Path, eval_dir: Path) -> Dict[str, Op
             except Exception as e:
                 print(f"[Warning] MCD failed for {pred_path}: {e}")
 
+        # UTMOS predicted MOS on reconstructed audio
+        utmos_val = None
+        if utmos_model is not None:
+            try:
+                # pred_wav is 1xT at 16k; send to the same device as the model
+                utmos_tensor = utmos_model.score(pred_wav.to(args.device))
+                # Score returns a tensor of shape [B]; take scalar
+                utmos_val = float(utmos_tensor.squeeze().item())
+            except Exception as e:
+                print(f"[Warning] UTMOS failed for {pred_path}: {e}")
+
         wer_frac = None
+        gt_text: Optional[str] = None
+        asr_text: Optional[str] = None
         if transcript_path and Path(transcript_path).is_file():
             try:
                 with open(transcript_path, "r") as tf:
@@ -462,12 +495,25 @@ def run_metrics_stage(args, manifest_path: Path, eval_dir: Path) -> Dict[str, Op
                             ref_line = tline[len(file_id) + 1 :].strip()
                             break
                 if ref_line is not None:
+                    gt_text = ref_line
                     inputs = processor(pred_wav.squeeze().numpy(), sampling_rate=16000, return_tensors="pt").input_values.to(args.device)
                     with torch.inference_mode():
                         logits = asr_model(inputs).logits
                         predicted_ids = torch.argmax(logits, dim=-1)
                         hyp_text = processor.decode(predicted_ids[0].detach().cpu())
-                    wer_frac = float(compute_wer(ref_line, hyp_text))
+                    asr_text = hyp_text
+                    # Per-sample WER using jiwer if available
+                    if jiwer_wer is not None:
+                        try:
+                            wer_frac = float(jiwer_wer(ref_line, hyp_text))
+                        except Exception as e2:
+                            print(f"[Warning] jiwer WER failed for {pred_path}: {e2}; falling back to internal compute_wer")
+                            wer_frac = float(compute_wer(ref_line, hyp_text))
+                    else:
+                        wer_frac = float(compute_wer(ref_line, hyp_text))
+                    # Accumulate for corpus-level WER
+                    corpus_refs.append(ref_line)
+                    corpus_hyps.append(hyp_text)
             except Exception as e:
                 print(f"[Warning] WER failed for {pred_path}: {e}")
 
@@ -481,6 +527,9 @@ def run_metrics_stage(args, manifest_path: Path, eval_dir: Path) -> Dict[str, Op
             "mcd": mcd_val,
             "wer_fraction": wer_frac,
             "wer": (wer_frac * 100.0) if wer_frac is not None else None,
+            "utmos": utmos_val,
+            "gt_text": gt_text,
+            "asr_text": asr_text,
         })
         updated_records.append(rec)
 
@@ -492,6 +541,7 @@ def run_metrics_stage(args, manifest_path: Path, eval_dir: Path) -> Dict[str, Op
         spk_sim_vals.append(pair["speaker_similarity"]) 
         mcd_vals.append(mcd_val)
         wer_frac_vals.append(wer_frac)
+        utmos_vals.append(utmos_val)
 
     with open(manifest_path, "w") as mf:
         for rec in updated_records:
@@ -500,6 +550,14 @@ def run_metrics_stage(args, manifest_path: Path, eval_dir: Path) -> Dict[str, Op
     def mean_ignore_none(values: List[Optional[float]]) -> Optional[float]:
         arr = [v for v in values if v is not None]
         return float(np.mean(arr)) if len(arr) > 0 else None
+
+    sentence_avg_wer_frac = mean_ignore_none(wer_frac_vals)
+    corpus_wer_frac: Optional[float] = None
+    if len(corpus_refs) > 0 and len(corpus_refs) == len(corpus_hyps):
+        try:
+            corpus_wer_frac = float(jiwer_wer(corpus_refs, corpus_hyps))
+        except Exception as e:
+            print(f"[Warning] Corpus WER failed: {e}")
 
     metrics = {
         "count": int(len(updated_records)),
@@ -510,8 +568,11 @@ def run_metrics_stage(args, manifest_path: Path, eval_dir: Path) -> Dict[str, Op
         "pesq_nb": mean_ignore_none(pesq_nb_vals),
         "speaker_similarity": mean_ignore_none(spk_sim_vals),
         "mcd": mean_ignore_none(mcd_vals),
-        "wer_fraction": mean_ignore_none(wer_frac_vals),
-        "wer": (mean_ignore_none(wer_frac_vals) * 100.0) if mean_ignore_none(wer_frac_vals) is not None else None,
+        # 'wer' is corpus-level WER (not an average of per-sample)
+        "wer": (corpus_wer_frac * 100.0) if corpus_wer_frac is not None else None,
+        # Provide the mean sentence-level WER as a separate metric
+        "wer_sentence_avg": (sentence_avg_wer_frac * 100.0) if sentence_avg_wer_frac is not None else None,
+        "utmos": mean_ignore_none(utmos_vals),
     }
 
     with open(eval_dir / "audio_metrics.json", "w") as f:

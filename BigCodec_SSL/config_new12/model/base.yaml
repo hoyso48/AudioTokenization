@@ -1,17 +1,17 @@
 codec_encoder:
   type: 'conformer_stft'
-  hop_length: 160 #256
-  n_fft: 640 #1024
-  window_size: 640 #1024
+  hop_length: 80 #256
+  n_fft: 320 #1024
+  window_size: 320 #1024
   dim: 256
-  n_layers_stage0: 3
-  n_layers_stage1: 6
+  n_layers_stage0: 6
+  n_layers_stage1: 12
   r: 0.5
   n_head: 4
   ffn_mult: 4
   conv_kernel_size: 31
   dropout: 0.1
-  original_max_position_embeddings: 100
+  original_max_position_embeddings: 400
   max_position_embeddings: 8192
   base: 10000
   causal: False
@@ -20,18 +20,18 @@ codec_encoder:
 codec_decoder:
   type: 'conformer_istft'
   in_channels: 256
-  hop_length: 160 #256
-  n_fft: 640 #1024
-  window_size: 640 #1024
+  hop_length: 80 #256
+  n_fft: 320 #1024
+  window_size: 320 #1024
   dim: 256
-  n_layers_stage0: 6
-  n_layers_stage1: 3
+  n_layers_stage0: 12
+  n_layers_stage1: 6
   r: 0.5
   n_head: 4
   ffn_mult: 4
   conv_kernel_size: 31
   dropout: 0.1
-  original_max_position_embeddings: 100
+  original_max_position_embeddings: 400
   max_position_embeddings: 8192
   base: 10000
   causal: False
@@ -46,12 +46,13 @@ codec_decoder:
 
 tome:
   use_tome: False
-  masking_upsampler: True
-  class_name: 'PLETopKChunk'
+  masking_upsampler: False
+  class_name: 'PLETopK'
   tome_params:
     r: 0.5
-    chunk_size: 200
     fallback: 'post'
+    use_bin_argmax: False
+    sample_bins_training: 1
   proj: False
   proj_dim: 256
   conv_stride: 2

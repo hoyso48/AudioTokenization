@@ -1,6 +1,6 @@
 import unittest
 import torch
-from tome_ops import GeneralizedToMe, OurToMeK, OurToMe2, ToPrK2New, ToPrPLETopK, ToPrCPRRTopK, ToPrK2NewChunk, ToPrGreedy
+from tome_ops import GeneralizedToMe, OurToMeK, OurToMe2, ToPrK2New, ToPrPLETopK, ToPrCPRRTopK, ToPrK2NewChunk, ToPrGreedy, PLETopK2D
 from typing import Tuple, Callable
 
 class TestGeneralizedToMe(unittest.TestCase):
@@ -449,6 +449,80 @@ class TestToPrCPRRTopK(unittest.TestCase):
 
         self.assertGreaterEqual(avg_sim.item(), 0.0)
 
+
+class TestPLETopK2D(unittest.TestCase):
+
+    def setUp(self):
+        print(f"\n--- Running test: {self._testMethodName} ---")
+
+    def test_counts_and_unmerge_basic(self):
+        B, C = 1, 4
+        W = 4
+        N = 8  # 2 rows of width 4
+        r = 0.25  # prune 2 -> keep 6
+        model = PLETopK2D(r=r, token_width=W, use_bin_argmax=False)
+
+        # Construct a deterministic grid-like pattern in raster order
+        x = torch.zeros(B, N, C, dtype=torch.float32)
+        # Row 0: indices 0..3, Row 1: indices 4..7
+        x[0, 0] = torch.tensor([1.0, 0.0, 0.0, 0.0])
+        x[0, 1] = torch.tensor([1.0, 0.0, 0.0, 0.0])
+        x[0, 2] = torch.tensor([0.0, 1.0, 0.0, 0.0])
+        x[0, 3] = torch.tensor([0.0, 1.0, 0.0, 0.0])
+        x[0, 4] = torch.tensor([1.0, 0.0, 0.0, 0.0])
+        x[0, 5] = torch.tensor([1.0, 0.0, 0.0, 0.0])
+        x[0, 6] = torch.tensor([0.0, 1.0, 0.0, 0.0])
+        x[0, 7] = torch.tensor([0.0, 1.0, 0.0, 0.0])
+
+        with torch.no_grad():
+            merged_x, btree, avg_sim = model.compute_merge(x.clone())
+            direct = model.btree_to_root_map(btree)
+            unmerged_x = model.unmerge(merged_x, direct)
+
+        kept = (btree == 0).sum().item()
+        self.assertEqual(kept, N - int(r * N))
+        self.assertEqual(merged_x.shape, (B, N - int(r * N), C))
+        self.assertTrue(torch.all((btree == 0) | (btree == -1)))
+        self.assertEqual(btree[0, 0].item(), 0)
+
+        # Unmerge: pruned positions should copy from nearest kept on the left
+        for j in range(N):
+            if btree[0, j].item() == -1:
+                k = j - 1
+                while k >= 0 and btree[0, k].item() != 0:
+                    k -= 1
+                self.assertTrue(torch.allclose(unmerged_x[0, j], x[0, k]))
+
+    def test_non_divisible_width(self):
+        B, C = 1, 4
+        W = 4
+        N = 10  # not divisible by W
+        r = 0.2  # prune 2 -> keep 8
+        model = PLETopK2D(r=r, token_width=W, use_bin_argmax=True, fallback='pre')
+
+        # Build simple pattern; ensure code handles missing right/last row cells without padding
+        x = torch.zeros(B, N, C, dtype=torch.float32)
+        for i in range(N):
+            x[0, i, i % C] = 1.0
+
+        with torch.no_grad():
+            merged_x, btree, avg_sim = model.compute_merge(x.clone())
+            direct = model.btree_to_root_map(btree)
+            unmerged_x = model.unmerge(merged_x, direct)
+
+        kept = (btree == 0).sum().item()
+        self.assertEqual(kept, N - int(r * N))
+        self.assertEqual(merged_x.shape, (B, N - int(r * N), C))
+        self.assertTrue(torch.all((btree == 0) | (btree == -1)))
+        self.assertEqual(btree[0, 0].item(), 0)
+
+        # Unmerge left-chain correctness
+        for j in range(N):
+            if btree[0, j].item() == -1:
+                k = j - 1
+                while k >= 0 and btree[0, k].item() != 0:
+                    k -= 1
+                self.assertTrue(torch.allclose(unmerged_x[0, j], x[0, k]))
 
 if __name__ == '__main__':
     unittest.main()

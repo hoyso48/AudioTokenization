@@ -12,13 +12,13 @@ import torchmetrics
 import torchaudio
 
 import wandb
-from vq import BigCodecEncoder, BigCodecDecoder, ConformerEncoderSTFT, ConformerDecoderISTFT
+from vq import ConformerEncoderSTFT, ConformerDecoderISTFT
 from module import HiFiGANMultiPeriodDiscriminator, SpecDiscriminator
 from criterions import GANLoss, MultiResolutionMelSpectrogramLoss
 from common.schedulers import WarmupLR
 from transformers import LlamaForCausalLM, LlamaConfig
 from transformers import AutoModel
-from vq.module import SemanticDecoder,SemanticEncoder,Downsample,Upsample,Upsample1D
+from vq.module import SemanticDecoder,SemanticEncoder,Downsample,Upsample,Upsample1D,ConvDownsample,ConvUpsample
 from transformers import AutoFeatureExtractor, Wav2Vec2BertModel
 from torchmetrics.audio import ShortTimeObjectiveIntelligibility, PerceptualEvaluationSpeechQuality, ScaleInvariantSignalNoiseRatio, ScaleInvariantSignalDistortionRatio
 from torchmetrics.aggregation import MeanMetric
@@ -215,8 +215,8 @@ class CodecLightningModule(pl.LightningModule):
                 self.masking_upsampler = GeneralizedToMeMaskingUpsampler(deccfg.in_channels, kernel_size=2)
         else:
             stride = tomecfg.conv_stride
-            self.downsample = Downsample(in_channels=enccfg.out_channels, out_channels=enccfg.out_channels, stride=stride)
-            self.upsample = Upsample(in_channels=deccfg.in_channels, out_channels=deccfg.in_channels, stride=stride)
+            self.downsample =ConvDownsample(in_channels=enccfg.out_channels, out_channels=enccfg.out_channels, causal=enccfg.causal)
+            self.upsample = ConvUpsample(in_channels=deccfg.in_channels, out_channels=deccfg.in_channels, causal=deccfg.causal)
 
     def construct_criteria(self):
         cfg = self.cfg.train
