@@ -3,11 +3,11 @@ defaults:
   - dataset: default
   - model: base
   - train: default
-name: base-transformer-bs64-600k-vq16384-100hz-tome50hzPLETopK2D-fullrandom-2stage-patchify2d
+name: base-transformer-bs64-600k-vq16384-100hz-tome50hzPLETopKrandom-2stage-noconvsubsample
 log_dir: pl_log
 debug: false
-resume_ckpt: '/home/hoyso/projects/AudioTokenization/BigCodec_SSL/outputs/2025-10-10/16-59-58/pl_log/last.ckpt'
-wandb_id: 'duc38oj4'
+resume_ckpt: null
+wandb_id: null
 ckpt: null # infer
 input_dir: null # infer
 output_dir: null # infer

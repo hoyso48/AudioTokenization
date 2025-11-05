@@ -6,7 +6,7 @@ from torch.nn.utils import weight_norm
 from torch import Tensor
 import torch.nn.functional as F
 import torch
-from typing import Tuple
+from typing import Tuple, Sequence, Union
 
 class CausalConv1d(nn.Module):
     def __init__(
@@ -619,8 +619,8 @@ class SelfAttention(nn.Module):
         
         self.qkv_proj = nn.Linear(dim, 3 * dim, bias=False)
         self.out_proj = nn.Linear(dim, dim, bias=False)
-        self.q_norm = RMSNorm(self.head_dim)
-        self.k_norm = RMSNorm(self.head_dim)
+        # self.q_norm = RMSNorm(self.head_dim)
+        # self.k_norm = RMSNorm(self.head_dim)
         self.dropout = dropout
         self.rotary_emb = LlamaDynamicYaRNScaledRotaryEmbedding(self.head_dim, 
                                         max_position_embeddings=max_position_embeddings, 
@@ -640,8 +640,8 @@ class SelfAttention(nn.Module):
         qkv = self.qkv_proj(x)
         qkv = qkv.view(B, T, 3, self.n_head, self.head_dim)
         q, k, v = qkv.unbind(2)
-        q = self.q_norm(q).transpose(1, 2)
-        k = self.k_norm(k).transpose(1, 2)
+        q = q.transpose(1, 2) #self.q_norm(q).transpose(1, 2)
+        k = k.transpose(1, 2) #self.k_norm(k).transpose(1, 2)
         v = v.transpose(1, 2)
         
         cos, sin = self.rotary_emb(v, seq_len=T)
@@ -846,15 +846,15 @@ class Downsample(nn.Module):
         x = self.activation(x)
         return x
 
-class ConvDownsample(nn.Module):
+class ConvSubsample1D(nn.Module):
     def __init__(self, in_channels, out_channels, activation=nn.SiLU(), causal=False):
         super().__init__()
         self.causal = causal
-        if causal:
-            self.conv1 = CausalConv1d(in_channels, out_channels, kernel_size=3, stride=1, padding=1)
+        if self.causal:
+            self.conv1 = CausalConv1d(in_channels, out_channels, kernel_size=3, stride=2, padding=1)
             self.conv2 = CausalConv1d(out_channels, out_channels, kernel_size=3, stride=2, padding=1)
         else:
-            self.conv1 = nn.Conv1d(in_channels, out_channels, kernel_size=3, stride=1, padding=1)
+            self.conv1 = nn.Conv1d(in_channels, out_channels, kernel_size=3, stride=2, padding=1)
             self.conv2 = nn.Conv1d(out_channels, out_channels, kernel_size=3, stride=2, padding=1)
         self.activation = activation
         self.norm = nn.LayerNorm(out_channels)
@@ -862,28 +862,118 @@ class ConvDownsample(nn.Module):
     def forward(self, x):
         x = x.transpose(1, 2)
         x = self.conv1(x)
+        x = self.activation(x)
         x = self.conv2(x)
         x = self.activation(x)
         x = x.transpose(1, 2)
         x = self.norm(x)
         return x
 
+class ConvSubsample2D(nn.Module):
+    def __init__(self, in_channels, out_channels, activation=nn.SiLU(), causal=False):
+        super().__init__()
+        self.causal = causal
+        if self.causal:
+            raise NotImplementedError("Causal convolution is not supported for 2D convolution")
+        else:
+            self.conv1 = nn.Conv2d(in_channels, out_channels, kernel_size=3, stride=2, padding=1)
+            self.conv2 = nn.Conv2d(out_channels, out_channels, kernel_size=3, stride=2, padding=1)
+        self.activation = activation
+        self.norm = nn.LayerNorm(out_channels)
+    
+    def forward(self, x):
+        x = self.conv1(x)
+        x = self.activation(x)
+        x = self.conv2(x)
+        x = self.activation(x)
+        x = x.permute(0, 2, 3, 1) #(B, C, H, W) -> (B, H, W, C)
+        x = self.norm(x)
+        return x
+
+# class ConvDownsample(nn.Module):
+#     def __init__(self, in_channels, out_channels, activation=nn.SiLU(), causal=False):
+#         super().__init__()
+#         self.causal = causal
+#         if causal:
+#             self.conv1 = CausalConv1d(in_channels, out_channels, kernel_size=3, stride=1, padding=1)
+#             self.conv2 = CausalConv1d(out_channels, out_channels, kernel_size=3, stride=2, padding=1)
+#         else:
+#             self.conv1 = nn.Conv1d(in_channels, out_channels, kernel_size=3, stride=1, padding=1)
+#             self.conv2 = nn.Conv1d(out_channels, out_channels, kernel_size=3, stride=2, padding=1)
+#         self.activation = activation
+#         self.norm = nn.LayerNorm(out_channels)
+    
+#     def forward(self, x):
+#         x = x.transpose(1, 2)
+#         x = self.conv1(x)
+#         x = self.conv2(x)
+#         x = self.activation(x)
+#         x = x.transpose(1, 2)
+#         x = self.norm(x)
+#         return x
+    
+# class ConvUpsample(nn.Module):
+#     def __init__(self, in_channels, out_channels, activation=nn.SiLU(), causal=False):
+#         super().__init__()
+#         self.causal = causal
+#         if self.causal:
+#             self.conv1 = CausalConv1d(in_channels, in_channels, kernel_size=3, stride=1, padding=1)
+#             self.conv2 = CausalConvTranspose1d(in_channels, out_channels, kernel_size=3, stride=2)
+#         else:
+#             self.conv1 = nn.Conv1d(in_channels, in_channels, kernel_size=3, stride=1, padding=1)
+#             self.conv2 = nn.ConvTranspose1d(in_channels, out_channels, kernel_size=3, stride=2, padding=1, output_padding=1)
+#         self.activation = activation
+#         self.norm = nn.LayerNorm(out_channels)
+    
+#     def forward(self, x):
+#         x = x.transpose(1, 2)
+#         x = self.conv1(x)
+#         x = self.conv2(x)
+#         x = self.activation(x)
+#         x = x.transpose(1, 2)
+#         x = self.norm(x)
+#         return x
+        
+class ConvDownsample(nn.Module):
+    def __init__(self, in_channels, out_channels, activation=nn.SiLU(), causal=False):
+        super().__init__()
+        self.causal = causal
+        if causal:
+            self.conv1 = CausalConv1d(in_channels, out_channels, kernel_size=3, stride=2, padding=1)
+            self.conv2 = CausalConv1d(out_channels, out_channels, kernel_size=3, stride=2, padding=1)
+        else:
+            self.conv1 = nn.Conv1d(in_channels, out_channels, kernel_size=3, stride=2, padding=1)
+            self.conv2 = nn.Conv1d(out_channels, out_channels, kernel_size=3, stride=2, padding=1)
+        self.activation = activation
+        self.norm = RMSNorm(out_channels)
+    
+    def forward(self, x):
+        x = x.transpose(1, 2)
+        x = self.conv1(x)
+        x = self.activation(x)
+        x = self.conv2(x)
+        x = self.activation(x)
+        x = x.transpose(1, 2)
+        x = self.norm(x)
+        return x
+    
 class ConvUpsample(nn.Module):
     def __init__(self, in_channels, out_channels, activation=nn.SiLU(), causal=False):
         super().__init__()
         self.causal = causal
         if self.causal:
-            self.conv1 = CausalConv1d(in_channels, in_channels, kernel_size=3, stride=1, padding=1)
+            self.conv1 = CausalConvTranspose1d(in_channels, in_channels, kernel_size=3, stride=2)
             self.conv2 = CausalConvTranspose1d(in_channels, out_channels, kernel_size=3, stride=2)
         else:
-            self.conv1 = nn.Conv1d(in_channels, in_channels, kernel_size=3, stride=1, padding=1)
+            self.conv1 = nn.ConvTranspose1d(in_channels, in_channels, kernel_size=3, stride=2, padding=1, output_padding=1)
             self.conv2 = nn.ConvTranspose1d(in_channels, out_channels, kernel_size=3, stride=2, padding=1, output_padding=1)
         self.activation = activation
-        self.norm = nn.LayerNorm(out_channels)
+        self.norm = RMSNorm(out_channels)
     
     def forward(self, x):
         x = x.transpose(1, 2)
         x = self.conv1(x)
+        x = self.activation(x)
         x = self.conv2(x)
         x = self.activation(x)
         x = x.transpose(1, 2)
@@ -912,3 +1002,67 @@ class Upsample1D(nn.Module):
     def forward(self, x):
         x = self.upsample(x)
         return x
+
+class ConvFeatureEncoder(nn.Module):
+    """
+    Wav2Vec2-style 1D convolutional feature encoder.
+
+    Args:
+        in_channels: input channels, 1 for raw waveform
+        conv_dim: output channels for each layer (int or list)
+        conv_kernel: kernel sizes
+        conv_stride: strides
+        activation: activation module class, default nn.SiLU
+    """
+
+    def __init__(
+        self,
+        in_channels: int = 1,
+        conv_dim: Union[int, Sequence[int]] = 256,
+        conv_kernel: Sequence[int] = (10, 3, 3, 3, 3, 2),
+        conv_stride: Sequence[int] = (5, 2, 2, 2, 2, 2),
+        activation: nn.Module = nn.SiLU,
+    ):
+        super().__init__()
+        assert len(conv_kernel) == len(conv_stride)
+
+        n_layers = len(conv_kernel)
+
+        if isinstance(conv_dim, int):
+            conv_dims = [conv_dim] * n_layers
+        else:
+            assert len(conv_dim) == n_layers
+            conv_dims = list(conv_dim)
+
+        self.activation = activation()
+
+        layers = []
+        norms = []
+        prev_c = in_channels
+
+        for c, k, s in zip(conv_dims, conv_kernel, conv_stride):
+            layers.append(nn.Conv1d(prev_c, c, kernel_size=k, stride=s, bias=False, padding=(k-1)//2))
+            norms.append(RMSNorm(c))
+            prev_c = c
+
+        self.convs = nn.ModuleList(layers)
+        self.norms = nn.ModuleList(norms)
+
+        # compute receptive field and stride
+        self.total_stride = 1
+        self.receptive_field = 1
+        for k, s in zip(conv_kernel, conv_stride):
+            self.receptive_field += (k - 1) * self.total_stride
+            self.total_stride *= s
+
+    def forward(self, x: torch.Tensor) -> torch.Tensor:
+        # x: (N, T) or (N, 1, T)
+        if x.dim() == 2:
+            x = x.unsqueeze(1)
+
+        for conv, norm in zip(self.convs, self.norms):
+            x = conv(x)
+            x = norm(x.transpose(1, 2)).transpose(1, 2)
+            x = self.activation(x)
+
+        return x.transpose(1, 2) # (N, C, T) -> (N, T, C)

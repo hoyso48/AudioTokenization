@@ -215,8 +215,8 @@ class CodecLightningModule(pl.LightningModule):
                 self.masking_upsampler = GeneralizedToMeMaskingUpsampler(deccfg.in_channels, kernel_size=2)
         else:
             stride = tomecfg.conv_stride
-            self.downsample =ConvDownsample(in_channels=enccfg.out_channels, out_channels=enccfg.out_channels, causal=enccfg.causal)
-            self.upsample = ConvUpsample(in_channels=deccfg.in_channels, out_channels=deccfg.in_channels, causal=deccfg.causal)
+            self.downsample = Downsample(in_channels=enccfg.out_channels, out_channels=enccfg.out_channels)#ConvDownsample(in_channels=enccfg.out_channels, out_channels=enccfg.out_channels, causal=enccfg.causal)
+            self.upsample = Upsample(in_channels=deccfg.in_channels, out_channels=deccfg.in_channels)#ConvUpsample(in_channels=deccfg.in_channels, out_channels=deccfg.in_channels, causal=deccfg.causal)
 
     def construct_criteria(self):
         cfg = self.cfg.train

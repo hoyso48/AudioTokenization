@@ -1,0 +1,17 @@
+defaults:
+  - preprocess: default
+  - dataset: default
+  - model: base
+  - train: default
+name: base-transformer-bs64-600k-vq16384-100hz-tome50hzPLETopKrandom-fullrandom-noargmax-2stage-fromep130-ftnosample
+log_dir: pl_log
+debug: false
+resume_ckpt: '/home/hoyso/projects/AudioTokenization/BigCodec_SSL/results0930/transformer-PLETopK-fullrandom-ep130/14-37-26/pl_log/last.ckpt'
+wandb_id: null
+ckpt: null # infer
+input_dir: null # infer
+output_dir: null # infer
+hydra:
+  output_subdir: hydra
+  job:
+    chdir: True

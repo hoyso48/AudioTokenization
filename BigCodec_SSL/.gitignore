@@ -4,3 +4,5 @@ epoch=3-step=7459.ckpt
 outputs/
 client_secrets.json
 ckpts/
+results/
+test_run_dir/

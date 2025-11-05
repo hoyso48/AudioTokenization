@@ -47,13 +47,12 @@ codec_decoder:
 tome:
   use_tome: True
   masking_upsampler: True
-  class_name: 'PLETopK2D'
+  class_name: 'PLETopK'
   tome_params:
     r: 0.5
     fallback: 'random'
     use_bin_argmax: False
     sample_bins_training: 0
-    token_width: 4
   proj: False
   proj_dim: 256
   conv_stride: 2

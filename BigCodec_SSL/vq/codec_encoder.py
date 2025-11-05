@@ -2,9 +2,10 @@ import torch
 from torch import nn
 import numpy as np
 import torch.nn.functional as F
-from .module import WNConv1d, EncoderBlock, ResLSTM, ConformerBackbone, RMSNorm, ConvDownsample, Patchify
+from .module import WNConv1d, EncoderBlock, ResLSTM, ConformerBackbone, RMSNorm, ConvDownsample, Patchify, ConvFeatureEncoder
 from .alias_free_torch import *
 from . import activations
+from common.audio import KaldiMelSpectrogram
 
 def init_weights(m):
     if isinstance(m, nn.Conv1d):
@@ -159,21 +160,38 @@ class ConformerEncoderSTFT(nn.Module):
             n_fft=n_fft,
             window_size=window_size
         )
+        # n_mels = 128
+        # patch_width = 4
+        # self.mel_spectrogram = KaldiMelSpectrogram(
+        #         sr=16000,
+        #         n_fft=n_fft,
+        #         hopsize=hop_length,
+        #         win_length=n_fft,
+        #         n_mels=n_mels,
+        # )
 
         # self.patchify = nn.Conv1d(1, dim, kernel_size=hop_length, stride=hop_length)
         # self.conv = ConvDownsample(dim, dim)
 
-        self.patchify = Patchify(2, dim, (4, (n_fft // 2) // 4)) #ex. (4, 80) for n_fft=320
+        # self.patchify = Patchify(2, dim, (4, (n_fft // 2) // 4)) #ex. (4, 80) for n_fft=320
+        # self.patchify = Patchify(1, dim, patch_size=(patch_width, n_mels // patch_width))
         
         # Input projection: complex STFT -> real features
         # STFT output: (B, n_fft//2+1, n_frames)
         # We convert complex to real+imag: (B, 2*(n_fft//2+1), n_frames)
         stft_dim = n_fft // 2 + 1
         # self.input_proj = nn.Linear(2 * stft_dim, dim) #nn.Conv1d(2 * stft_dim, dim, kernel_size=1)
-
+        # self.conv_feature_encoder = ConvFeatureEncoder(
+        #     in_channels=1,
+        #     conv_dim=dim,
+        #     conv_kernel=(10, 3, 3, 3, 3, 2),
+        #     conv_stride=(5, 2, 2, 2, 2, 2),
+        # )
         # self.input_proj = ConvEncoderBlock(2 * stft_dim, dim)
         # self.input_norm = RMSNorm(dim)
-        # self.conv = ConvDownsample(2 * stft_dim, dim)
+        self.conv = ConvDownsample(2 * stft_dim, dim)
+
+        # self.conv = ConvDownsample(n_mels, dim)
         
         # Conformer backbone
         if n_layers_stage0 > 0:
@@ -210,7 +228,8 @@ class ConformerEncoderSTFT(nn.Module):
         else:
             self.conformer_backbone_stage1 = nn.Identity()
 
-        self.norm = RMSNorm(dim)
+        # self.norm = RMSNorm(dim)
+        # self.input_norm = RMSNorm(dim)
 
         # Output projection
         if out_channels != dim:
@@ -226,33 +245,45 @@ class ConformerEncoderSTFT(nn.Module):
         
         # STFT
         if stage == 0:
-            # stft_result = self.stft(x)  # (B, n_fft//2+1, n_frames)
+            stft_result = self.stft(x)  # (B, n_fft//2+1, n_frames)
             
-            # # # Convert complex to real and imaginary parts
-            # # real_part = stft_result.real  # (B, n_fft//2+1, n_frames)
-            # # imag_part = stft_result.imag  # (B, n_fft//2+1, n_frames)
+            # # Convert complex to real and imaginary parts
+            # real_part = stft_result.real  # (B, n_fft//2+1, n_frames)
+            # imag_part = stft_result.imag  # (B, n_fft//2+1, n_frames)
             
-            # # # Concatenate real and imaginary parts
-            # # stft_features = torch.cat([real_part, imag_part], dim=1)  # (B, 2*(n_fft//2+1), n_frames)
-            # stft_features = torch.view_as_real(stft_result).permute(0, 2, 1, 3).flatten(2)
+            # # Concatenate real and imaginary parts
+            # stft_features = torch.cat([real_part, imag_part], dim=1)  # (B, 2*(n_fft//2+1), n_frames)
+            stft_features = torch.view_as_real(stft_result).permute(0, 2, 1, 3).flatten(2)
             
             # # Input projection
-            # # x = self.input_proj(stft_features)  # (B, n_frames, dim)
-            # # x = self.input_norm(x)
-            # x = self.conv(stft_features)
+            # x = self.input_proj(stft_features)  # (B, n_frames, dim)
+            # x = self.input_norm(x)
+            # x = self.norm(x)
+            x = self.conv(stft_features)
+            # x = self.conv_feature_encoder(x)
 
             # 1d-patchify waveform
             # x = self.patchify(x).transpose(1, 2) # (B, 1, n_frames) -> (B, n_frames//patch_size, dim)
             # x = self.conv(x)
 
-            # 2d-patchify stft
-            x = self.stft(x) # (B, n_fft//2+1, n_frames)
-            x = torch.stack([x.real[:, :-1, :], x.imag[:, :-1, :]], dim=-1).transpose(1, 2) # (B, n_frames, n_fft//2, 2), drop nyquist frequency. TODO: more correct way?
-            x = self.patchify(x) # (B, T//patch_size, F//patch_size, D)
-            # print(x.shape)
-            x = x.flatten(1, 2) # (B, L, D)
-            x = self.norm(x)
-            # print(x.shape)
+            # # 2d-patchify stft
+            # x = self.stft(x) # (B, n_fft//2+1, n_frames)
+            # x = torch.stack([x.real[:, :-1, :], x.imag[:, :-1, :]], dim=-1).transpose(1, 2) # (B, n_frames, n_fft//2, 2), drop nyquist frequency. TODO: more correct way?
+            # x = self.patchify(x) # (B, T//patch_size, F//patch_size, D)
+            # # print(x.shape)
+            # x = x.flatten(1, 2) # (B, L, D)
+            # x = self.norm(x)
+            # # print(x.shape)
+
+            #2d-patchify mel spectrogram
+            # x = self.mel_spectrogram(x.squeeze(1)).transpose(1, 2).unsqueeze(-1) # (B, T, F, 1)
+            # x = self.patchify(x) # (B, T//patch_size, F//patch_size, D)
+            # x = x.flatten(1, 2) # (B, L, D)
+            # x = self.norm(x)
+
+            #1d mel
+            # x = self.mel_spectrogram(x.squeeze(1)).transpose(1, 2) #(B, T, F)
+            # x = self.conv(x)
 
             # Conformer backbone
             x = self.conformer_backbone_stage0(x)  # (B, n_frames, dim)

@@ -44,3 +44,4 @@ venv.bak/
 
 # Experiment logs
 wandb_offlines/
+results/

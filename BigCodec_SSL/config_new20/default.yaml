@@ -1,0 +1,17 @@
+defaults:
+  - preprocess: default
+  - dataset: default
+  - model: base
+  - train: default
+name: base-transformer-bs64-600k-100hz-tome50hzPLETopkrandom-2stage-convsubsample1ds4-018612
+log_dir: pl_log
+debug: false
+resume_ckpt: '/home/hoyso/projects/AudioTokenization/BigCodec_SSL/outputs/2025-10-21/06-15-53/pl_log/last.ckpt'
+wandb_id: 'skxoi8fr'
+ckpt: null # infer
+input_dir: null # infer
+output_dir: null # infer
+hydra:
+  output_subdir: hydra
+  job:
+    chdir: True

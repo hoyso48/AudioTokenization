@@ -496,14 +496,21 @@ class ConformerDecoderISTFT(nn.Module):
         # self.conv = ConvUpsample(dim, n_fft+2)
         
         # Use existing ISTFTHead
-        # self.head = ISTFTHead(dim=n_fft+2, n_fft=n_fft, hop_length=hop_length, padding="same")
+        self.head = ISTFTHead(dim=n_fft+2, n_fft=n_fft, hop_length=hop_length, padding="same")
 
-        self.conv = ConvUpsample(dim, dim)
+        # self.head = ISTFTHead(dim=dim, n_fft=n_fft, hop_length=hop_length, padding="same")
+
+        self.conv = ConvUpsample(dim, n_fft+2)
         # self.unpatchify = nn.ConvTranspose1d(dim, 1, kernel_size=hop_length, stride=hop_length)
         
         # 2d-patchify istft
-        self.unpatchify = UnPatchify(dim, 2, (4, (n_fft // 2) // 4))
-        self.head = ISTFTHead(dim=n_fft, n_fft=n_fft, hop_length=hop_length, padding="same")
+        # self.patch_width = 4
+        # self.unpatchify = UnPatchify(dim, 2, (self.patch_width, (n_fft // 2) // self.patch_width))
+        # self.head = ISTFTHead(dim=n_fft, n_fft=n_fft, hop_length=hop_length, padding="same")
+
+        #2d-patchify istftv2
+        # self.patch_width = 4
+        # self.head = ISTFTHead(dim=dim*self.patch_width, n_fft=n_fft*self.patch_width, hop_length=hop_length*self.patch_width, padding="same")
         
         self.reset_parameters()
 
@@ -535,19 +542,30 @@ class ConformerDecoderISTFT(nn.Module):
             # x = x.transpose(1, 2)  # (B, T, dim)
 
             # x = self.norm(x)
-            # x = self.conv(x)
+            x = self.conv(x)
             
             # Use ISTFTHead
-            # audio, x_pred = self.head(x)
+            audio, x_pred = self.head(x)
 
             # 1d-patchify
             # audio = self.unpatchify(x.transpose(1, 2)).float()
 
-            B, T, C = x.shape
-            x = x.view(B, T//4, 4, C)
-            x = self.unpatchify(x) #(B, T, n_fft//2, 2)
-            x = x.view(B, T, -1) #(B, T, n_fft)
-            audio, x_pred = self.head(x)
+            # B, T, C = x.shape
+            # x = x.view(B, T//4, 4, C)
+            # x = self.unpatchify(x) #(B, T, n_fft//2, 2)
+            # x = x.view(B, T, -1) #(B, T, n_fft)
+            # audio, x_pred = self.head(x)
+
+            # B, T, C = x.shape
+            # x = x.view(B, T//4, 4, C)
+            # x = self.unpatchify(x) #(B, T, n_fft//2, 2)
+            # x = x.view(B, T, -1) #(B, T, n_fft)
+            # audio, x_pred = self.head(x)
+
+            # B, T, C = x.shape
+            # x = x.view(B, T//self.patch_width, self.patch_width, C)
+            # x = x.flatten(2)
+            # audio, x_pred = self.head(x)
             return audio
         else:
             raise ValueError(f"Unsupported stage: {stage}")

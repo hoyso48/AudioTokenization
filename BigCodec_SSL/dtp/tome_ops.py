@@ -2784,7 +2784,7 @@ class PLETopK(nn.Module):
         # Cumulative path length with beta=1 (weights = d + eps)
         if N > 1:
             w = d + 1e-12
-            # w = w.clamp(0,1) #handling negative similarity
+            w = w.clamp(0,1) #handling negative similarity
             D = torch.zeros(B, N, device=device, dtype=dtype)
             D[:, 1:] = torch.cumsum(w, dim=1)
             L = D[:, -1]  # (B,)
@@ -2983,7 +2983,8 @@ class PLETopKChunk(nn.Module):
     Parameters mirror PLETopK, with additional chunk_size (default 100).
     """
     def __init__(self, r: float, eps: float = 1e-12,
-                 fallback: Optional[str] = None, chunk_size: int = 100):
+                 fallback: Optional[str] = None, chunk_size: int = 100,
+                 use_bin_argmax: bool = True, sample_bins_training: float = 0.0):
         super().__init__()
         self.r = float(r)
         self.eps = float(eps)
@@ -2995,6 +2996,8 @@ class PLETopKChunk(nn.Module):
         if chunk_size < 2:
             raise ValueError("chunk_size must be >= 2")
         self.chunk_size = int(chunk_size)
+        self.use_bin_argmax = bool(use_bin_argmax)
+        self.sample_bins_training = float(sample_bins_training)
 
     @torch.no_grad()
     def compute_merge(self, x: torch.Tensor) -> Tuple[torch.Tensor, torch.Tensor, torch.Tensor]:
@@ -3046,6 +3049,8 @@ class PLETopKChunk(nn.Module):
                 continue
             q_floor[ci] = int(max(0, min(q_floor[ci], Lc - 1)))
 
+        # Sampling decision for training-time random-boundary mode (mirrors PLETopK)
+        use_training_random = self.training and (self.sample_bins_training > 0.0) and (torch.rand(1).item() < self.sample_bins_training)
         for ci, s in enumerate(starts):
             Lc = lens[ci]
             e = s + Lc
@@ -3091,60 +3096,124 @@ class PLETopKChunk(nn.Module):
 
             interior = M_c - 1
             if Lc > 1 and interior > 0:
-                # Equal path-length bins (argmax mode)
-                t = torch.where(L > 0, L / float(M_c), torch.ones_like(L))
-                pair_right = D[:, 1:]  # (B, Lc-1)
-                bin_idx = torch.clamp((pair_right / t.view(B, 1)).floor().long(), min=0, max=M_c - 1)
+                if use_training_random:
+                    # Training-time random-boundary mode per chunk
+                    if self.use_bin_argmax:
+                        num_candidates = max(Lc - 2, 0)  # tokens 1..Lc-2
+                        if num_candidates > 0:
+                            candidates = torch.arange(1, Lc - 1, device=device)
+                            rand_scores = torch.rand(B, num_candidates, device=device)
+                            order = torch.argsort(rand_scores, dim=1)
+                            boundaries = candidates.view(1, -1).expand(B, -1).gather(1, order[:, :interior])
+                            boundaries = torch.sort(boundaries, dim=1).values
 
-                d_mask = d.clone()
-                if d_mask.numel() > 0:
-                    d_mask[:, 0] = float('-inf')  # exclude pair 0 to avoid duplicate seed
+                            # Build bin masks over pair indices [0..Lc-2]
+                            num_bins = interior + 1
+                            pair_idx = torch.arange(Lc - 1, device=device).view(1, 1, -1).expand(B, num_bins, -1)
+                            starts_b = torch.cat([torch.zeros(B, 1, device=device, dtype=boundaries.dtype), boundaries], dim=1).long()
+                            ends_b = torch.cat([boundaries - 1, torch.full((B, 1), Lc - 2, device=device, dtype=boundaries.dtype)], dim=1).long()
+                            start_exp = starts_b.unsqueeze(-1).expand(-1, -1, Lc - 1)
+                            end_exp = ends_b.unsqueeze(-1).expand(-1, -1, Lc - 1)
+                            mask3 = (pair_idx >= start_exp) & (pair_idx <= end_exp)
 
-                bins = torch.arange(1, M_c, device=device, dtype=bin_idx.dtype).view(1, interior, 1)
-                mask3 = (bin_idx.unsqueeze(1) == bins)  # (B, interior, Lc-1)
-                d_exp = d_mask.unsqueeze(1).expand(-1, interior, -1)
-                neg_inf = torch.full_like(d_exp, float('-inf'))
-                masked_scores = torch.where(mask3, d_exp, neg_inf)
+                            d_exp = d.unsqueeze(1).expand(-1, num_bins, -1)
+                            neg_inf = torch.full_like(d_exp, float('-inf'))
+                            masked_scores = torch.where(mask3, d_exp, neg_inf)
+                            if num_bins > 1:
+                                masked_scores_int = masked_scores[:, 1:, :]  # (B, interior, Lc-1)
+                                vals_int, idxs_int = masked_scores_int.max(dim=2)
+                                chosen_tokens = (idxs_int + 1).clamp(1, Lc - 1)
+                                keep_int.scatter_(1, chosen_tokens, 1)
+                    else:
+                        num_candidates = Lc - 1  # tokens 1..Lc-1
+                        if num_candidates > 0:
+                            candidates = torch.arange(1, Lc, device=device)
+                            rand_scores = torch.rand(B, num_candidates, device=device)
+                            order = torch.argsort(rand_scores, dim=1)
+                            chosen_tokens = candidates.view(1, -1).expand(B, -1).gather(1, order[:, :interior])
+                            keep_int.scatter_(1, chosen_tokens, 1)
+                else:
+                    if self.use_bin_argmax:
+                        # Equal path-length bins (argmax mode)
+                        t = torch.where(L > 0, L / float(M_c), torch.ones_like(L))
+                        pair_right = D[:, 1:]  # (B, Lc-1)
+                        bin_idx = torch.clamp((pair_right / t.view(B, 1)).floor().long(), min=0, max=M_c - 1)
 
-                vals, idxs = masked_scores.max(dim=2)  # (B, interior)
-                has_any = vals.isfinite()
-                chosen = torch.where(has_any, idxs, torch.zeros_like(idxs))
-                chosen_tokens = (chosen + 1).clamp(1, Lc - 1)
-                keep_int.scatter_(1, chosen_tokens, 1)
+                        d_mask = d.clone()
+                        if d_mask.numel() > 0:
+                            d_mask[:, 0] = float('-inf')  # exclude pair 0 to avoid duplicate seed
 
-                # Ensure exactly M_c kept per batch
-                kept_counts = keep_int.sum(dim=1)
-                expected_kept_chunk = int(M_c)
-                missing = (expected_kept_chunk - kept_counts).clamp_min(0)
-                if (missing != 0).any():
-                    if self.fallback is None:
-                        short = missing.tolist()
-                        raise RuntimeError(
-                            f"PLETopKChunk: kept length mismatch per batch in chunk {ci} (missing={short}); "
-                            f"r={self.r}, Lc={Lc}, expected_kept={expected_kept_chunk}"
-                        )
-                    avail = (keep_int[:, 1:] == 0)  # (B, Lc-1)
-                    max_need = int(missing.max().item())
-                    if max_need > 0:
-                        if self.fallback == 'pre':
-                            pos = torch.arange(1, Lc, device=device).view(1, -1).expand(B, -1)
-                            scores = torch.where(avail, -pos.to(dtype), torch.full((B, Lc - 1), float('-inf'), device=device, dtype=dtype))
-                        elif self.fallback == 'post':
-                            pos = torch.arange(1, Lc, device=device).view(1, -1).expand(B, -1)
-                            scores = torch.where(avail, pos.to(dtype), torch.full((B, Lc - 1), float('-inf'), device=device, dtype=dtype))
-                        elif self.fallback == 'max':
-                            scores = torch.where(avail, d, torch.full((B, Lc - 1), float('-inf'), device=device, dtype=dtype))
-                        elif self.fallback == 'random':
-                            rnd = torch.rand(B, Lc - 1, device=device, dtype=dtype)
-                            scores = torch.where(avail, rnd, torch.full((B, Lc - 1), float('-inf'), device=device, dtype=dtype))
+                        bins = torch.arange(1, M_c, device=device, dtype=bin_idx.dtype).view(1, interior, 1)
+                        mask3 = (bin_idx.unsqueeze(1) == bins)  # (B, interior, Lc-1)
+                        d_exp = d_mask.unsqueeze(1).expand(-1, interior, -1)
+                        neg_inf = torch.full_like(d_exp, float('-inf'))
+                        masked_scores = torch.where(mask3, d_exp, neg_inf)
+
+                        vals, idxs = masked_scores.max(dim=2)  # (B, interior)
+                        has_any = vals.isfinite()
+                        chosen = torch.where(has_any, idxs, torch.zeros_like(idxs))
+                        chosen_tokens = (chosen + 1).clamp(1, Lc - 1)
+                        keep_int.scatter_(1, chosen_tokens, 1)
+                    else:
+                        # First-crossing selection per chunk
+                        t = torch.where(L > 0, L / float(M_c), torch.zeros_like(L))
+                        targets = (torch.arange(1, M_c, device=device, dtype=dtype).view(1, -1) * t.view(B, 1))
+                        if Lc > 1 and interior > 0:
+                            ge = D.unsqueeze(2) >= targets.unsqueeze(1)
+                            j = ge.float().argmax(dim=1).clamp_(min=1, max=Lc - 1)
                         else:
-                            scores = torch.full((B, Lc - 1), float('-inf'), device=device, dtype=dtype)
+                            j = torch.ones(B, interior, device=device, dtype=torch.long)
 
-                        vals2, cols = torch.topk(scores, k=max_need, dim=1)
-                        use_mask = (torch.arange(max_need, device=device).view(1, -1) < missing.view(B, 1))
-                        extras = torch.where(use_mask, cols, torch.zeros_like(cols))  # tokens 1..Lc-1
-                        add_vals = use_mask.long()
-                        keep_int.scatter_add_(1, (extras + 1).long(), add_vals)
+                        # Fallback uniform for rows with L==0
+                        if interior > 0:
+                            uniform_j = torch.linspace(1, Lc - 1, steps=interior, device=device).round().long().clamp(1, Lc - 1)
+                            j = torch.where((L > 0).view(B, 1), j, uniform_j.view(1, -1).expand(B, -1))
+
+                        # Enforce strictly increasing j per row
+                        if interior > 0:
+                            ar = torch.arange(interior, device=device, dtype=j.dtype).view(1, -1)
+                            s_ = (j - ar)
+                            smax, _ = torch.cummax(s_, dim=1)
+                            j_strict = (smax + ar).clamp_(min=1, max=Lc - 1)
+                        else:
+                            j_strict = j
+
+                        keep_int.scatter_(1, j_strict, 1)
+
+                # Ensure exactly M_c kept per batch for deterministic modes only
+                if not use_training_random:
+                    kept_counts = keep_int.sum(dim=1)
+                    expected_kept_chunk = int(M_c)
+                    missing = (expected_kept_chunk - kept_counts).clamp_min(0)
+                    if (missing != 0).any():
+                        if self.fallback is None:
+                            short = missing.tolist()
+                            raise RuntimeError(
+                                f"PLETopKChunk: kept length mismatch per batch in chunk {ci} (missing={short}); "
+                                f"r={self.r}, Lc={Lc}, expected_kept={expected_kept_chunk}"
+                            )
+                        avail = (keep_int[:, 1:] == 0)  # (B, Lc-1)
+                        max_need = int(missing.max().item())
+                        if max_need > 0:
+                            if self.fallback == 'pre':
+                                pos = torch.arange(1, Lc, device=device).view(1, -1).expand(B, -1)
+                                scores = torch.where(avail, -pos.to(dtype), torch.full((B, Lc - 1), float('-inf'), device=device, dtype=dtype))
+                            elif self.fallback == 'post':
+                                pos = torch.arange(1, Lc, device=device).view(1, -1).expand(B, -1)
+                                scores = torch.where(avail, pos.to(dtype), torch.full((B, Lc - 1), float('-inf'), device=device, dtype=dtype))
+                            elif self.fallback == 'max':
+                                scores = torch.where(avail, d, torch.full((B, Lc - 1), float('-inf'), device=device, dtype=dtype))
+                            elif self.fallback == 'random':
+                                rnd = torch.rand(B, Lc - 1, device=device, dtype=dtype)
+                                scores = torch.where(avail, rnd, torch.full((B, Lc - 1), float('-inf'), device=device, dtype=dtype))
+                            else:
+                                scores = torch.full((B, Lc - 1), float('-inf'), device=device, dtype=dtype)
+
+                            vals2, cols = torch.topk(scores, k=max_need, dim=1)
+                            use_mask = (torch.arange(max_need, device=device).view(1, -1) < missing.view(B, 1))
+                            extras = torch.where(use_mask, cols, torch.zeros_like(cols))  # tokens 1..Lc-1
+                            add_vals = use_mask.long()
+                            keep_int.scatter_add_(1, (extras + 1).long(), add_vals)
 
             # Write per-chunk btree and gather kept tokens in order
             keep = keep_int.bool()
@@ -3157,13 +3226,14 @@ class PLETopKChunk(nn.Module):
 
         merged_x = torch.cat(kept_chunks, dim=1) if len(kept_chunks) > 0 else x[:, :0, :]
 
-        # Strict kept-count check across chunks
-        actual_kept = int(merged_x.shape[1])
-        if actual_kept != expected_kept:
-            raise RuntimeError(
-                f"PLETopKChunk: kept length mismatch (actual={actual_kept}, expected={expected_kept}); "
-                f"r={self.r}, N={N}, chunk_size={self.chunk_size}"
-            )
+        # Strict kept-count check across chunks (skip when using training random mode)
+        if not use_training_random:
+            actual_kept = int(merged_x.shape[1])
+            if actual_kept != expected_kept:
+                raise RuntimeError(
+                    f"PLETopKChunk: kept length mismatch (actual={actual_kept}, expected={expected_kept}); "
+                    f"r={self.r}, N={N}, chunk_size={self.chunk_size}"
+                )
 
         avg_sim = torch.zeros(B, device=device, dtype=dtype)
         return merged_x, btree_map, avg_sim
