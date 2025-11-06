@@ -175,6 +175,47 @@ class LlamaDynamicYaRNScaledRotaryEmbedding(torch.nn.Module):
         self.register_buffer("inv_freq", inv_freq, persistent=False)
         self.mscale = float(_yarn_get_mscale(scale) * self.attn_factor) # Get n-d magnitude scaling corrected for interpolation
 
+class RotaryEmbedding(nn.Module):
+    def __init__(self, dim, max_position_embeddings=2048, base=10000, device=None):
+        super().__init__()
+
+        self.dim = dim
+        self.max_position_embeddings = max_position_embeddings
+        self.base = base
+
+        inv_freq = 1.0 / (self.base ** (torch.arange(0, self.dim, 2).float().to(device) / self.dim))
+        self.register_buffer("inv_freq", inv_freq, persistent=False)
+
+        # Precompute caches for initial max seq len
+        self.max_seq_len_cached = max_position_embeddings
+        t = torch.arange(self.max_seq_len_cached, device=self.inv_freq.device, dtype=self.inv_freq.dtype)
+        freqs = torch.einsum("i,j->ij", t, self.inv_freq)
+        emb = torch.cat((freqs, freqs), dim=-1)
+        dtype = torch.get_default_dtype()
+        self.register_buffer("cos_cached", emb.cos().to(dtype), persistent=False)
+        self.register_buffer("sin_cached", emb.sin().to(dtype), persistent=False)
+
+    def _set_cos_sin_cache(self, seq_len: int, device: torch.device, dtype: torch.dtype) -> None:
+        self.max_seq_len_cached = seq_len
+        t = torch.arange(self.max_seq_len_cached, device=device, dtype=self.inv_freq.dtype)
+        freqs = torch.einsum("i,j->ij", t, self.inv_freq)
+        emb = torch.cat((freqs, freqs), dim=-1)
+        self.register_buffer("cos_cached", emb.cos().to(dtype), persistent=False)
+        self.register_buffer("sin_cached", emb.sin().to(dtype), persistent=False)
+
+    def forward(self, x, seq_len: int = None):
+        # x is only used for device/dtype; seq_len must be provided explicitly
+        if seq_len is None:
+            raise ValueError("RotaryEmbedding.forward requires seq_len to be provided")
+
+        if seq_len > self.max_seq_len_cached:
+            self._set_cos_sin_cache(seq_len=seq_len, device=x.device, dtype=x.dtype)
+
+        return (
+            self.cos_cached[:seq_len].to(dtype=x.dtype),
+            self.sin_cached[:seq_len].to(dtype=x.dtype),
+        )
+
 def rotate_half(x):
     """Rotates half the hidden dims of the input."""
     x1 = x[..., : x.shape[-1] // 2]
@@ -220,11 +261,15 @@ class SelfAttention(nn.Module):
         # self.q_norm = RMSNorm(self.head_dim)
         # self.k_norm = RMSNorm(self.head_dim)
         self.dropout = dropout
-        self.rotary_emb = LlamaDynamicYaRNScaledRotaryEmbedding(self.head_dim, 
+        # self.rotary_emb = LlamaDynamicYaRNScaledRotaryEmbedding(self.head_dim, 
+        #                                 max_position_embeddings=max_position_embeddings, 
+        #                                 base=base, 
+        #                                 device=None, 
+        #                                 original_max_position_embeddings=original_max_position_embeddings) #1
+        self.rotary_emb = RotaryEmbedding(self.head_dim, 
                                         max_position_embeddings=max_position_embeddings, 
                                         base=base, 
-                                        device=None, 
-                                        original_max_position_embeddings=original_max_position_embeddings) #1
+                                        device=None)
         # Require FlashAttention (dense and varlen kernels). Raise immediately if unavailable.
         try:
             from flash_attn import flash_attn_qkvpacked_func as _fa_dense_qkv
@@ -254,9 +299,13 @@ class SelfAttention(nn.Module):
                 cos, sin = self.rotary_emb(qkv, seq_len=max_seqlen)
                 lengths = (cu_seqlens[1:] - cu_seqlens[:-1]).to(torch.long)
                 if lengths.numel() > 0:
-                    start_offsets = torch.repeat_interleave(cu_seqlens[:-1].to(torch.long), lengths)
-                    token_idx = torch.arange(total, device=qkv.device, dtype=torch.long)
-                    position_ids = token_idx - start_offsets  # [total]
+                    # start_offsets = torch.repeat_interleave(cu_seqlens[:-1].to(torch.long), lengths)
+                    # token_idx = torch.arange(total, device=qkv.device, dtype=torch.long)
+                    # position_ids = token_idx - start_offsets  # [total]
+                    if position_ids is None:
+                        start_offsets = torch.repeat_interleave(cu_seqlens[:-1].to(torch.long), lengths)
+                        token_idx = torch.arange(total, device=qkv.device, dtype=torch.long)
+                        position_ids = token_idx - start_offsets  # [total]
                     q, k = qkv[:, 0], qkv[:, 1]
                     q, k = apply_rotary_pos_emb(q, k, cos, sin, position_ids=position_ids, unsqueeze_dim=1)
                     qkv = torch.stack((q, k, qkv[:, 2]), dim=1)
@@ -284,16 +333,10 @@ class SelfAttention(nn.Module):
 
         # Apply RoPE on qkv packed (dense)
         cos, sin = self.rotary_emb(qkv, seq_len=T)
+        q, k = qkv[:, :, 0], qkv[:, :, 1]
         if position_ids is None:
             position_ids = torch.arange(T, device=x.device, dtype=torch.long).unsqueeze(0).expand(B, T)
-        cos_bt = cos[position_ids]
-        sin_bt = sin[position_ids]
-        cos_bt = cos_bt.unsqueeze(2).to(dtype=qkv.dtype)
-        sin_bt = sin_bt.unsqueeze(2).to(dtype=qkv.dtype)
-        q = qkv[:, :, 0]
-        k = qkv[:, :, 1]
-        q = (q * cos_bt) + (rotate_half(q) * sin_bt)
-        k = (k * cos_bt) + (rotate_half(k) * sin_bt)
+        q, k = apply_rotary_pos_emb(q, k, cos, sin, position_ids=position_ids, unsqueeze_dim=2)
         qkv = torch.stack((q, k, qkv[:, :, 2]), dim=2)
 
         # FlashAttention qkvpacked (dense)

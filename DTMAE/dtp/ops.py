@@ -23,12 +23,13 @@ class PLEBatchTopK_old(nn.Module):
       avg_r: scalar tensor = (#zeros in mask) / (#total original tokens)
       tau_used: scalar tensor (mean bin width for logging; not used in training)
     """
-    def __init__(self, r: float, momentum: float = 0.99):
+    def __init__(self, r: float, momentum: float = 0.99, sample_bins: float = 0.0):
         super().__init__()
         if not (0.0 <= float(r) < 1.0):
             raise ValueError("PLEBatchTopK_old: r must be in [0, 1)")
         self.r = float(r)
         self.momentum = float(momentum)
+        self.sample_bins = sample_bins
 
     @torch.no_grad()
     def forward(
@@ -113,13 +114,17 @@ class PLEBatchTopK(nn.Module):
       avg_r: scalar = (#zeros in mask) / (B*N)
       tau_used: scalar tensor (tau_batch during training, tau_ema during eval)
     """
-    def __init__(self, r: float, momentum: float = 0.99):
+    def __init__(self, r: float, momentum: float = 0.99, sample_prob: float = 0.0, p: float = 0.5, m: int = 1, min_masked_r=0.4):
         super().__init__()
         if not (0.0 <= float(r) < 1.0):
             raise ValueError("PLEBatchTopK: r must be in [0, 1)")
         self.r = float(r)
         self.momentum = float(momentum)
         self.register_buffer("tau_ema", torch.tensor(0.0))
+        self.sample_prob = sample_prob
+        self.p = p
+        self.m = m
+        self.min_masked_r = min_masked_r
 
     @torch.no_grad()
     def forward(self, x: torch.Tensor) -> Tuple[torch.Tensor, torch.Tensor, torch.Tensor]:
@@ -168,6 +173,57 @@ class PLEBatchTopK(nn.Module):
             tau_used = tau_batch
         else:
             tau_used = self.tau_ema.to(device=device, dtype=dtype)
+
+        if self.training and torch.rand(1).item() < self.sample_prob:
+            # Random masking strategy
+            # Build a keep mask (True = keep/unmasked, False = masked)
+            mask = torch.ones(B, N, device=device, dtype=torch.bool)
+            if N > 0:
+                # sample start positions for spans with probability p
+                starts = (torch.rand(B, N, device=device) < float(self.p))
+                # always keep token 0
+                starts[:, 0] = False
+
+                # accumulate masked spans of length m (overlap allowed)
+                if self.m <= 1:
+                    masked = starts
+                else:
+                    masked = torch.zeros(B, N, device=device, dtype=torch.bool)
+                    # mark t .. t+m-1 for each start at t
+                    for k in range(int(self.m)):
+                        if N - k > 0:
+                            masked[:, k:] |= starts[:, :N - k]
+
+                # ensure first token is not masked
+                masked[:, 0] = False
+
+                # enforce minimum masked ratio across the entire batch
+                total = B * N
+                current_masked = int(masked.sum().item())
+                min_masked = int(math.ceil(float(self.min_masked_r) * float(total)))
+                if current_masked < min_masked:
+                    # select additional unmasked tokens uniformly at random (excluding first token of each sequence)
+                    flat_unmasked = (~masked).view(-1)
+                    if N > 0:
+                        first_idx = torch.arange(0, total, step=N, device=device)
+                        flat_unmasked[first_idx] = False
+                    candidates = flat_unmasked.nonzero(as_tuple=False).squeeze(1)
+                    need = min_masked - current_masked
+                    if candidates.numel() > 0 and need > 0:
+                        if need >= candidates.numel():
+                            chosen = candidates
+                        else:
+                            perm = torch.randperm(candidates.numel(), device=device)[:need]
+                            chosen = candidates[perm]
+                        masked.view(-1)[chosen] = True
+
+                # final keep mask
+                mask = ~masked
+
+            kept_total = int(mask.sum().item())
+            zeros_total = int((B * N) - kept_total)
+            avg_r = torch.tensor(float(zeros_total) / float(max(1, B * N)), device=device, dtype=dtype)
+            return mask, avg_r, tau_used
 
         # Build frontier mask via first-crossing with global tau
         mask = torch.zeros(B, N, device=device, dtype=torch.bool)

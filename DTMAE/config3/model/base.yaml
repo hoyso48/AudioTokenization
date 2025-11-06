@@ -11,7 +11,7 @@ codec_encoder:
   dropout: 0.1
   original_max_position_embeddings: 400
   max_position_embeddings: 8192
-  base: 10000
+  base: 64
   causal: False
   out_channels: 256
 
@@ -29,7 +29,7 @@ codec_decoder:
   dropout: 0.1
   original_max_position_embeddings: 400
   max_position_embeddings: 8192
-  base: 10000
+  base: 64
   causal: False
   vq_num_quantizers: 1 # 8
   vq_commit_weight: 0.5
@@ -42,10 +42,14 @@ codec_decoder:
 
 resampler:
   use_dtp: True
-  dtp_cls: PLEBatchTopK_old
+  dtp_cls: PLEBatchTopK
   dtp_params:
     r: 0.5
     momentum: 0.99
+    sample_prob: 0.0
+    p: 0.5
+    m: 1
+    min_masked_r: 0.4
   downsampler_cls: FrontierDownsampler
   downsampler_params: {}
   upsampler_cls: MaskUpsampler

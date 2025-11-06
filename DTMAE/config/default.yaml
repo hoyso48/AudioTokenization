@@ -6,9 +6,9 @@ defaults:
 name: base-transformer-bs64-600k-100hz-tome50hzPLEBatchTopk-2stage
 log_dir: pl_log
 debug: false
-resume_ckpt: null
-wandb_id: null
-ckpt: null # infer
+resume_ckpt: '/home/hoyso/projects/AudioTokenization/DTMAE/outputs/2025-11-01/23-17-52/pl_log/last.ckpt'
+wandb_id: '3tbl9tmc'
+ckpt: '/home/hoyso/projects/AudioTokenization/DTMAE/outputs/2025-11-01/23-17-52/pl_log/last.ckpt' # infer
 input_dir: null # infer
 output_dir: null # infer
 hydra:
