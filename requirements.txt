@@ -14,3 +14,4 @@ matplotlib
 wandb
 mel-cepstral-distance
 vector_quantize_pytorch
+pydrive2

@@ -166,7 +166,6 @@ class TransformerDecoderISTFT(nn.Module):
                  ffn_mult=4,
                  dropout=0.1,
                  max_position_embeddings=2048,
-                 original_max_position_embeddings=4096,
                  base=10000.0,
                  causal=False,
                  # Quantizer parameters
@@ -179,6 +178,8 @@ class TransformerDecoderISTFT(nn.Module):
                  vq_full_commit_loss=False,
                  codebook_size=8192,
                  codebook_dim=8,
+                 norm_eps: float = 1e-2,
+                 attn_window_size=(64, 64),
                 ):
         super().__init__()
         self.hop_length = hop_length
@@ -225,9 +226,10 @@ class TransformerDecoderISTFT(nn.Module):
                 ffn_mult=ffn_mult,
                 dropout=dropout,
                 max_position_embeddings=int(max_position_embeddings*r),
-                original_max_position_embeddings=int(original_max_position_embeddings*r),
                 base=base,
                 causal=causal,
+                attn_window_size=attn_window_size,
+                norm_eps=norm_eps,
                 )
         else:
             self.transformer_backbone_level2 = nn.Identity()
@@ -240,9 +242,10 @@ class TransformerDecoderISTFT(nn.Module):
                 ffn_mult=ffn_mult,
                 dropout=dropout,
                 max_position_embeddings=max_position_embeddings,
-                original_max_position_embeddings=original_max_position_embeddings,
                 base=base,
                 causal=causal,
+                attn_window_size=attn_window_size,
+                norm_eps=norm_eps,
                 )
         else:
             self.transformer_backbone_level1 = nn.Identity()
@@ -250,7 +253,7 @@ class TransformerDecoderISTFT(nn.Module):
         # Use existing ISTFTHead
         self.head = ISTFTHead(dim=n_fft+2, n_fft=n_fft, hop_length=hop_length, padding="same")
 
-        self.conv = ConvUpsample(dim, n_fft+2)
+        self.conv = ConvUpsample(dim, n_fft+2, norm_eps=norm_eps)
         
         self.reset_parameters()
 

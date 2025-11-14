@@ -100,10 +100,11 @@ class CodecLightningModule(pl.LightningModule):
             ffn_mult=enccfg.ffn_mult,
             dropout=enccfg.dropout,
             max_position_embeddings=enccfg.max_position_embeddings,
-            original_max_position_embeddings=enccfg.original_max_position_embeddings,
             base=enccfg.base,
             causal=enccfg.causal,
             out_channels=enccfg.out_channels,
+            norm_eps=enccfg.norm_eps,
+            attn_window_size=enccfg.attn_window_size,
         )
 
         deccfg = self.cfg.model.codec_decoder
@@ -120,7 +121,6 @@ class CodecLightningModule(pl.LightningModule):
                 ffn_mult=deccfg.ffn_mult,
                 dropout=deccfg.dropout,
                 max_position_embeddings=deccfg.max_position_embeddings,
-                original_max_position_embeddings=deccfg.original_max_position_embeddings,
                 base=deccfg.base,
                 causal=deccfg.causal,
                 fsq=deccfg.fsq,
@@ -131,6 +131,8 @@ class CodecLightningModule(pl.LightningModule):
                 vq_full_commit_loss=deccfg.vq_full_commit_loss,
                 codebook_size=deccfg.codebook_size,
                 codebook_dim=deccfg.codebook_dim,
+                norm_eps=deccfg.norm_eps,
+                attn_window_size=deccfg.attn_window_size,
         )
 
         mpdcfg = self.cfg.model.mpd

@@ -73,7 +73,7 @@ def WNConvTranspose1d(*args, causal=False, **kwargs):
     return weight_norm(nn.ConvTranspose1d(*args, **kwargs))
 
 class RMSNorm(torch.nn.Module):
-    def __init__(self, dim: int, eps: float = 1e-6):
+    def __init__(self, dim: int, eps: float = 1e-2):
         super().__init__()
         self.eps = eps
         self.weight = nn.Parameter(torch.ones(dim))
@@ -250,7 +250,7 @@ def apply_rotary_pos_emb(q, k, cos, sin, position_ids, unsqueeze_dim=1):
     return q_embed, k_embed
 
 class SelfAttention(nn.Module):
-    def __init__(self, dim, n_head=8, dropout=0.1, max_position_embeddings=2048, original_max_position_embeddings=4096, base=10000, causal: bool = False):
+    def __init__(self, dim, window_size=(64, 64), n_head=8, dropout=0.1, max_position_embeddings=2048, base=10000, causal: bool = False, norm_eps: float = 1e-2):
         super().__init__()
         self.n_head = n_head
         self.head_dim = dim // n_head
@@ -258,9 +258,10 @@ class SelfAttention(nn.Module):
         
         self.qkv_proj = nn.Linear(dim, 3 * dim, bias=False)
         self.out_proj = nn.Linear(dim, dim, bias=False)
-        # self.q_norm = RMSNorm(self.head_dim)
-        # self.k_norm = RMSNorm(self.head_dim)
+        self.q_norm = RMSNorm(self.head_dim, eps=norm_eps)
+        self.k_norm = RMSNorm(self.head_dim, eps=norm_eps)
         self.dropout = dropout
+        self.window_size = window_size
         # self.rotary_emb = LlamaDynamicYaRNScaledRotaryEmbedding(self.head_dim, 
         #                                 max_position_embeddings=max_position_embeddings, 
         #                                 base=base, 
@@ -306,7 +307,7 @@ class SelfAttention(nn.Module):
                         start_offsets = torch.repeat_interleave(cu_seqlens[:-1].to(torch.long), lengths)
                         token_idx = torch.arange(total, device=qkv.device, dtype=torch.long)
                         position_ids = token_idx - start_offsets  # [total]
-                    q, k = qkv[:, 0], qkv[:, 1]
+                    q, k = self.q_norm(qkv[:, 0]), self.k_norm(qkv[:, 1])
                     q, k = apply_rotary_pos_emb(q, k, cos, sin, position_ids=position_ids, unsqueeze_dim=1)
                     qkv = torch.stack((q, k, qkv[:, 2]), dim=1)
 
@@ -316,8 +317,9 @@ class SelfAttention(nn.Module):
                 cu_seqlens,
                 max_seqlen,
                 dropout_p=self.dropout if self.training else 0.0,
-                softmax_scale=None,
+                softmax_scale=self.head_dim ** -0.5,
                 causal=self.causal,
+                window_size=self.window_size,
             )  # [total, n_head, head_dim]
 
             # Merge heads, out proj on packed
@@ -333,7 +335,7 @@ class SelfAttention(nn.Module):
 
         # Apply RoPE on qkv packed (dense)
         cos, sin = self.rotary_emb(qkv, seq_len=T)
-        q, k = qkv[:, :, 0], qkv[:, :, 1]
+        q, k = self.q_norm(qkv[:, :, 0]), self.k_norm(qkv[:, :, 1])
         if position_ids is None:
             position_ids = torch.arange(T, device=x.device, dtype=torch.long).unsqueeze(0).expand(B, T)
         q, k = apply_rotary_pos_emb(q, k, cos, sin, position_ids=position_ids, unsqueeze_dim=2)
@@ -343,8 +345,9 @@ class SelfAttention(nn.Module):
         out = self.flash_attn_qkvpacked_func(
             qkv,
             dropout_p=self.dropout if self.training else 0.0,
-            softmax_scale=None,
+            softmax_scale=self.head_dim ** -0.5,
             causal=self.causal,
+            window_size=self.window_size,
         )  # [B, T, n_head, head_dim]
 
         out = out.reshape(B, T, C)
@@ -353,13 +356,12 @@ class SelfAttention(nn.Module):
         return out
 
 class LayerScale(nn.Module):
-    def __init__(self, d_model: int, gamma_init: float = 1e-5):
+    def __init__(self, d_model: int, gamma_init: float = 1.0):
         super().__init__()
         self.scale = nn.Parameter(torch.ones(d_model) * gamma_init)
 
     def forward(self, x):
-        scale = self.scale.view(1, 1, -1)
-        return x * scale
+        return x * self.scale
 
 class FeedForward(nn.Module):
     def __init__(self, dim, mult=4, dropout=0.1):
@@ -379,7 +381,7 @@ class FeedForward(nn.Module):
         return out
 
 class ConformerConvModule(nn.Module):
-    def __init__(self, dim, kernel_size=31, dropout=0.1, causal: bool = False):
+    def __init__(self, dim, kernel_size=31, dropout=0.1, causal: bool = False, norm_eps: float = 1e-2):
         super().__init__()
         self.pointwise_conv1 = nn.Linear(dim, 2 * dim) #nn.Conv1d(dim, 2 * dim, kernel_size=1)
         self.glu = nn.GLU(dim=-1)
@@ -387,7 +389,7 @@ class ConformerConvModule(nn.Module):
             self.depthwise_conv = CausalConv1d(dim, dim, kernel_size=kernel_size, groups=dim)
         else:
             self.depthwise_conv = nn.Conv1d(dim, dim, kernel_size=kernel_size, groups=dim, padding='same')
-        self.conv_norm = RMSNorm(dim)
+        self.conv_norm = RMSNorm(dim, eps=norm_eps)
         self.silu = nn.SiLU()
         self.pointwise_conv2 = nn.Linear(dim, dim) #nn.Conv1d(dim, dim, kernel_size=1)
         self.dropout = nn.Dropout(dropout)
@@ -404,30 +406,31 @@ class ConformerConvModule(nn.Module):
         return out
 
 class TransformerLayer(nn.Module):
-    def __init__(self, dim, n_head=8, ffn_mult=4, dropout=0.1, max_position_embeddings=2048, original_max_position_embeddings=4096, base=10000, causal: bool = False):
+    def __init__(self, dim, n_head=8, ffn_mult=4, dropout=0.1, max_position_embeddings=2048, base=10000, causal: bool = False, attn_window_size=(64, 64), norm_eps: float = 1e-2):
         super().__init__()
         self.ffn1 = FeedForward(dim, mult=ffn_mult, dropout=dropout)
-        self.self_attn = SelfAttention(dim, n_head=n_head, dropout=dropout, max_position_embeddings=max_position_embeddings, original_max_position_embeddings=original_max_position_embeddings, base=base, causal=causal)
-
-        self.ffn1_norm_in = RMSNorm(dim)
-        self.attn_norm_in = RMSNorm(dim)
-        self.dropout = nn.Dropout(dropout)
+        self.self_attn = SelfAttention(dim, window_size=attn_window_size, n_head=n_head, dropout=dropout, max_position_embeddings=max_position_embeddings, base=base, causal=causal, norm_eps=norm_eps)
+        self.attn_scale = LayerScale(dim, gamma_init=1e-5)
+        self.ffn_scale = LayerScale(dim, gamma_init=1e-5)
+        self.ffn1_norm_in = RMSNorm(dim, eps=norm_eps)
+        self.attn_norm_in = RMSNorm(dim, eps=norm_eps)
+        # self.dropout = nn.Dropout(dropout)
 
     def forward(self, x, position_ids=None, cu_seqlens: torch.Tensor = None, max_seqlen: int = None):
-        x = x + self.dropout(self.self_attn(self.attn_norm_in(x), position_ids=position_ids, cu_seqlens=cu_seqlens, max_seqlen=max_seqlen))
+        x = x + self.attn_scale(self.self_attn(self.attn_norm_in(x), position_ids=position_ids, cu_seqlens=cu_seqlens, max_seqlen=max_seqlen))
 
-        x = x + self.ffn1(self.ffn1_norm_in(x))
+        x = x + self.ffn_scale(self.ffn1(self.ffn1_norm_in(x)))
 
         return x
 
 class Transformer(nn.Module):
-    def __init__(self, dim, n_layers, n_head=8, ffn_mult=4, dropout=0.1, max_position_embeddings=2048, original_max_position_embeddings=4096, base=10000.0, causal: bool = False):
+    def __init__(self, dim, n_layers, n_head=8, ffn_mult=4, dropout=0.1, max_position_embeddings=2048, base=10000.0, causal: bool = False, attn_window_size=(64, 64), norm_eps: float = 1e-2):
         super().__init__()
         self.layers = nn.ModuleList([
-            TransformerLayer(dim, n_head, ffn_mult, dropout, max_position_embeddings=max_position_embeddings, original_max_position_embeddings=original_max_position_embeddings, base=base, causal=causal)
+            TransformerLayer(dim, n_head, ffn_mult, dropout, max_position_embeddings=max_position_embeddings, base=base, causal=causal, attn_window_size=attn_window_size, norm_eps=norm_eps)
             for _ in range(n_layers)
         ])
-        self.norm = RMSNorm(dim)
+        self.norm = RMSNorm(dim, eps=norm_eps)
 
     def forward(self, x, position_ids=None, cu_seqlens: torch.Tensor = None, max_seqlen: int = None):
         for layer in self.layers:
@@ -518,67 +521,22 @@ class ConvSubsample2D(nn.Module):
         x = self.norm(x)
         return x
 
-# class ConvDownsample(nn.Module):
-#     def __init__(self, in_channels, out_channels, activation=nn.SiLU(), causal=False):
-#         super().__init__()
-#         self.causal = causal
-#         if causal:
-#             self.conv1 = CausalConv1d(in_channels, out_channels, kernel_size=3, stride=1, padding=1)
-#             self.conv2 = CausalConv1d(out_channels, out_channels, kernel_size=3, stride=2, padding=1)
-#         else:
-#             self.conv1 = nn.Conv1d(in_channels, out_channels, kernel_size=3, stride=1, padding=1)
-#             self.conv2 = nn.Conv1d(out_channels, out_channels, kernel_size=3, stride=2, padding=1)
-#         self.activation = activation
-#         self.norm = nn.LayerNorm(out_channels)
-    
-#     def forward(self, x):
-#         x = x.transpose(1, 2)
-#         x = self.conv1(x)
-#         x = self.conv2(x)
-#         x = self.activation(x)
-#         x = x.transpose(1, 2)
-#         x = self.norm(x)
-#         return x
-    
-# class ConvUpsample(nn.Module):
-#     def __init__(self, in_channels, out_channels, activation=nn.SiLU(), causal=False):
-#         super().__init__()
-#         self.causal = causal
-#         if self.causal:
-#             self.conv1 = CausalConv1d(in_channels, in_channels, kernel_size=3, stride=1, padding=1)
-#             self.conv2 = CausalConvTranspose1d(in_channels, out_channels, kernel_size=3, stride=2)
-#         else:
-#             self.conv1 = nn.Conv1d(in_channels, in_channels, kernel_size=3, stride=1, padding=1)
-#             self.conv2 = nn.ConvTranspose1d(in_channels, out_channels, kernel_size=3, stride=2, padding=1, output_padding=1)
-#         self.activation = activation
-#         self.norm = nn.LayerNorm(out_channels)
-    
-#     def forward(self, x):
-#         x = x.transpose(1, 2)
-#         x = self.conv1(x)
-#         x = self.conv2(x)
-#         x = self.activation(x)
-#         x = x.transpose(1, 2)
-#         x = self.norm(x)
-#         return x
-        
 class ConvDownsample(nn.Module):
-    def __init__(self, in_channels, out_channels, activation=nn.SiLU(), causal=False):
+    def __init__(self, in_channels, out_channels, activation=nn.SiLU(), causal=False, norm_eps: float = 1e-2):
         super().__init__()
         self.causal = causal
         if causal:
-            self.conv1 = CausalConv1d(in_channels, out_channels, kernel_size=3, stride=2, padding=1)
+            self.conv1 = CausalConv1d(in_channels, out_channels, kernel_size=3, stride=1, padding=1)
             self.conv2 = CausalConv1d(out_channels, out_channels, kernel_size=3, stride=2, padding=1)
         else:
-            self.conv1 = nn.Conv1d(in_channels, out_channels, kernel_size=3, stride=2, padding=1)
+            self.conv1 = nn.Conv1d(in_channels, out_channels, kernel_size=3, stride=1, padding=1)
             self.conv2 = nn.Conv1d(out_channels, out_channels, kernel_size=3, stride=2, padding=1)
         self.activation = activation
-        self.norm = RMSNorm(out_channels)
+        self.norm = RMSNorm(out_channels, eps=norm_eps)
     
     def forward(self, x):
         x = x.transpose(1, 2)
         x = self.conv1(x)
-        x = self.activation(x)
         x = self.conv2(x)
         x = self.activation(x)
         x = x.transpose(1, 2)
@@ -586,27 +544,72 @@ class ConvDownsample(nn.Module):
         return x
     
 class ConvUpsample(nn.Module):
-    def __init__(self, in_channels, out_channels, activation=nn.SiLU(), causal=False):
+    def __init__(self, in_channels, out_channels, activation=nn.SiLU(), causal=False, norm_eps: float = 1e-2):
         super().__init__()
         self.causal = causal
         if self.causal:
             self.conv1 = CausalConvTranspose1d(in_channels, in_channels, kernel_size=3, stride=2)
-            self.conv2 = CausalConvTranspose1d(in_channels, out_channels, kernel_size=3, stride=2)
+            self.conv2 = CausalConvTranspose1d(in_channels, out_channels, kernel_size=3, stride=1)
         else:
             self.conv1 = nn.ConvTranspose1d(in_channels, in_channels, kernel_size=3, stride=2, padding=1, output_padding=1)
-            self.conv2 = nn.ConvTranspose1d(in_channels, out_channels, kernel_size=3, stride=2, padding=1, output_padding=1)
+            self.conv2 = nn.ConvTranspose1d(in_channels, out_channels, kernel_size=3, stride=1, padding=1)
         self.activation = activation
-        self.norm = RMSNorm(out_channels)
+        self.norm = RMSNorm(out_channels, eps=norm_eps)
     
     def forward(self, x):
         x = x.transpose(1, 2)
         x = self.conv1(x)
-        x = self.activation(x)
         x = self.conv2(x)
         x = self.activation(x)
         x = x.transpose(1, 2)
         x = self.norm(x)
         return x
+        
+# class ConvDownsample(nn.Module):
+#     def __init__(self, in_channels, out_channels, activation=nn.SiLU(), causal=False, norm_eps: float = 1e-2):
+#         super().__init__()
+#         self.causal = causal
+#         if causal:
+#             self.conv1 = CausalConv1d(in_channels, out_channels, kernel_size=3, stride=2, padding=1)
+#             self.conv2 = CausalConv1d(out_channels, out_channels, kernel_size=3, stride=2, padding=1)
+#         else:
+#             self.conv1 = nn.Conv1d(in_channels, out_channels, kernel_size=3, stride=2, padding=1)
+#             self.conv2 = nn.Conv1d(out_channels, out_channels, kernel_size=3, stride=2, padding=1)
+#         self.activation = activation
+#         self.norm = RMSNorm(out_channels, eps=norm_eps)
+    
+#     def forward(self, x):
+#         x = x.transpose(1, 2)
+#         x = self.conv1(x)
+#         x = self.activation(x)
+#         x = self.conv2(x)
+#         x = self.activation(x)
+#         x = x.transpose(1, 2)
+#         x = self.norm(x)
+#         return x
+    
+# class ConvUpsample(nn.Module):
+#     def __init__(self, in_channels, out_channels, activation=nn.SiLU(), causal=False, norm_eps: float = 1e-2):
+#         super().__init__()
+#         self.causal = causal
+#         if self.causal:
+#             self.conv1 = CausalConvTranspose1d(in_channels, in_channels, kernel_size=3, stride=2)
+#             self.conv2 = CausalConvTranspose1d(in_channels, out_channels, kernel_size=3, stride=2)
+#         else:
+#             self.conv1 = nn.ConvTranspose1d(in_channels, in_channels, kernel_size=3, stride=2, padding=1, output_padding=1)
+#             self.conv2 = nn.ConvTranspose1d(in_channels, out_channels, kernel_size=3, stride=2, padding=1, output_padding=1)
+#         self.activation = activation
+#         self.norm = RMSNorm(out_channels, eps=norm_eps)
+    
+#     def forward(self, x):
+#         x = x.transpose(1, 2)
+#         x = self.conv1(x)
+#         x = self.activation(x)
+#         x = self.conv2(x)
+#         x = self.activation(x)
+#         x = x.transpose(1, 2)
+#         x = self.norm(x)
+#         return x
         
 class Upsample(nn.Module):
     def __init__(self, in_channels, out_channels, stride=2, activation=nn.SiLU()):
@@ -650,6 +653,7 @@ class ConvFeatureEncoder(nn.Module):
         conv_kernel: Sequence[int] = (10, 3, 3, 3, 3, 2),
         conv_stride: Sequence[int] = (5, 2, 2, 2, 2, 2),
         activation: nn.Module = nn.SiLU,
+        norm_eps: float = 1e-2,
     ):
         super().__init__()
         assert len(conv_kernel) == len(conv_stride)
@@ -670,7 +674,7 @@ class ConvFeatureEncoder(nn.Module):
 
         for c, k, s in zip(conv_dims, conv_kernel, conv_stride):
             layers.append(nn.Conv1d(prev_c, c, kernel_size=k, stride=s, bias=False, padding=(k-1)//2))
-            norms.append(RMSNorm(c))
+            norms.append(RMSNorm(c, eps=norm_eps))
             prev_c = c
 
         self.convs = nn.ModuleList(layers)

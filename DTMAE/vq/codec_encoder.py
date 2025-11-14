@@ -59,10 +59,11 @@ class TransformerEncoderSTFT(nn.Module):
                  ffn_mult=4,
                  dropout=0.1,
                  max_position_embeddings=2048,
-                 original_max_position_embeddings=4096,
                  base=10000.0,
                  causal=False,
-                 out_channels=1024):
+                 out_channels=1024,
+                 norm_eps: float = 1e-2,
+                 attn_window_size=(64, 64)):
         super().__init__()
         self.hop_length = hop_length
         self.n_fft = n_fft
@@ -75,7 +76,7 @@ class TransformerEncoderSTFT(nn.Module):
         )
 
         stft_dim = n_fft // 2 + 1
-        self.conv = ConvDownsample(2 * stft_dim, dim)
+        self.conv = ConvDownsample(2 * stft_dim, dim, norm_eps=norm_eps)
 
         if n_layers_level1 > 0:
             self.transformer_backbone_level1 = Transformer(
@@ -85,9 +86,10 @@ class TransformerEncoderSTFT(nn.Module):
                     ffn_mult=ffn_mult,
                     dropout=dropout,
                     max_position_embeddings=max_position_embeddings,
-                    original_max_position_embeddings=original_max_position_embeddings,
                     base=base,
                     causal=causal,
+                    attn_window_size=attn_window_size,
+                    norm_eps=norm_eps,
                 )
         else:
             self.transformer_backbone_level1 = nn.Identity()
@@ -99,9 +101,10 @@ class TransformerEncoderSTFT(nn.Module):
                 ffn_mult=ffn_mult,
                 dropout=dropout,
                 max_position_embeddings=int(max_position_embeddings*r),
-                original_max_position_embeddings=int(original_max_position_embeddings*r),
                 base=base,
                 causal=causal,
+                attn_window_size=attn_window_size,
+                norm_eps=norm_eps,
             )
         else:
             self.transformer_backbone_level2 = nn.Identity()

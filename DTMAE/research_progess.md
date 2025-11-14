@@ -123,3 +123,7 @@ PLE achieves state-of-the-art performance with negligible computational overhead
     *   Upsampling with `<MASK>` tokens?
     *   Level 1, Level 2 -> Acoustic, Semantic levels?
     *   Path Length Equalization (PLE)?
+
+### ONGOING work
+*   5.2.1: VFR implementation - currently supported via tau estimation in batch-topk manner, and the training efficiency remains by utilizing varlen kernel of flash attention-v2.
+    **problem** current way of estimating tau to get desired global reduction ratio(r) is not stable. ex. if we target r=0.5, estimate the tau based on training data, and using estimated tau gives r=0.6(over-reduction) on the test data. It seems quite random.

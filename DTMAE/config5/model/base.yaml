@@ -1,33 +1,33 @@
 codec_encoder:
-  hop_length: 40 #256
-  n_fft: 160 #1024
-  window_size: 160 #1024
+  hop_length: 80 #256
+  n_fft: 320 #1024
+  window_size: 320 #1024
   dim: 256
   n_layers_level1: 6
   n_layers_level2: 12
   r: 0.5
   n_head: 4
   ffn_mult: 4
-  dropout: 0.1
+  dropout: 0
   max_position_embeddings: 8192
   base: 10000
   causal: False
   out_channels: 256
-  norm_eps: 1e-6
-  attn_window_size: [-1, -1]
+  norm_eps: 1e-2
+  attn_window_size: [64, 64]
 
 codec_decoder:
   in_channels: 256
-  hop_length: 40 #256
-  n_fft: 160 #1024
-  window_size: 160 #1024
+  hop_length: 80 #256
+  n_fft: 320 #1024
+  window_size: 320 #1024
   dim: 256
   n_layers_level1: 6
   n_layers_level2: 12
   r: 0.5
   n_head: 4
   ffn_mult: 4
-  dropout: 0.1
+  dropout: 0
   max_position_embeddings: 8192
   base: 10000
   causal: False
@@ -39,8 +39,8 @@ codec_decoder:
   vq_full_commit_loss: False
   codebook_size: 16384 # 1024
   codebook_dim: 8
-  norm_eps: 1e-6
-  attn_window_size: [-1, -1]
+  norm_eps: 1e-2
+  attn_window_size: [64, 64]
 
 resampler:
   use_dtp: True

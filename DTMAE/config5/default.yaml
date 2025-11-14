@@ -3,12 +3,12 @@ defaults:
   - dataset: default
   - model: base
   - train: default
-name: base-transformer-bs64-600k-100hz-tome50hzPLEBatchTopk-2stage-ropebase10kposids-window128-qknorm-lneps1e2-layerscale
+name: base-transformer-bs64-600k-100hz-tome50hzPLEBatchTopk-2stage-ropebase10kposids-window128-qknorm-lneps1e2-layerscale1-nodropout
 log_dir: pl_log
 debug: false
 resume_ckpt: null
 wandb_id: null
-ckpt: '/home/hoyso/projects/AudioTokenization/DTMAE/outputs/2025-11-10/04-15-39/pl_log/last.ckpt' # infer
+ckpt: null # infer
 input_dir: null # infer
 output_dir: null # infer
 hydra:

@@ -36,8 +36,8 @@ def train(cfg):
         logger = pl.loggers.WandbLogger(project='Audio-Tokenizer', name=cfg.name, save_dir=cfg.log_dir, id=cfg.wandb_id),
     )
     trainer.fit(lightning_module, datamodule=datamodule, ckpt_path=cfg.resume_ckpt)
-    trainer.validate(lightning_module, datamodule=datamodule)
-    trainer.test(lightning_module, datamodule=datamodule)
+    trainer.validate(lightning_module, datamodule=datamodule, ckpt_path=cfg.ckpt)
+    trainer.test(lightning_module, datamodule=datamodule, ckpt_path=cfg.ckpt)
     print(f'Training ends, best score: {checkpoint_callback.best_model_score}, ckpt path: {checkpoint_callback.best_model_path}')
     
 if __name__ == '__main__':
