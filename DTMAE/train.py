@@ -30,14 +30,20 @@ def train(cfg):
     
     trainer = pl.Trainer(
         **cfg.train.trainer,
-        strategy=DDPStrategy(find_unused_parameters=True),
+        # strategy=DDPStrategy(find_unused_parameters=True),
         callbacks=callbacks,
         limit_train_batches=1.0 if not cfg.debug else 0.001,
         logger = pl.loggers.WandbLogger(project='Audio-Tokenizer', name=cfg.name, save_dir=cfg.log_dir, id=cfg.wandb_id),
     )
-    trainer.fit(lightning_module, datamodule=datamodule, ckpt_path=cfg.resume_ckpt)
-    trainer.validate(lightning_module, datamodule=datamodule, ckpt_path=cfg.ckpt)
-    trainer.test(lightning_module, datamodule=datamodule, ckpt_path=cfg.ckpt)
+    # trainer.fit(lightning_module, datamodule=datamodule, ckpt_path=cfg.resume_ckpt)
+    if cfg.ckpt is not None:
+        lightning_module = CodecLightningModule.load_from_checkpoint(cfg.ckpt)
+        lightning_module.eval()
+    print(lightning_module.dtp.log_tau)
+    # print(torch.tensor(torch.log(torch.tensor(0.09))))
+    # lightning_module.dtp.log_tau.data = torch.tensor(torch.log(torch.tensor(0.09)))
+    trainer.validate(lightning_module, datamodule=datamodule)
+    trainer.test(lightning_module, datamodule=datamodule)
     print(f'Training ends, best score: {checkpoint_callback.best_model_score}, ckpt path: {checkpoint_callback.best_model_path}')
     
 if __name__ == '__main__':

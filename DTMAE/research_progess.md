@@ -127,3 +127,6 @@ PLE achieves state-of-the-art performance with negligible computational overhead
 ### ONGOING work
 *   5.2.1: VFR implementation - currently supported via tau estimation in batch-topk manner, and the training efficiency remains by utilizing varlen kernel of flash attention-v2.
     **problem** current way of estimating tau to get desired global reduction ratio(r) is not stable. ex. if we target r=0.5, estimate the tau based on training data, and using estimated tau gives r=0.6(over-reduction) on the test data. It seems quite random.
+    **update** almost done. we use robbins-monro algorithm to estimate tau during training for every algorithm, and just adjust a bit on test-time to match the target r. everything seems alright now.
+
+*   5.1: This part is the most important to-do. we haven't done anything yet.

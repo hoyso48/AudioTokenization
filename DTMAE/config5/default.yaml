@@ -8,7 +8,7 @@ log_dir: pl_log
 debug: false
 resume_ckpt: null
 wandb_id: null
-ckpt: null # infer
+ckpt: '/home/hoyso/projects/AudioTokenization/DTMAE/outputs/2025-11-16/19-45-04/pl_log/last.ckpt' # infer
 input_dir: null # infer
 output_dir: null # infer
 hydra:

@@ -308,6 +308,8 @@ class SelfAttention(nn.Module):
                         token_idx = torch.arange(total, device=qkv.device, dtype=torch.long)
                         position_ids = token_idx - start_offsets  # [total]
                     q, k = self.q_norm(qkv[:, 0]), self.k_norm(qkv[:, 1])
+                    # q = qkv[:, 0]
+                    # k = qkv[:, 1]
                     q, k = apply_rotary_pos_emb(q, k, cos, sin, position_ids=position_ids, unsqueeze_dim=1)
                     qkv = torch.stack((q, k, qkv[:, 2]), dim=1)
 
@@ -336,6 +338,8 @@ class SelfAttention(nn.Module):
         # Apply RoPE on qkv packed (dense)
         cos, sin = self.rotary_emb(qkv, seq_len=T)
         q, k = self.q_norm(qkv[:, :, 0]), self.k_norm(qkv[:, :, 1])
+        # q = qkv[:, :, 0]
+        # k = qkv[:, :, 1]
         if position_ids is None:
             position_ids = torch.arange(T, device=x.device, dtype=torch.long).unsqueeze(0).expand(B, T)
         q, k = apply_rotary_pos_emb(q, k, cos, sin, position_ids=position_ids, unsqueeze_dim=2)
@@ -410,8 +414,8 @@ class TransformerLayer(nn.Module):
         super().__init__()
         self.ffn1 = FeedForward(dim, mult=ffn_mult, dropout=dropout)
         self.self_attn = SelfAttention(dim, window_size=attn_window_size, n_head=n_head, dropout=dropout, max_position_embeddings=max_position_embeddings, base=base, causal=causal, norm_eps=norm_eps)
-        self.attn_scale = LayerScale(dim, gamma_init=1e-5)
-        self.ffn_scale = LayerScale(dim, gamma_init=1e-5)
+        self.attn_scale = LayerScale(dim, gamma_init=1.0)
+        self.ffn_scale = LayerScale(dim, gamma_init=1.0)
         self.ffn1_norm_in = RMSNorm(dim, eps=norm_eps)
         self.attn_norm_in = RMSNorm(dim, eps=norm_eps)
         # self.dropout = nn.Dropout(dropout)

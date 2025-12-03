@@ -198,10 +198,26 @@ class CodecLightningModule(pl.LightningModule):
         vq_emb = self.encoder(wav.unsqueeze(1), level=1)
 
         if self.use_dtp:
-            mask, avg_r, tau_used = self.dtp(vq_emb)
+            # Modified for DifferentiablePLE compatibility
+            # Check if dtp returns 4 values (including aux_loss) or 3 values
+            dtp_out = self.dtp(vq_emb)
+            if len(dtp_out) == 4:
+                mask, avg_r, tau_used, aux_loss = dtp_out
+            else:
+                mask, avg_r, tau_used = dtp_out
+                aux_loss = 0.0
+            
+            # Original code:
+            # mask, avg_r, tau_used = self.dtp(vq_emb)
+            
             vq_emb, position_ids, cu_seqlens, max_seqlen = self.downsampler(vq_emb, mask)
         else:
+            # Original code:
+            # cu_seqlens = max_seqlen = avg_r = tau_used = None
+            # Modified for consistency
             cu_seqlens = max_seqlen = avg_r = tau_used = None
+            aux_loss = 0.0
+            
             vq_emb = self.downsampler(vq_emb)
         vq_emb = self.encoder(vq_emb, position_ids=position_ids, cu_seqlens=cu_seqlens, max_seqlen=max_seqlen, level=2)
         vq_post_emb, vq_code, vq_loss = self.decoder(vq_emb, vq=True)
@@ -220,6 +236,7 @@ class CodecLightningModule(pl.LightningModule):
             'vq_code': vq_code,
             'avg_r': avg_r,
             'tau_used': tau_used,
+            'aux_loss': aux_loss, # Added for DifferentiablePLE
         }
         return output
     
@@ -324,6 +341,14 @@ class CodecLightningModule(pl.LightningModule):
         if 'entropy_loss' in output:
             gen_loss += output['entropy_loss']
             output_dict['entropy_loss'] = output['entropy_loss']
+
+        # Added for DifferentiablePLE: Auxiliary Loss (MSE for target r)
+        # Typically weight this loss appropriately (e.g., 1.0 or 10.0) depending on scale
+        if 'aux_loss' in output and output['aux_loss'] != 0.0:
+             # Weight for aux loss (can be moved to config later)
+             lambda_aux = 30.0
+             gen_loss += output['aux_loss'] * lambda_aux
+             output_dict['aux_loss'] = output['aux_loss']
 
         # Perceptual loss
         # output_dict['perceptual_se_loss_l2'] = perceptual_se_loss_l2
