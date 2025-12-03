@@ -77,5 +77,22 @@ wget -c "https://huggingface.co/datasets/leo19941227/fluent_speech_commands/reso
 echo "📦 Extracting Fluent Speech Commands..."
 tar -zxf fluent.tar.gz
 
+# ==========================================
+# 5. TIMIT (PR) - Manual Step
+# ==========================================
+cat <<'EOF'
+⚠️  [5/5] TIMIT requires an LDC license and cannot be auto-downloaded.
+    1. Visit https://catalog.ldc.upenn.edu/LDC93S1 to obtain the corpus.
+    2. After downloading, extract it under: /home/hoyso/projects/datasets/TIMIT
+       Expected layout:
+         /home/hoyso/projects/datasets/TIMIT
+           ├── TRAIN/...
+           └── TEST/...
+    3. When running SuperbPR, set:
+         --prepare_data.dataset_root /home/hoyso/projects/datasets/TIMIT
+EOF
+
+rclone copy hoyso48:TIMIT "$DATA_ROOT/TIMIT"
+
 echo "✅ All public datasets downloaded!"
 echo "⚠️  NOTE: IEMOCAP (for ER task) requires manual request from https://sail.usc.edu/iemocap/"
