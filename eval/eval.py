@@ -7,6 +7,13 @@ import argparse
 from pathlib import Path
 from typing import List, Optional, Tuple, Dict, Iterable
 
+PROJECT_ROOT = Path(__file__).resolve().parent.parent
+DTMAE_ROOT = PROJECT_ROOT / "DTMAE"
+for path in (PROJECT_ROOT, DTMAE_ROOT):
+    path_str = str(path)
+    if path_str not in sys.path:
+        sys.path.insert(0, path_str)
+
 import torch
 import torchaudio
 import numpy as np
@@ -24,7 +31,7 @@ from pesq import NoUtterancesError
 
 from transformers import Wav2Vec2Processor, HubertForCTC
 
-from lightning_module import (
+from DTMAE.lightning_module import (
     CodecLightningModule,
     CodebookPerplexity,
     CodebookUtilization,
