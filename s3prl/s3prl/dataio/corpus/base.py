@@ -28,7 +28,7 @@ class Corpus:
         data_points = {}
         for _, row in df.iterrows():
             data_point = dict()
-            for name, value in row.iteritems():
+            for name, value in row.items():
                 data_point[name] = value
             unique_name = unique_name_fn(data_point)
             data_points[unique_name] = data_point
