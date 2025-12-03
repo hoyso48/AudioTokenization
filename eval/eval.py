@@ -6,10 +6,16 @@ import math
 import argparse
 from pathlib import Path
 from typing import List, Optional, Tuple, Dict, Iterable
+from contextlib import nullcontext
 
-PROJECT_ROOT = Path(__file__).resolve().parent.parent
+EVAL_ROOT = Path(__file__).resolve().parent
+PROJECT_ROOT = EVAL_ROOT.parent
 DTMAE_ROOT = PROJECT_ROOT / "DTMAE"
-for path in (PROJECT_ROOT, DTMAE_ROOT):
+SPEAKER_VERIFICATION_ROOT = EVAL_ROOT / "speaker_verification"
+FAIRSEQ_PYTHON_ROOT = EVAL_ROOT / "fairseq"
+S3PRL_ROOT = EVAL_ROOT / "s3prl"
+
+for path in (FAIRSEQ_PYTHON_ROOT, S3PRL_ROOT, SPEAKER_VERIFICATION_ROOT, EVAL_ROOT, PROJECT_ROOT, DTMAE_ROOT):
     path_str = str(path)
     if path_str not in sys.path:
         sys.path.insert(0, path_str)
@@ -27,8 +33,6 @@ from torchmetrics.audio import (
     ScaleInvariantSignalNoiseRatio,
     ScaleInvariantSignalDistortionRatio,
 )
-from pesq import NoUtterancesError
-
 from transformers import Wav2Vec2Processor, HubertForCTC
 
 from DTMAE.lightning_module import (
@@ -37,11 +41,10 @@ from DTMAE.lightning_module import (
     CodebookUtilization,
 )
 
-# jiwer is preferred for WER; gracefully fallback if unavailable
-try:
-    from jiwer import wer as jiwer_wer  # type: ignore
-except Exception:
-    jiwer_wer = None
+from jiwer import wer as jiwer_wer  # type: ignore
+from verification import init_model as init_spk_model
+from UTMOS import UTMOSScore  # type: ignore
+from mel_cepstral_distance import compare_audio_files as mcd_compare
 
 
 ALLOWED_AUDIO_EXTS = {".wav", ".flac"}
@@ -91,14 +94,11 @@ def parse_input_paths(input_path: str) -> List[str]:
 
 def resolve_with_dataset_roots(paths: List[str], cfg) -> List[str]:
     roots: List[Path] = []
-    try:
-        roots.append(Path(cfg.preprocess.datasets.LibriSpeech.root))
-    except Exception:
-        pass
-    try:
-        roots.append(Path(cfg.preprocess.datasets.LibriTTS.root))
-    except Exception:
-        pass
+    datasets_cfg = cfg.preprocess.datasets
+    if hasattr(datasets_cfg, "LibriSpeech"):
+        roots.append(Path(datasets_cfg.LibriSpeech.root))
+    if hasattr(datasets_cfg, "LibriTTS"):
+        roots.append(Path(datasets_cfg.LibriTTS.root))
     resolved: List[str] = []
     for p in paths:
         pp = Path(p)
@@ -189,27 +189,13 @@ def compute_pair_metrics(gt_wav: torch.Tensor, pred_wav: torch.Tensor,
     stoi_metric.update(pr.unsqueeze(0), gt.unsqueeze(0))
     stoi_val = float(stoi_metric.compute().item())
 
-    try:
-        pesq_wb_metric.update(pr.unsqueeze(0), gt.unsqueeze(0))
-        pesq_wb_val = float(pesq_wb_metric.compute().item())
-    except NoUtterancesError as e:
-        print(f"[Warning] PESQ-WB utterance error for {pred_path}: {e}")
-        pesq_wb_val = None
-    except Exception as e:
-        print(f"[Error] PESQ-WB compute failed for {pred_path}: {e}")
-        pesq_wb_val = None
+    pesq_wb_metric.update(pr.unsqueeze(0), gt.unsqueeze(0))
+    pesq_wb_val = float(pesq_wb_metric.compute().item())
 
-    try:
-        pr8 = torchaudio.transforms.Resample(16000, 8000)(pr)
-        gt8 = torchaudio.transforms.Resample(16000, 8000)(gt)
-        pesq_nb_metric.update(pr8.unsqueeze(0), gt8.unsqueeze(0))
-        pesq_nb_val = float(pesq_nb_metric.compute().item())
-    except NoUtterancesError as e:
-        print(f"[Warning] PESQ-NB utterance error for {pred_path}: {e}")
-        pesq_nb_val = None
-    except Exception as e:
-        print(f"[Error] PESQ-NB compute failed for {pred_path}: {e}")
-        pesq_nb_val = None
+    pr8 = torchaudio.transforms.Resample(16000, 8000)(pr)
+    gt8 = torchaudio.transforms.Resample(16000, 8000)(gt)
+    pesq_nb_metric.update(pr8.unsqueeze(0), gt8.unsqueeze(0))
+    pesq_nb_val = float(pesq_nb_metric.compute().item())
 
     si_snr_metric.update(pr.unsqueeze(0), gt.unsqueeze(0))
     si_snr_val = float(si_snr_metric.compute().item())
@@ -219,13 +205,10 @@ def compute_pair_metrics(gt_wav: torch.Tensor, pred_wav: torch.Tensor,
 
     spk_sim_val = None
     if spk_model is not None:
-        try:
-            with torch.inference_mode():
-                emb_ref = spk_model(gt.to('cuda'))
-                emb_rec = spk_model(pr.to('cuda'))
-            spk_sim_val = float(F.cosine_similarity(emb_ref, emb_rec).mean().item())
-        except Exception as e:
-            print(f"[Error] Speaker similarity failed for {pred_path}: {e}")
+        with torch.inference_mode():
+            emb_ref = spk_model(gt.to('cuda'))
+            emb_rec = spk_model(pr.to('cuda'))
+        spk_sim_val = float(F.cosine_similarity(emb_ref, emb_rec).mean().item())
 
     return {
         "stoi": stoi_val,
@@ -344,17 +327,11 @@ def run_save_stage(args, cfg, model, input_paths: List[str], eval_dir: Path, gt_
             torchaudio.save(str(pred_16k_path), y_rec_16[0].to(torch.float32).detach().cpu(), sample_rate=16000)
 
             if vq_code is not None:
-                try:
-                    codebook_perplexity.update(vq_code.detach().cpu())
-                    codebook_utilization.update(vq_code.detach().cpu())
-                except Exception as e:
-                    print(f"[Error] Codebook metrics update failed for {src_path}: {e}")
+                codebook_perplexity.update(vq_code.detach().cpu())
+                codebook_utilization.update(vq_code.detach().cpu())
 
             if avg_sim_val is not None:
-                try:
-                    avg_sims.append(float(avg_sim_val.detach().mean().item()))
-                except Exception as e:
-                    print(f"[Error] avg_sim extraction failed for {src_path}: {e}")
+                avg_sims.append(float(avg_sim_val.detach().mean().item()))
 
             transcript_text = load_transcript_for_audio(src_path)
             transcript_path = None
@@ -381,14 +358,8 @@ def run_save_stage(args, cfg, model, input_paths: List[str], eval_dir: Path, gt_
         "codebook_utilization": None,
         "avg_sim_mean": float(np.mean(avg_sims)) if len(avg_sims) > 0 else None,
     }
-    try:
-        stats["codebook_perplexity"] = float(codebook_perplexity.compute().item())
-    except Exception as e:
-        print(f"[Error] codebook_perplexity compute failed: {e}")
-    try:
-        stats["codebook_utilization"] = float(codebook_utilization.compute().item())
-    except Exception as e:
-        print(f"[Error] codebook_utilization compute failed: {e}")
+    stats["codebook_perplexity"] = float(codebook_perplexity.compute().item())
+    stats["codebook_utilization"] = float(codebook_utilization.compute().item())
 
     with open(eval_dir / "save_stage_stats.json", "w") as f:
         json.dump(stats, f, indent=2)
@@ -400,30 +371,11 @@ def run_metrics_stage(args, manifest_path: Path, eval_dir: Path) -> Dict[str, Op
     processor = Wav2Vec2Processor.from_pretrained("facebook/hubert-large-ls960-ft")
     asr_model = HubertForCTC.from_pretrained("facebook/hubert-large-ls960-ft").to(args.device).eval()
 
-    sys.path.append(str((Path(__file__).resolve().parent / "speaker_verification")))
-    try:
-        from verification import init_model as init_spk_model
-        spk_ckpt = Path(__file__).resolve().parent / "wavlm_large_finetune.pth"
-        spk_model = init_spk_model('wavlm_large', str(spk_ckpt))
-        spk_model = spk_model.to(args.device).eval()
-    except Exception as e:
-        print(f"[Warning] Speaker model init failed: {e}")
-        spk_model = None
+    spk_ckpt = EVAL_ROOT / "wavlm_large_finetune.pth"
+    spk_model = init_spk_model('wavlm_large', str(spk_ckpt))
+    spk_model = spk_model.to(args.device).eval()
 
-    try:
-        from mel_cepstral_distance import compare_audio_files as mcd_compare
-    except Exception as e:
-        print(f"[Warning] mel_cepstral_distance unavailable: {e}")
-        mcd_compare = None
-
-    # Initialize UTMOS model (optional)
-    try:
-        # Import from local UTMOS implementation
-        from UTMOS import UTMOSScore  # type: ignore
-        utmos_model = UTMOSScore(device=args.device)
-    except Exception as e:
-        print(f"[Warning] UTMOS init failed: {e}")
-        utmos_model = None
+    utmos_model = UTMOSScore(device=args.device)
 
     stoi_vals: List[float] = []
     pesq_wb_vals: List[Optional[float]] = []
@@ -461,68 +413,42 @@ def run_metrics_stage(args, manifest_path: Path, eval_dir: Path) -> Dict[str, Op
             print(f"[Warning] Skipping entry due to missing paths: {rec}")
             continue
 
-        try:
-            gt_wav = load_audio_mono_16k(gt_path)
-            pred_wav = load_audio_mono_16k(pred_path)
-        except Exception as e:
-            print(f"[Error] Failed to load audio (gt={gt_path}, pred={pred_path}): {e}")
-            continue
+        gt_wav = load_audio_mono_16k(gt_path)
+        pred_wav = load_audio_mono_16k(pred_path)
 
         pair = compute_pair_metrics(gt_wav, pred_wav, asr_model, processor, spk_model, mcd_compare, pred_path)
 
         mcd_val = None
         if mcd_compare is not None:
-            try:
-                mcd, _ = mcd_compare(gt_path, pred_path)
-                mcd_val = float(mcd) if mcd is not None and not math.isnan(mcd) else None
-            except Exception as e:
-                print(f"[Warning] MCD failed for {pred_path}: {e}")
+            mcd, _ = mcd_compare(gt_path, pred_path)
+            mcd_val = float(mcd) if mcd is not None and not math.isnan(mcd) else None
 
         # UTMOS predicted MOS on reconstructed audio
-        utmos_val = None
-        if utmos_model is not None:
-            try:
-                # pred_wav is 1xT at 16k; send to the same device as the model
-                utmos_tensor = utmos_model.score(pred_wav.to(args.device))
-                # Score returns a tensor of shape [B]; take scalar
-                utmos_val = float(utmos_tensor.squeeze().item())
-            except Exception as e:
-                print(f"[Warning] UTMOS failed for {pred_path}: {e}")
+        utmos_tensor = utmos_model.score(pred_wav.to(args.device))
+        utmos_val = float(utmos_tensor.squeeze().item())
 
         wer_frac = None
         gt_text: Optional[str] = None
         asr_text: Optional[str] = None
         if transcript_path and Path(transcript_path).is_file():
-            try:
-                with open(transcript_path, "r") as tf:
-                    ref_line = None
-                    file_id = Path(gt_path).stem
-                    for tline in tf:
-                        if tline.startswith(file_id + " "):
-                            ref_line = tline[len(file_id) + 1 :].strip()
-                            break
-                if ref_line is not None:
-                    gt_text = ref_line
-                    inputs = processor(pred_wav.squeeze().numpy(), sampling_rate=16000, return_tensors="pt").input_values.to(args.device)
-                    with torch.inference_mode():
-                        logits = asr_model(inputs).logits
-                        predicted_ids = torch.argmax(logits, dim=-1)
-                        hyp_text = processor.decode(predicted_ids[0].detach().cpu())
-                    asr_text = hyp_text
-                    # Per-sample WER using jiwer if available
-                    if jiwer_wer is not None:
-                        try:
-                            wer_frac = float(jiwer_wer(ref_line, hyp_text))
-                        except Exception as e2:
-                            print(f"[Warning] jiwer WER failed for {pred_path}: {e2}; falling back to internal compute_wer")
-                            wer_frac = float(compute_wer(ref_line, hyp_text))
-                    else:
-                        wer_frac = float(compute_wer(ref_line, hyp_text))
-                    # Accumulate for corpus-level WER
-                    corpus_refs.append(ref_line)
-                    corpus_hyps.append(hyp_text)
-            except Exception as e:
-                print(f"[Warning] WER failed for {pred_path}: {e}")
+            with open(transcript_path, "r") as tf:
+                ref_line = None
+                file_id = Path(gt_path).stem
+                for tline in tf:
+                    if tline.startswith(file_id + " "):
+                        ref_line = tline[len(file_id) + 1 :].strip()
+                        break
+            if ref_line is not None:
+                gt_text = ref_line
+                inputs = processor(pred_wav.squeeze().numpy(), sampling_rate=16000, return_tensors="pt").input_values.to(args.device)
+                with torch.inference_mode():
+                    logits = asr_model(inputs).logits
+                    predicted_ids = torch.argmax(logits, dim=-1)
+                    hyp_text = processor.decode(predicted_ids[0].detach().cpu())
+                asr_text = hyp_text
+                wer_frac = float(jiwer_wer(ref_line, hyp_text))
+                corpus_refs.append(ref_line)
+                corpus_hyps.append(hyp_text)
 
         rec.update({
             "stoi": pair["stoi"],
@@ -561,10 +487,7 @@ def run_metrics_stage(args, manifest_path: Path, eval_dir: Path) -> Dict[str, Op
     sentence_avg_wer_frac = mean_ignore_none(wer_frac_vals)
     corpus_wer_frac: Optional[float] = None
     if len(corpus_refs) > 0 and len(corpus_refs) == len(corpus_hyps):
-        try:
-            corpus_wer_frac = float(jiwer_wer(corpus_refs, corpus_hyps))
-        except Exception as e:
-            print(f"[Warning] Corpus WER failed: {e}")
+        corpus_wer_frac = float(jiwer_wer(corpus_refs, corpus_hyps))
 
     metrics = {
         "count": int(len(updated_records)),
@@ -592,12 +515,8 @@ def load_save_stage_stats_if_any(eval_dir: Path) -> Dict[str, Optional[float]]:
     stats_path = eval_dir / "save_stage_stats.json"
     if not stats_path.is_file():
         return {}
-    try:
-        with open(stats_path, "r") as f:
-            return json.load(f)
-    except Exception as e:
-        print(f"[Warning] Failed to load save_stage_stats.json: {e}")
-        return {}
+    with open(stats_path, "r") as f:
+        return json.load(f)
 
 
 def main():
