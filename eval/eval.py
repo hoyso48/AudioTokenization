@@ -549,6 +549,7 @@ def main():
     parser = argparse.ArgumentParser(description="Evaluate BigCodec SSL with two-stage pipeline (save -> metrics). Batch size is always 1.")
     parser.add_argument("--input", type=str, required=True, help="Directory (recursive) or .txt filelist or single audio file for GT inputs")
     parser.add_argument("--run_dir", type=str, required=True, help="Run directory containing hydra/config.yaml and pl_log/last.ckpt")
+    parser.add_argument("--output_dir", type=str, default=None, help="Directory to store eval artifacts (default: <run_dir>/eval)")
     parser.add_argument("--stage", type=str, choices=["save", "metrics", "all"], default="all")
     parser.add_argument("--gt_out_dir", type=str, default=None, help="Where to save 16k WAV GTs during save stage")
     parser.add_argument("--pred_out_dir", type=str, default=None, help="Where to save 16k WAV predictions (default: run_dir/eval/pred_16k)")
@@ -580,7 +581,7 @@ def main():
     cfg = OmegaConf.load(str(cfg_path))
     cfg = apply_cfg_overrides(cfg, args.cfg_override)
 
-    eval_dir = run_dir / "eval"
+    eval_dir = Path(args.output_dir).resolve() if args.output_dir else (run_dir / "eval")
     eval_dir.mkdir(parents=True, exist_ok=True)
 
     manifest_path = Path(args.manifest) if args.manifest else (eval_dir / "manifest.jsonl")

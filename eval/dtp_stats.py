@@ -197,16 +197,20 @@ class MaskStatsAggregator:
     @staticmethod
     def _zero_runs(seq: np.ndarray) -> List[int]:
         runs: List[int] = []
-        run = 0
-        for val in seq:
-            if val:
-                if run > 0:
-                    runs.append(run)
-                    run = 0
-            else:
-                run += 1
-        if run > 0:
-            runs.append(run)
+        keep_idx = np.flatnonzero(seq)
+        if keep_idx.size == 0:
+            total = int(seq.size)
+            if total > 0:
+                runs.append(total)
+            return runs
+
+        if keep_idx.size > 1:
+            gaps = keep_idx[1:] - keep_idx[:-1] - 1
+            runs.extend(gaps.astype(int).tolist())
+
+        tail = int(seq.size - keep_idx[-1] - 1)
+        if tail > 0:
+            runs.append(tail)
         return runs
 
     def update(

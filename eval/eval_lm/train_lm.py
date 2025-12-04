@@ -17,7 +17,7 @@ import os
 import random
 from dataclasses import dataclass
 from pathlib import Path
-from typing import Callable, Dict, Optional
+from typing import Dict, Optional
 
 import numpy as np
 import torch
@@ -146,32 +146,6 @@ def build_model(model_id: str, vocab_size: int, use_bf16: bool) -> AutoModelForC
     return model
 
 
-def build_metric_fn() -> Callable:
-    def compute_metrics(eval_pred):
-        logits, labels = eval_pred
-        logits = torch.from_numpy(logits)
-        labels = torch.from_numpy(labels)
-        valid_mask = labels.ge(0)
-        total = valid_mask.sum().item()
-        if total == 0:
-            return {"accuracy": 0.0, "top5_accuracy": 0.0}
-
-        top1 = logits.argmax(dim=-1)
-        top1_correct = (top1 == labels) & valid_mask
-        acc = top1_correct.sum().item() / total
-
-        k = min(5, logits.size(-1))
-        topk = logits.topk(k, dim=-1).indices
-        target = labels.unsqueeze(-1)
-        topk_match = (topk == target)
-        top5_correct = topk_match.any(dim=-1) & valid_mask
-        top5_acc = top5_correct.sum().item() / total
-
-        return {"accuracy": acc, "top5_accuracy": top5_acc}
-
-    return compute_metrics
-
-
 def parse_args() -> argparse.Namespace:
     parser = argparse.ArgumentParser(description="Train an LM over codec indices.")
     parser.add_argument("--data_dir", type=str, required=True, help="Directory produced by extract_indices.py")
@@ -249,6 +223,17 @@ def main():
     output_dir = Path(args.output_dir).resolve() if args.output_dir else (data_dir / "lm_runs" / "qwen2p5_0p5b")
     output_dir.mkdir(parents=True, exist_ok=True)
 
+    summary = {
+        "vocab_size": vocab_size,
+        "dtp_span": dtp_span,
+        "max_trailing_zero": train_max_trailing,
+        "train_windows": datasets["train"].num_chunks,
+        "eval_windows": datasets["eval"].num_chunks,
+        "block_size": args.block_size,
+        "stride": args.stride or args.block_size,
+    }
+    print(json.dumps({"lm_setup": summary}, indent=2))
+
     model = build_model(args.model_name, vocab_size, use_bf16)
     if use_checkpointing:
         model.gradient_checkpointing_enable()
@@ -286,7 +271,6 @@ def main():
         eval_dataset=datasets["eval"],
         tokenizer=None,
         data_collator=collate,
-        compute_metrics=build_metric_fn(),
     )
 
     trainer.train(resume_from_checkpoint=args.resume_from)

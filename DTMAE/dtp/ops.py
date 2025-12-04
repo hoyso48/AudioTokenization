@@ -611,7 +611,7 @@ class _BatchSelectorBase(nn.Module):
         if N == 0:
             return mask
 
-        stride = self.max_s + 1
+        stride = max(1, self.max_s)
         idx = torch.arange(N, device=mask.device, dtype=torch.long).unsqueeze(0).expand(B, -1)
         minus_one = torch.full_like(idx, -1)
         masked_idx = torch.where(mask, idx, minus_one)
