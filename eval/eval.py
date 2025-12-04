@@ -92,6 +92,31 @@ def parse_input_paths(input_path: str) -> List[str]:
     raise FileNotFoundError(f"Invalid --input: {input_path}. Provide a directory, a .txt filelist, or a single audio file.")
 
 
+def apply_cfg_overrides(cfg, overrides: Optional[List[str]]):
+    if not overrides:
+        return cfg
+    override_conf = OmegaConf.from_dotlist(overrides)
+    return OmegaConf.merge(cfg, override_conf)
+
+
+def patch_legacy_dtp_state_dict(state_dict: Dict[str, torch.Tensor]) -> None:
+    legacy_keys = ["dtp.log_tau", "dtp.r_ema", "dtp.steps"]
+    if not all(k in state_dict for k in legacy_keys):
+        return
+    log_tau = state_dict.pop("dtp.log_tau")
+    tau = torch.exp(log_tau)
+    state_dict["dtp.tau_train"] = tau.clone()
+    state_dict["dtp.tau_eval"] = tau.clone()
+
+    r_ema = state_dict.pop("dtp.r_ema")
+    state_dict["dtp.r_ema_train"] = r_ema.clone()
+    state_dict["dtp.r_ema_eval"] = r_ema.clone()
+
+    steps = state_dict.pop("dtp.steps")
+    state_dict["dtp.steps_train"] = steps.clone()
+    state_dict["dtp.steps_eval"] = steps.clone()
+
+
 def resolve_with_dataset_roots(paths: List[str], cfg) -> List[str]:
     roots: List[Path] = []
     datasets_cfg = cfg.preprocess.datasets
@@ -530,6 +555,14 @@ def main():
     parser.add_argument("--length_mode", type=str, choices=["pad", "truncate"], default="pad", help="How to make length a multiple of cfg.dataset.multiple_of")
     parser.add_argument("--num_workers", type=int, default=4)
     parser.add_argument("--device", type=str, default="cuda" if torch.cuda.is_available() else "cpu")
+    parser.add_argument(
+        "--cfg_override",
+        action="append",
+        default=None,
+        help="Hydra-style dotlist override applied after loading hydra/config.yaml "
+        "(e.g., --cfg_override model.resampler.dtp_params.r=0.4). "
+        "Use multiple flags for multiple overrides.",
+    )
     args = parser.parse_args()
 
     torch.set_grad_enabled(False)
@@ -544,6 +577,7 @@ def main():
         raise FileNotFoundError(f"Checkpoint not found at {ckpt_path}")
 
     cfg = OmegaConf.load(str(cfg_path))
+    cfg = apply_cfg_overrides(cfg, args.cfg_override)
 
     eval_dir = run_dir / "eval"
     eval_dir.mkdir(parents=True, exist_ok=True)
@@ -559,6 +593,7 @@ def main():
         model = CodecLightningModule(cfg=cfg).to(args.device).eval()
         state = torch.load(str(ckpt_path), map_location="cpu", weights_only=False)
         state_dict = state.get("state_dict", state)
+        patch_legacy_dtp_state_dict(state_dict)
         missing, unexpected = model.load_state_dict(state_dict, strict=True)
         if len(missing) or len(unexpected):
             print(f"[Warning] Missing keys: {len(missing)}, Unexpected keys: {len(unexpected)}")

@@ -94,6 +94,7 @@ class UpstreamExpert(nn.Module):
 
         grouped = defaultdict(list)
         orig_lengths = []
+        padded_lengths = [0] * len(wavs)
         for idx, wav in enumerate(wavs):
             if wav.dim() == 1:
                 w = wav.unsqueeze(0)
@@ -101,16 +102,20 @@ class UpstreamExpert(nn.Module):
                 w = wav[:1]
             else:
                 w = wav
+            w = w.squeeze(0)
             length = w.size(-1)
             orig_lengths.append(length)
             pad_needed = (-length) % max(self.multiple_of, 1)
             if pad_needed > 0:
                 w = F.pad(w, (0, pad_needed))
+            padded_lengths[idx] = w.size(-1)
             grouped[w.size(-1)].append((idx, w))
 
+        expected_max_len = math.ceil(max(orig_lengths) / self._downsample_rate)
+
         with torch.no_grad():
-            for padded_len, items in grouped.items():
-                batch = torch.stack([w for _, w in items], dim=0).to(device)
+            for _, items in grouped.items():
+                batch = torch.stack([w for _, w in items], dim=0).unsqueeze(1).to(device)  # (B,1,T)
                 with autocast_cm:
                     vq_emb = self.model.encoder(batch, level=1)
 
@@ -136,17 +141,19 @@ class UpstreamExpert(nn.Module):
                     )
 
                 for (sample_idx, _), sample_feat in zip(items, vq_emb):
-                    valid_len = math.floor((orig_lengths[sample_idx] - 1) / self._downsample_rate) + 1
-                    feats[sample_idx] = sample_feat[:valid_len].contiguous()
-                    valid_lengths[sample_idx] = valid_len
+                    sample_feat = sample_feat.squeeze(0)  # (T, D)
+                    if sample_feat.size(0) != expected_max_len:
+                        sample_feat = F.interpolate(
+                            sample_feat.unsqueeze(0).transpose(1, 2),
+                            size=expected_max_len,
+                            mode="linear",
+                            align_corners=False,
+                        ).transpose(1, 2).squeeze(0)
+                    feats[sample_idx] = sample_feat.contiguous()
+                    valid_lengths[sample_idx] = expected_max_len
 
-        max_len = max(valid_lengths)
-        hidden_dim = feats[0].size(-1)
-        batch_hidden = feats[0].new_zeros(len(feats), max_len, hidden_dim)
-        for idx, feat in enumerate(feats):
-            length = valid_lengths[idx]
-            batch_hidden[idx, :length] = feat
-
+        batch_hidden = torch.stack(feats, dim=0)
+            
         return {
             "last_hidden_state": batch_hidden,
             "hidden_states": [batch_hidden],

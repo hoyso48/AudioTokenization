@@ -202,137 +202,6 @@ import math
 
 #         return mask, avg_r, tau_used
 
-class DifferentiablePLE(nn.Module):
-    """
-    Differentiable PLE using Sine-based phase detection and Straight-Through Estimator (STE).
-    
-    Mechanism:
-    1. Compute accumulated distance L_i.
-    2. Convert to phase: phi_i = (2 * pi * L_i) / tau
-    3. Detect 'pulse' when phase completes a cycle (using Cosine Peak).
-    4. Apply Soft-Thresholding (Sigmoid) to generate continuous probabilities.
-    5. Use STE to discretize into binary mask during forward pass while passing gradients.
-    
-    Args:
-        input_dim (int): Dimension of input features.
-        r (float): Target masking ratio (used for regularization).
-        initial_tau (float): Initial value for learnable tau.
-        sharpness (float): Scaling factor for sigmoid to approximate step function.
-        ste (bool): Whether to use Straight-Through Estimator for binary mask.
-    """
-    def __init__(
-        self, 
-        input_dim: int,
-        r: float, 
-        initial_tau: float = 1.0, 
-        sharpness: float = 10.0,
-        ste: bool = True
-    ):
-        super().__init__()
-        self.r = r
-        self.sharpness = sharpness
-        self.ste = ste
-        
-        # Projection layer for distance calculation
-        # Project to lower dimension (e.g., input_dim // 2 or fixed size) or keep same
-        # Here we keep same dimension for simplicity, but it adds learnable flexibility.
-        self.proj = nn.Linear(input_dim, input_dim)
-        
-        # Learnable tau (log-parameterized for positivity)
-        self.log_tau = nn.Parameter(torch.tensor(math.log(initial_tau)))
-        
-    def forward(self, x: torch.Tensor) -> Tuple[torch.Tensor, torch.Tensor, torch.Tensor, torch.Tensor]:
-        device = x.device
-        dtype = x.dtype
-        B, N, C = x.shape
-        
-        # 0. Project input to "Distance Space"
-        # This decouples feature representation from selection logic
-        x_proj = self.proj(x)
-        
-        # 1. Compute Distance & Accumulated Path (Same as PLE)
-        if N > 1:
-            sim = F.cosine_similarity(x_proj[:, 1:, :], x_proj[:, :-1, :], dim=-1)
-            d = torch.zeros(B, N, device=device, dtype=dtype)
-            d[:, 1:] = (1.0 - sim)
-            
-            # Distance Normalization (Crucial for stability)
-            d_mean = d.mean(dim=1, keepdim=True)
-            d = d / (d_mean + 1e-6)
-            
-            D = torch.cumsum(d, dim=1) # [B, N]
-        else:
-            D = torch.zeros(B, N, device=device, dtype=dtype)
-            
-        tau = torch.exp(self.log_tau)
-        
-        # 2. Phase & Pulse Generation (Differentiable Peak Detection)
-        # We want a pulse every time D increases by tau.
-        # Cosine(2*pi*D/tau) has peaks at D = 0, tau, 2tau, ...
-        
-        # Shift phase by pi so peak is at k*tau
-        # cos(2pi*x - pi) = -cos(2pi*x)
-        phase = (2 * math.pi * D) / (tau + 1e-6)
-        scores = -torch.cos(phase) # [B, N]
-        
-        # 3. Soft Peak Picking (Differentiable Local Maxima)
-        # Condition: score[i] > score[i-1] AND score[i] > score[i+1]
-        
-        # Pad scores to handle boundaries
-        # Left: compare with -1 (so first token is always > prev)
-        # Right: compare with -1 (so last token is always > next)
-        # But actually, we want to force-keep the first token separately,
-        # so we just focus on finding peaks in the sequence.
-        scores_padded = F.pad(scores, (1, 1), value=-1.1) # [B, N+2]
-        
-        left = scores_padded[:, :-2]   # [B, N]
-        center = scores_padded[:, 1:-1] # [B, N] (== scores)
-        right = scores_padded[:, 2:]   # [B, N]
-        
-        # Soft comparisons using Sigmoid
-        # If center > left, diff > 0 => sigmoid > 0.5
-        # large sharpness makes it close to step function but differentiable
-        diff_left = center - left
-        diff_right = center - right
-        
-        is_peak = torch.sigmoid(self.sharpness * diff_left) * \
-                  torch.sigmoid(self.sharpness * diff_right)
-                  
-        # 4. Soft Thresholding
-        # Peak must be high enough (close to 1.0) to be a valid boundary
-        # This filters out small wiggles in the valleys
-        threshold = 0.0 # Cosine range -1 to 1, 0.0 is mid-point
-        is_high = torch.sigmoid(self.sharpness * (center - threshold))
-        
-        prob = is_peak * is_high
-        
-        # Always keep first token
-        prob = torch.cat([torch.ones(B, 1, device=device, dtype=dtype), prob[:, 1:]], dim=1)
-
-        # 5. Straight-Through Estimator (STE)
-        if self.ste:
-            # Forward: Binary (0 or 1)
-            # Backward: Gradient of probability
-            mask_binary = (prob > 0.5).float()
-            mask = prob + (mask_binary - prob).detach()
-        else:
-            mask = prob
-            
-        # Compute masked ratio (differentiable)
-        kept_count = mask.sum(dim=1)
-        avg_r = 1.0 - (kept_count / N).mean()
-        
-        # Convert to bool mask for compatibility
-        bool_mask = mask > 0.5
-        
-        # Compute Auxiliary Loss (MSE between avg_r and target_r)
-        # Multiplied by 100 to keep scale reasonable if r is small
-        aux_loss = (avg_r - self.r) ** 2
-        
-        return bool_mask, avg_r, tau, aux_loss
-
-# --- Components for SigmoidSTE (Copied from vq/module.py to avoid dependency/circular import issues) ---
-
 class RMSNorm(torch.nn.Module):
     def __init__(self, dim: int, eps: float = 1e-2):
         super().__init__()
@@ -617,24 +486,179 @@ class FixedPatternMasking(nn.Module):
         
         return mask, avg_r, tau_used
 
-class PLEBatchTopK(nn.Module):
+class _BatchSelectorBase(nn.Module):
+    """
+    Shared Robbins–Monro controller and utilities for batch selectors.
+    """
+
+    def __init__(
+        self,
+        r: float,
+        initial_tau: float,
+        ema_mu: float,
+        eta0: float,
+        decay_T: float,
+        tau_min: float,
+        tau_max: float,
+        update_every: int,
+        sample_prob: float,
+        max_s: Optional[int] = None,
+        fixed_tau: Optional[float] = None,
+        update_test_time: bool = False,
+    ):
+        super().__init__()
+        if not (0.0 <= float(r) < 1.0):
+            raise ValueError("Batch selector: r must be in [0, 1)")
+
+        val_to_check = fixed_tau if fixed_tau is not None else initial_tau
+        if val_to_check <= 0.0:
+            raise ValueError("Batch selector: tau must be > 0")
+
+        self.r = float(r)
+        self.ema_mu = float(ema_mu)
+        self.eta0 = float(eta0)
+        self.decay_T = float(decay_T)
+        self.tau_min = float(tau_min)
+        self.tau_max = float(tau_max)
+        self.update_every = int(update_every)
+        self.sample_prob = float(sample_prob)
+        self.max_s = int(max_s) if max_s is not None else None
+
+        self.fixed_tau = float(fixed_tau) if fixed_tau is not None else None
+        self.update_test_time = bool(update_test_time)
+
+        init_val = self.fixed_tau if self.fixed_tau is not None else float(initial_tau)
+        self.register_buffer("tau_train", torch.tensor(init_val))
+        self.register_buffer("r_ema_train", torch.tensor(0.0))
+        self.register_buffer("steps_train", torch.tensor(0, dtype=torch.long))
+
+        self.register_buffer("tau_eval", torch.tensor(init_val))
+        self.register_buffer("r_ema_eval", torch.tensor(0.0))
+        self.register_buffer("steps_eval", torch.tensor(0, dtype=torch.long))
+
+    def train(self, mode: bool = True):
+        prev_mode = self.training
+        result = super().train(mode)
+        if (
+            self.fixed_tau is None
+            and self.update_test_time
+            and prev_mode
+            and not self.training
+        ):
+            self._reset_eval_state()
+        return result
+
+    @torch.no_grad()
+    def _reset_eval_state(self) -> None:
+        self.tau_eval.copy_(self.tau_train)
+        self.r_ema_eval.zero_()
+        self.steps_eval.zero_()
+
+    def _active_buffers(self):
+        if self.training or not self.update_test_time:
+            return self.tau_train, self.r_ema_train, self.steps_train
+        return self.tau_eval, self.r_ema_eval, self.steps_eval
+
+    @torch.no_grad()
+    def _get_tau_tensor(self, device: torch.device, dtype: torch.dtype) -> torch.Tensor:
+        if self.fixed_tau is not None:
+            return torch.as_tensor(self.fixed_tau, device=device, dtype=dtype)
+        tau_buf, _, _ = self._active_buffers()
+        return tau_buf.to(device=device, dtype=dtype)
+
+    @torch.no_grad()
+    def _controller_step(self, avg_r: torch.Tensor) -> None:
+        if self.fixed_tau is not None:
+            return
+        if (not self.training) and (not self.update_test_time):
+            return
+        tau_buf, r_ema_buf, steps_buf = self._active_buffers()
+        self._update_tau(avg_r, tau_buf, r_ema_buf, steps_buf)
+
+    @torch.no_grad()
+    def _update_tau(
+        self,
+        avg_r: torch.Tensor,
+        tau_buf: torch.Tensor,
+        r_ema_buf: torch.Tensor,
+        steps_buf: torch.Tensor,
+    ) -> None:
+        freq = max(1, self.update_every)
+        steps_buf.add_(1)
+        if int(steps_buf.item()) % freq != 0:
+            return
+        updates = int(steps_buf.item()) // freq
+
+        r_hat = float(avg_r.item())
+        r_ema_buf.mul_(self.ema_mu).add_((1.0 - self.ema_mu) * r_hat)
+
+        eta_t = self.eta0 / math.sqrt(1.0 + (updates / max(1.0, self.decay_T)))
+        error = float(r_ema_buf.item() - self.r)
+        factor = math.exp(-eta_t * error)
+
+        new_tau = float(tau_buf.item()) * factor
+        new_tau = min(max(new_tau, self.tau_min), self.tau_max)
+        tau_buf.fill_(new_tau)
+
+    def _apply_max_span_constraint(self, mask: torch.Tensor) -> torch.Tensor:
+        if self.max_s is None:
+            return mask
+
+        B, N = mask.shape
+        if N == 0:
+            return mask
+
+        stride = self.max_s + 1
+        idx = torch.arange(N, device=mask.device, dtype=torch.long).unsqueeze(0).expand(B, -1)
+        minus_one = torch.full_like(idx, -1)
+        masked_idx = torch.where(mask, idx, minus_one)
+        last_kept_idx, _ = torch.cummax(masked_idx, dim=1)
+        run = idx - last_kept_idx
+        run = torch.where(mask, torch.zeros_like(run), run)
+
+        stride_tensor = torch.tensor(stride, device=mask.device, dtype=run.dtype)
+        need_insert = (~mask) & (run > 0) & ((run % stride_tensor) == 0)
+
+        mask = mask | need_insert
+        return mask
+
+    def _compute_avg_r(self, mask: torch.Tensor, total: int, dtype: torch.dtype) -> torch.Tensor:
+        kept_total = int(mask.sum().item())
+        zeros_total = int(total - kept_total)
+        if torch.distributed.is_available() and torch.distributed.is_initialized():
+            agg = torch.tensor([zeros_total, total], device=mask.device, dtype=torch.long)
+            torch.distributed.all_reduce(agg, op=torch.distributed.ReduceOp.SUM)
+            zeros_total = int(agg[0].item())
+            total = int(agg[1].item())
+        return torch.tensor(
+            float(zeros_total) / float(max(1, total)),
+            device=mask.device,
+            dtype=dtype,
+        )
+
+    def _maybe_apply_random_mask(self, mask: torch.Tensor, dtype: torch.dtype) -> torch.Tensor:
+        if not self.training or self.sample_prob <= 0.0:
+            return mask
+        if torch.rand(1, device=mask.device).item() >= self.sample_prob:
+            return mask
+        B, N = mask.shape
+        if B * N == 0:
+            return mask
+        probs = torch.full((B, N), 1.0 - self.r, device=mask.device, dtype=dtype)
+        return torch.bernoulli(probs).bool()
+
+
+class PLEBatchTopK(_BatchSelectorBase):
     """
     Batch-level PLE (Path-Length Equalization) with a single global tau.
 
     Design:
       - Use one global scalar tau for both training and inference.
-      - During training, update tau once per step with a Robbins–Monro style controller
-        in the log-domain using the observed masked ratio (avg_r).
-      - Selection uses first-crossing with global tau; no per-sequence budgets and
-        no "strictly increasing" post-fix (keep the standard first-crossing behavior).
-
-    Inputs:
-      x: [B, N, C]
-
-    Returns:
-      mask:   [B, N] bool, True = keep (unmasked)
-      avg_r:  scalar tensor, masked ratio = (#zeros in mask)/(B*N)
-      tau_used: scalar tensor, the tau used for this step's selection
+      - Store tau directly instead of its logarithm.
+      - If fixed_tau is provided, use it always and ignore updates.
+      - Otherwise, update tau using a Robbins–Monro style controller.
+      - If update_test_time is True, evaluation starts from the last train tau
+        but keeps its own controller state.
     """
     def __init__(
         self,
@@ -647,57 +671,24 @@ class PLEBatchTopK(nn.Module):
         tau_max: float = 1e6,
         update_every: int = 1,
         sample_prob: float = 0.0,
+        max_s: Optional[int] = None,
+        fixed_tau: Optional[float] = None,
+        update_test_time: bool = False,
     ):
-        super().__init__()
-        if not (0.0 <= float(r) < 1.0):
-            raise ValueError("PLEBatchTopK: r must be in [0, 1)")
-        if initial_tau <= 0.0:
-            raise ValueError("PLEBatchTopK: initial_tau must be > 0")
-
-        # Target masked ratio
-        self.r = float(r)
-
-        # Controller hyperparameters (Robbins–Monro in log-domain)
-        self.ema_mu = float(ema_mu)          # EMA for observed masked ratio
-        self.eta0 = float(eta0)              # initial step size for log-tau updates
-        self.decay_T = float(decay_T)        # time-scale for step-size decay
-        self.tau_min = float(tau_min)
-        self.tau_max = float(tau_max)
-        self.update_every = int(update_every)
-        self.sample_prob = float(sample_prob)
-
-        # Persistent controller state
-        self.register_buffer("log_tau", torch.tensor(math.log(float(initial_tau))))
-        self.register_buffer("r_ema", torch.tensor(0.0))
-        self.register_buffer("steps", torch.tensor(0, dtype=torch.long))
-
-    @torch.no_grad()
-    def _update_tau(self, avg_r: torch.Tensor) -> None:
-        """
-        Robbins–Monro style update in the log-domain:
-          log_tau_{t+1} = log_tau_t - eta_t * (r_ema - r_target)
-        with:
-          r_ema  = mu * r_ema + (1 - mu) * avg_r
-          eta_t  = eta0 / sqrt(1 + steps/decay_T)
-        """
-        # Increment step counter
-        self.steps.add_(1)
-        t = float(self.steps.item())
-
-        # EMA of observed masked ratio (scalar in [0, 1])
-        r_hat = float(avg_r.item())
-        self.r_ema.mul_(self.ema_mu).add_((1.0 - self.ema_mu) * r_hat)
-
-        # Decayed step size (Robbins–Monro schedule)
-        eta_t = self.eta0 / math.sqrt(1.0 + (t / max(1.0, self.decay_T)))
-
-        # Gradient step in log-domain toward r_target
-        error = float(self.r_ema.item() - self.r)
-        new_log_tau = float(self.log_tau.item()) - eta_t * error
-
-        # Clamp and write back
-        new_log_tau = min(max(new_log_tau, math.log(self.tau_min)), math.log(self.tau_max))
-        self.log_tau.copy_(torch.tensor(new_log_tau, device=self.log_tau.device, dtype=self.log_tau.dtype))
+        super().__init__(
+            r=r,
+            initial_tau=initial_tau,
+            ema_mu=ema_mu,
+            eta0=eta0,
+            decay_T=decay_T,
+            tau_min=tau_min,
+            tau_max=tau_max,
+            update_every=update_every,
+            sample_prob=sample_prob,
+            max_s=max_s,
+            fixed_tau=fixed_tau,
+            update_test_time=update_test_time,
+        )
 
     @torch.no_grad()
     def forward(self, x: torch.Tensor) -> Tuple[torch.Tensor, torch.Tensor, torch.Tensor]:
@@ -706,25 +697,19 @@ class PLEBatchTopK(nn.Module):
         B, N, C = x.shape if x.ndim == 3 else (0, 0, 0)
         total = B * N
 
+        tau_used = self._get_tau_tensor(device, dtype)
+
         # Early exit on empty input
         if total == 0:
             mask = torch.zeros(B, N, device=device, dtype=torch.bool)
             avg_r = torch.zeros((), device=device, dtype=dtype)
-            tau_used = torch.exp(self.log_tau).to(device=device, dtype=dtype)
             return mask, avg_r, tau_used
 
-        # Adjacent dissimilarities and cumulative path per sequence
+        # Adjacent dissimilarities
         if N > 1:
             sim = F.cosine_similarity(x[:, 1:, :], x[:, :-1, :], dim=-1)
             d = torch.zeros(B, N, device=device, dtype=dtype)
             d[:, 1:] = (1.0 - sim).to(dtype)
-
-            # Apply Distance Normalization (Sequence-wise Mean Normalization)
-            # This stabilizes tau against distribution shifts.
-            # tau now represents "relative change" rather than "absolute cosine distance".
-            # d_mean = d.mean(dim=1, keepdim=True)  # [B, 1]
-            # d = d / (d_mean + 1e-6)
-
         else:
             d = torch.zeros(B, N, device=device, dtype=dtype)
 
@@ -733,30 +718,21 @@ class PLEBatchTopK(nn.Module):
             D[:, 1:] = torch.cumsum(d[:, 1:], dim=1)
         L = D[:, -1] if N > 0 else torch.zeros(B, device=device, dtype=dtype)
 
-        # Use the current global tau (same in train/eval for selection)
-        tau_used = torch.exp(self.log_tau).to(device=device, dtype=dtype)
-
-        # Build frontier mask via first-crossing with global tau
+        # Build frontier mask
         mask = torch.zeros(B, N, device=device, dtype=torch.bool)
         if N > 0:
-            mask[:, 0] = True  # always keep the first token
+            mask[:, 0] = True
 
         if N > 1 and torch.isfinite(tau_used) and (tau_used.item() > 0.0):
-            # m_b = floor(L_b / tau)
             m_b = torch.floor(L / tau_used).to(torch.long)
-            # clamp m_b to at most N-1 and at least 0
             m_b = torch.clamp(m_b, min=0, max=N - 1)
             max_m = int(m_b.max().item())
 
             if max_m > 0:
-                # targets: k * tau for k = 1..max_m, shared across batch
                 targets = (torch.arange(1, max_m + 1, device=device, dtype=dtype) * tau_used).view(1, -1)
-                # ge: (B, N, max_m), True when D >= k * tau
                 ge = D.unsqueeze(2) >= targets.view(1, 1, -1)
-                # First-crossing index along the N dimension
-                j = ge.float().argmax(dim=1).clamp_(min=1, max=N - 1)  # (B, max_m)
+                j = ge.float().argmax(dim=1).clamp_(min=1, max=N - 1)
 
-                # Apply only for valid slots k <= m_b (no "strictly increasing" post-fix)
                 k_idx = torch.arange(1, max_m + 1, device=device).view(1, -1).expand(B, -1)
                 valid = k_idx <= m_b.view(B, 1)
                 if valid.any():
@@ -766,28 +742,155 @@ class PLEBatchTopK(nn.Module):
                     pos = j[b_sel, k_sel]
                     mask[b_sel, pos] = True
 
-        # Compute masked ratio for this (local) process
-        kept_total = int(mask.sum().item())
-        zeros_total = int(total - kept_total)
+        mask = self._apply_max_span_constraint(mask)
 
-        # Optionally compute global avg_r across distributed workers (if initialized)
-        if torch.distributed.is_available() and torch.distributed.is_initialized():
-            agg = torch.tensor([zeros_total, total], device=device, dtype=torch.long)
-            torch.distributed.all_reduce(agg, op=torch.distributed.ReduceOp.SUM)
-            zeros_total = int(agg[0].item())
-            total = int(agg[1].item())
+        avg_r = self._compute_avg_r(mask, total, dtype)
+        self._controller_step(avg_r)
+        mask = self._maybe_apply_random_mask(mask, dtype)
 
-        avg_r = torch.tensor(float(zeros_total) / float(max(1, total)), device=device, dtype=dtype)
+        return mask, avg_r, tau_used
 
-        # Training-time controller update (single global tau)
-        if self.training and (int(self.steps.item()) % max(1, self.update_every) == 0):
-            self._update_tau(avg_r)
 
-        # Overwrite with Random Masking if sample_prob > 0
-        if self.training and self.sample_prob > 0.0:
-            if torch.rand(1).item() < self.sample_prob:
-                # Random masking: mask every token with probability r (keep with 1-r)
-                probs = torch.full((B, N), 1.0 - self.r, device=device, dtype=dtype)
-                mask = torch.bernoulli(probs).bool()
+class BatchTopK(_BatchSelectorBase):
+    """
+    One-shot masking: drop every trailing token whose adjacent cosine similarity exceeds tau.
+    """
 
+    def __init__(
+        self,
+        r: float,
+        initial_tau: float = 0.6,
+        ema_mu: float = 0.95,
+        eta0: float = 0.1,
+        decay_T: float = 1000.0,
+        tau_min: float = 1e-3,
+        tau_max: float = 0.999,
+        update_every: int = 1,
+        sample_prob: float = 0.0,
+        max_s: Optional[int] = None,
+        fixed_tau: Optional[float] = None,
+        update_test_time: bool = False,
+    ):
+        super().__init__(
+            r=r,
+            initial_tau=initial_tau,
+            ema_mu=ema_mu,
+            eta0=eta0,
+            decay_T=decay_T,
+            tau_min=tau_min,
+            tau_max=tau_max,
+            update_every=update_every,
+            sample_prob=sample_prob,
+            max_s=max_s,
+            fixed_tau=fixed_tau,
+            update_test_time=update_test_time,
+        )
+
+    @torch.no_grad()
+    def forward(self, x: torch.Tensor) -> Tuple[torch.Tensor, torch.Tensor, torch.Tensor]:
+        device = x.device
+        dtype = x.dtype
+        B, N, C = x.shape if x.ndim == 3 else (0, 0, 0)
+        total = B * N
+        tau_used = self._get_tau_tensor(device, dtype)
+
+        if total == 0:
+            mask = torch.zeros(B, N, device=device, dtype=torch.bool)
+            avg_r = torch.zeros((), device=device, dtype=dtype)
+            return mask, avg_r, tau_used
+
+        mask = torch.ones(B, N, device=device, dtype=torch.bool)
+        if N > 0:
+            mask[:, 0] = True
+
+        if N > 1 and bool(torch.isfinite(tau_used).item()):
+            sim = F.cosine_similarity(x[:, 1:, :], x[:, :-1, :], dim=-1)
+            trailing = sim > tau_used
+            mask[:, 1:] = ~trailing
+
+        mask = self._apply_max_span_constraint(mask)
+
+        avg_r = self._compute_avg_r(mask, total, dtype)
+        self._controller_step(avg_r)
+        mask = self._maybe_apply_random_mask(mask, dtype)
+        return mask, avg_r, tau_used
+
+
+class BatchGreedy(_BatchSelectorBase):
+    """
+    Greedy masking: iteratively drop the trailing token with the highest similarity above tau.
+    """
+
+    def __init__(
+        self,
+        r: float,
+        initial_tau: float = 0.85,
+        ema_mu: float = 0.95,
+        eta0: float = 0.1,
+        decay_T: float = 1000.0,
+        tau_min: float = 1e-3,
+        tau_max: float = 0.999,
+        update_every: int = 1,
+        sample_prob: float = 0.0,
+        max_s: Optional[int] = None,
+        fixed_tau: Optional[float] = None,
+        update_test_time: bool = False,
+    ):
+        super().__init__(
+            r=r,
+            initial_tau=initial_tau,
+            ema_mu=ema_mu,
+            eta0=eta0,
+            decay_T=decay_T,
+            tau_min=tau_min,
+            tau_max=tau_max,
+            update_every=update_every,
+            sample_prob=sample_prob,
+            max_s=max_s,
+            fixed_tau=fixed_tau,
+            update_test_time=update_test_time,
+        )
+
+    @torch.no_grad()
+    def forward(self, x: torch.Tensor) -> Tuple[torch.Tensor, torch.Tensor, torch.Tensor]:
+        device = x.device
+        dtype = x.dtype
+        B, N, C = x.shape if x.ndim == 3 else (0, 0, 0)
+        total = B * N
+        tau_used = self._get_tau_tensor(device, dtype)
+
+        if total == 0:
+            mask = torch.zeros(B, N, device=device, dtype=torch.bool)
+            avg_r = torch.zeros((), device=device, dtype=dtype)
+            return mask, avg_r, tau_used
+
+        mask = torch.ones(B, N, device=device, dtype=torch.bool)
+        if N > 0:
+            mask[:, 0] = True
+
+        if N > 1 and bool(torch.isfinite(tau_used).item()):
+            tau_threshold = tau_used
+            max_iters = max(0, N - 1)
+            for b in range(B):
+                seq_mask = mask[b]
+                xb = x[b]
+                for _ in range(max_iters):
+                    kept_idx = torch.where(seq_mask)[0]
+                    if kept_idx.numel() <= 1:
+                        break
+                    seq = xb.index_select(0, kept_idx)
+                    sims = F.cosine_similarity(seq[1:], seq[:-1], dim=-1)
+                    if sims.numel() == 0:
+                        break
+                    max_sim, rel_idx = torch.max(sims, dim=0)
+                    if (not torch.isfinite(max_sim)) or not bool((max_sim > tau_threshold).item()):
+                        break
+                    remove_idx = kept_idx[rel_idx + 1]
+                    seq_mask[remove_idx] = False
+
+        mask = self._apply_max_span_constraint(mask)
+
+        avg_r = self._compute_avg_r(mask, total, dtype)
+        self._controller_step(avg_r)
+        mask = self._maybe_apply_random_mask(mask, dtype)
         return mask, avg_r, tau_used
