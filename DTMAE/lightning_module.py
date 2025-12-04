@@ -215,7 +215,7 @@ class CodecLightningModule(pl.LightningModule):
             # Original code:
             # cu_seqlens = max_seqlen = avg_r = tau_used = None
             # Modified for consistency
-            cu_seqlens = max_seqlen = avg_r = tau_used = None
+            position_ids = cu_seqlens = max_seqlen = avg_r = tau_used = None
             aux_loss = 0.0
             
             vq_emb = self.downsampler(vq_emb)

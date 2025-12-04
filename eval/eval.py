@@ -4,6 +4,7 @@ import sys
 import json
 import math
 import argparse
+from collections import OrderedDict
 from pathlib import Path
 from typing import List, Optional, Tuple, Dict, Iterable
 from contextlib import nullcontext
@@ -585,9 +586,28 @@ def main():
     manifest_path = Path(args.manifest) if args.manifest else (eval_dir / "manifest.jsonl")
     pred_out_dir = Path(args.pred_out_dir) if args.pred_out_dir else (eval_dir / "pred_16k")
     gt_out_dir = Path(args.gt_out_dir) if args.gt_out_dir else (eval_dir / "gt_16k" if args.stage in ("save", "all") else None)
+    save_stage_stats_path = eval_dir / "save_stage_stats.json"
+    audio_metrics_path = eval_dir / "audio_metrics.json"
+    final_metrics_path = eval_dir / "metrics.json"
 
     raw_paths = parse_input_paths(args.input)
     input_paths = resolve_with_dataset_roots(raw_paths, cfg)
+    resolved_input_count = len(input_paths)
+
+    metadata = OrderedDict()
+    metadata["run_dir"] = str(run_dir)
+    metadata["stage"] = args.stage
+    metadata["device"] = str(args.device)
+    metadata["input"] = str(args.input)
+    metadata["resolved_input_count"] = resolved_input_count
+    metadata["length_mode"] = args.length_mode
+    metadata["manifest_path"] = str(manifest_path)
+    metadata["pred_out_dir"] = str(pred_out_dir)
+    metadata["gt_out_dir"] = str(gt_out_dir) if gt_out_dir is not None else None
+    metadata["cfg_overrides"] = list(args.cfg_override) if args.cfg_override else []
+    metadata["save_stage_stats_path"] = str(save_stage_stats_path)
+    metadata["audio_metrics_path"] = str(audio_metrics_path)
+    metadata["final_metrics_path"] = str(final_metrics_path)
 
     if args.stage in ("save", "all"):
         model = CodecLightningModule(cfg=cfg).to(args.device).eval()
@@ -599,25 +619,31 @@ def main():
             print(f"[Warning] Missing keys: {len(missing)}, Unexpected keys: {len(unexpected)}")
 
         save_stats = run_save_stage(args, cfg, model, input_paths, eval_dir, gt_out_dir, pred_out_dir, manifest_path)
+        save_stats_source = "computed"
     else:
         save_stats = load_save_stage_stats_if_any(eval_dir)
+        save_stats_source = "loaded" if save_stats else "missing"
+
+    metadata["save_stage_stats_source"] = save_stats_source
 
     if args.stage in ("metrics", "all"):
         if not manifest_path.is_file():
             raise FileNotFoundError(f"Manifest not found at {manifest_path}. Run with --stage save first to generate 16k GT/PRED and a manifest, optionally providing --gt_out_dir.")
         audio_metrics = run_metrics_stage(args, manifest_path, eval_dir)
+        metrics_stage_source = "computed"
     else:
         audio_metrics = {}
+        metrics_stage_source = "skipped"
 
-    final_metrics = {}
+    metadata["audio_metrics_source"] = metrics_stage_source
+
+    final_metrics = OrderedDict(metadata)
     final_metrics.update(audio_metrics)
-    final_metrics.update({
-        "codebook_perplexity": save_stats.get("codebook_perplexity"),
-        "codebook_utilization": save_stats.get("codebook_utilization"),
-        "avg_sim": save_stats.get("avg_sim_mean"),
-    })
+    final_metrics["codebook_perplexity"] = save_stats.get("codebook_perplexity")
+    final_metrics["codebook_utilization"] = save_stats.get("codebook_utilization")
+    final_metrics["avg_sim"] = save_stats.get("avg_sim_mean")
 
-    with open(eval_dir / "metrics.json", "w") as f:
+    with open(final_metrics_path, "w") as f:
         json.dump(final_metrics, f, indent=2)
 
     print(json.dumps(final_metrics, indent=2))

@@ -1,10 +1,10 @@
 import argparse
 
-train_list = ['train-clean-100', 'train-clean-360', 'train-other-500']
+train_list = ['train-clean-100']#, 'train-clean-360', 'train-other-500']
 dev_list = ['dev-clean']#, 'dev-other']
 test_list = ['test-clean']#, 'test-other']
 
-train_txt = 'filelists/librispeech_train_all.txt'
+train_txt = 'filelists/librispeech_train_clean_100.txt' #'filelists/librispeech_train_all.txt'
 dev_txt = 'filelists/librispeech_dev_clean.txt'
 test_txt = 'filelists/librispeech_test_clean.txt'
 

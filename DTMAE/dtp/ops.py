@@ -505,6 +505,7 @@ class _BatchSelectorBase(nn.Module):
         max_s: Optional[int] = None,
         fixed_tau: Optional[float] = None,
         update_test_time: bool = False,
+        invert_update: bool = False,
     ):
         super().__init__()
         if not (0.0 <= float(r) < 1.0):
@@ -526,6 +527,7 @@ class _BatchSelectorBase(nn.Module):
 
         self.fixed_tau = float(fixed_tau) if fixed_tau is not None else None
         self.update_test_time = bool(update_test_time)
+        self.controller_sign = -1.0 if invert_update else 1.0
 
         init_val = self.fixed_tau if self.fixed_tau is not None else float(initial_tau)
         self.register_buffer("tau_train", torch.tensor(init_val))
@@ -594,6 +596,7 @@ class _BatchSelectorBase(nn.Module):
 
         eta_t = self.eta0 / math.sqrt(1.0 + (updates / max(1.0, self.decay_T)))
         error = float(r_ema_buf.item() - self.r)
+        error *= self.controller_sign
         factor = math.exp(-eta_t * error)
 
         new_tau = float(tau_buf.item()) * factor
@@ -688,6 +691,7 @@ class PLEBatchTopK(_BatchSelectorBase):
             max_s=max_s,
             fixed_tau=fixed_tau,
             update_test_time=update_test_time,
+            invert_update=False,
         )
 
     @torch.no_grad()
@@ -784,6 +788,7 @@ class BatchTopK(_BatchSelectorBase):
             max_s=max_s,
             fixed_tau=fixed_tau,
             update_test_time=update_test_time,
+            invert_update=True,
         )
 
     @torch.no_grad()
@@ -849,6 +854,7 @@ class BatchGreedy(_BatchSelectorBase):
             max_s=max_s,
             fixed_tau=fixed_tau,
             update_test_time=update_test_time,
+            invert_update=True,
         )
 
     @torch.no_grad()
