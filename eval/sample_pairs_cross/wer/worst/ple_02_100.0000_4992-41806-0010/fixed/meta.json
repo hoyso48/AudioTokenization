@@ -1,0 +1,13 @@
+{
+  "metric": "wer",
+  "score": 0.0,
+  "system": "fixed",
+  "utt_id": "4992-41806-0010",
+  "utt_key": "/home/hoyso/datasets/LibriSpeech/LibriSpeech/test-clean/4992/41806/4992-41806-0010.flac",
+  "orig_path": "/home/hoyso/datasets/LibriSpeech/LibriSpeech/test-clean/4992/41806/4992-41806-0010.flac",
+  "gt_path": "/home/hoyso/projects/AudioTokenization/results/results1203/fixedpatternmasking50hz-vq65536/eval/gt_16k/4992/41806/4992-41806-0010.wav",
+  "pred_path": "/home/hoyso/projects/AudioTokenization/results/results1203/fixedpatternmasking50hz-vq65536/eval/pred_16k/4992/41806/4992-41806-0010.wav",
+  "transcript_path": "/home/hoyso/datasets/LibriSpeech/LibriSpeech/test-clean/4992/41806/4992-41806.trans.txt",
+  "gt_text": "AIN'T THEY THE GREATEST",
+  "asr_text": "AIN'T THEY THE GREATEST"
+}

@@ -469,6 +469,7 @@ def main():
         "cfg_override": args.cfg_override,
         "length_mode": args.length_mode,
         "use_dtp": bool(model.use_dtp),
+        "dtp_class": getattr(cfg.model.resampler, "dtp_cls", None),
         "codebook_size": int(cfg.model.codec_decoder.codebook_size),
         "dataset": {
             "sample_rate": target_sr,

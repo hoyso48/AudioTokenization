@@ -1,0 +1,37 @@
+{
+  "anchor_system": "ple_ms4",
+  "split": "worst",
+  "rank": 2,
+  "anchor_score": 0.443077027797699,
+  "utt_id": "672-122797-0033",
+  "utt_key": "/home/hoyso/datasets/LibriSpeech/LibriSpeech/test-clean/672/122797/672-122797-0033.flac",
+  "sample_dir": "/home/hoyso/projects/AudioTokenization/eval/sample_pairs_cross/speaker_similarity/ple_ms4/worst/02_0.4431_672-122797-0033",
+  "systems": {
+    "fixed": {
+      "metric": "speaker_similarity",
+      "score": 0.7666288018226624,
+      "system": "fixed",
+      "utt_id": "672-122797-0033",
+      "utt_key": "/home/hoyso/datasets/LibriSpeech/LibriSpeech/test-clean/672/122797/672-122797-0033.flac",
+      "orig_path": "/home/hoyso/datasets/LibriSpeech/LibriSpeech/test-clean/672/122797/672-122797-0033.flac",
+      "gt_path": "/home/hoyso/projects/AudioTokenization/results/results1203/fixedpatternmasking50hz-vq65536/eval/gt_16k/672/122797/672-122797-0033.wav",
+      "pred_path": "/home/hoyso/projects/AudioTokenization/results/results1203/fixedpatternmasking50hz-vq65536/eval/pred_16k/672/122797/672-122797-0033.wav",
+      "transcript_path": "/home/hoyso/datasets/LibriSpeech/LibriSpeech/test-clean/672/122797/672-122797.trans.txt",
+      "gt_text": "A STORY",
+      "asr_text": "A STORY"
+    },
+    "ple_ms4": {
+      "metric": "speaker_similarity",
+      "score": 0.443077027797699,
+      "system": "ple_ms4",
+      "utt_id": "672-122797-0033",
+      "utt_key": "/home/hoyso/datasets/LibriSpeech/LibriSpeech/test-clean/672/122797/672-122797-0033.flac",
+      "orig_path": "/home/hoyso/datasets/LibriSpeech/LibriSpeech/test-clean/672/122797/672-122797-0033.flac",
+      "gt_path": "/home/hoyso/projects/AudioTokenization/results/results1203/PLE50hz-sampleprob1/eval_ft_ms4/gt_16k/672/122797/672-122797-0033.wav",
+      "pred_path": "/home/hoyso/projects/AudioTokenization/results/results1203/PLE50hz-sampleprob1/eval_ft_ms4/pred_16k/672/122797/672-122797-0033.wav",
+      "transcript_path": "/home/hoyso/datasets/LibriSpeech/LibriSpeech/test-clean/672/122797/672-122797.trans.txt",
+      "gt_text": "A STORY",
+      "asr_text": "A STRANY"
+    }
+  }
+}

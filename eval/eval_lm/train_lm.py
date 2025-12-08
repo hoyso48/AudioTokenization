@@ -23,6 +23,7 @@ import numpy as np
 import torch
 from torch.utils.data import Dataset
 from transformers import (
+    AutoConfig,
     AutoModelForCausalLM,
     Trainer,
     TrainingArguments,
@@ -131,14 +132,20 @@ def reset_embeddings(model: AutoModelForCausalLM) -> None:
         model.tie_weights()
 
 
-def build_model(model_id: str, vocab_size: int, use_bf16: bool) -> AutoModelForCausalLM:
+def build_model(model_id: str, vocab_size: int, use_bf16: bool, from_scratch: bool) -> AutoModelForCausalLM:
     torch_dtype = torch.bfloat16 if use_bf16 and torch.cuda.is_available() else torch.float32
-    model = AutoModelForCausalLM.from_pretrained(
-        model_id,
-        torch_dtype=torch_dtype,
-    )
-    model.resize_token_embeddings(vocab_size)
-    reset_embeddings(model)
+    if from_scratch:
+        config = AutoConfig.from_pretrained(model_id)
+        config.vocab_size = vocab_size
+        model = AutoModelForCausalLM.from_config(config)
+        model.to(torch_dtype)
+    else:
+        model = AutoModelForCausalLM.from_pretrained(
+            model_id,
+            torch_dtype=torch_dtype,
+        )
+        model.resize_token_embeddings(vocab_size)
+        reset_embeddings(model)
     model.config.vocab_size = vocab_size
     if model.config.pad_token_id is None:
         model.config.pad_token_id = 0
@@ -157,7 +164,8 @@ def parse_args() -> argparse.Namespace:
     parser.add_argument("--eval_batch_size", type=int, default=32, help="Per-device eval batch size")
     parser.add_argument("--learning_rate", type=float, default=3e-4)
     parser.add_argument("--weight_decay", type=float, default=0.01)
-    parser.add_argument("--max_steps", type=int, default=10000)
+    parser.add_argument("--num_train_epochs", type=float, default=1.0, help="Number of epochs to train when max_steps is not set.")
+    parser.add_argument("--max_steps", type=int, default=None, help="Optional override to stop after a fixed number of steps.")
     parser.add_argument("--warmup_ratio", type=float, default=0.03)
     parser.add_argument("--logging_steps", type=int, default=100)
     parser.add_argument("--eval_steps", type=int, default=500)
@@ -170,6 +178,7 @@ def parse_args() -> argparse.Namespace:
     parser.add_argument("--report_to", type=str, nargs="*", default=["none"])
     parser.add_argument("--resume_from", type=str, default=None)
     parser.add_argument("--disable_bf16", action="store_true", help="Force fp32 even if bf16 is available")
+    parser.add_argument("--from_scratch", action="store_true", help="Initialize model randomly instead of loading pretrained weights.")
     parser.add_argument("--save_total_limit", type=int, default=2)
     return parser.parse_args()
 
@@ -189,7 +198,8 @@ def main():
     train_npz = load_npz(Path(metadata["train"]["npz_path"]))
     test_npz = load_npz(Path(metadata["test"]["npz_path"]))
 
-    use_dtp = bool(metadata["use_dtp"])
+    dtp_class = metadata.get("dtp_class")
+    use_dtp = bool(metadata["use_dtp"]) and dtp_class != "FixedPatternMasking"
     train_max_trailing = int(metadata["train"]["max_trailing_zero"])
     codebook_size = int(metadata["codebook_size"])
     dtp_span = train_max_trailing + 1 if use_dtp else 1
@@ -223,6 +233,9 @@ def main():
     output_dir = Path(args.output_dir).resolve() if args.output_dir else (data_dir / "lm_runs" / "qwen2p5_0p5b")
     output_dir.mkdir(parents=True, exist_ok=True)
 
+    global_batch = args.train_batch_size * args.gradient_accumulation_steps
+    steps_per_epoch = math.ceil(datasets["train"].num_chunks / max(1, global_batch))
+
     summary = {
         "vocab_size": vocab_size,
         "dtp_span": dtp_span,
@@ -231,12 +244,18 @@ def main():
         "eval_windows": datasets["eval"].num_chunks,
         "block_size": args.block_size,
         "stride": args.stride or args.block_size,
+        "num_train_epochs": args.num_train_epochs,
+        "max_steps_override": args.max_steps,
+        "steps_per_epoch": steps_per_epoch,
+        "from_scratch": args.from_scratch,
     }
     print(json.dumps({"lm_setup": summary}, indent=2))
 
-    model = build_model(args.model_name, vocab_size, use_bf16)
+    model = build_model(args.model_name, vocab_size, use_bf16, args.from_scratch)
     if use_checkpointing:
         model.gradient_checkpointing_enable()
+
+    max_steps = args.max_steps if args.max_steps is not None else -1
 
     training_args = TrainingArguments(
         output_dir=str(output_dir),
@@ -244,7 +263,8 @@ def main():
         per_device_eval_batch_size=args.eval_batch_size,
         learning_rate=args.learning_rate,
         weight_decay=args.weight_decay,
-        max_steps=args.max_steps,
+        max_steps=max_steps,
+        num_train_epochs=args.num_train_epochs,
         warmup_ratio=args.warmup_ratio,
         logging_steps=args.logging_steps,
         eval_strategy="steps",
@@ -276,7 +296,6 @@ def main():
     trainer.train(resume_from_checkpoint=args.resume_from)
 
     eval_metrics = trainer.evaluate()
-    train_metrics = trainer.evaluate(eval_dataset=datasets["train"], metric_key_prefix="train")
 
     def add_ppl(metrics: Dict[str, float], key: str) -> None:
         loss_key = f"{key}_loss"
@@ -285,11 +304,9 @@ def main():
             metrics[f"{key}_perplexity"] = float(math.exp(min(50.0, loss_val)))
 
     add_ppl(eval_metrics, "eval")
-    add_ppl(train_metrics, "train")
 
     results = {
         "eval": eval_metrics,
-        "train": train_metrics,
         "vocab_size": vocab_size,
         "dtp_span": dtp_span,
         "max_trailing_zero": train_max_trailing,

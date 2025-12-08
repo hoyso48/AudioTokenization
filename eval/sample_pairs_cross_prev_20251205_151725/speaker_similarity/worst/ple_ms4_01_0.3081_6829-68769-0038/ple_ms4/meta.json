@@ -1,0 +1,13 @@
+{
+  "metric": "speaker_similarity",
+  "score": 0.3080856204032898,
+  "system": "ple_ms4",
+  "utt_id": "6829-68769-0038",
+  "utt_key": "/home/hoyso/datasets/LibriSpeech/LibriSpeech/test-clean/6829/68769/6829-68769-0038.flac",
+  "orig_path": "/home/hoyso/datasets/LibriSpeech/LibriSpeech/test-clean/6829/68769/6829-68769-0038.flac",
+  "gt_path": "/home/hoyso/projects/AudioTokenization/results/results1203/PLE50hz-sampleprob1/eval_ft_ms4/gt_16k/6829/68769/6829-68769-0038.wav",
+  "pred_path": "/home/hoyso/projects/AudioTokenization/results/results1203/PLE50hz-sampleprob1/eval_ft_ms4/pred_16k/6829/68769/6829-68769-0038.wav",
+  "transcript_path": "/home/hoyso/datasets/LibriSpeech/LibriSpeech/test-clean/6829/68769/6829-68769.trans.txt",
+  "gt_text": "AND IT RUINS A MAN'S DISPOSITION",
+  "asr_text": "AND IT RUINS A MAN'S DISPOSITION"
+}

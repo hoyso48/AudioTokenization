@@ -1,0 +1,13 @@
+{
+  "metric": "speaker_similarity",
+  "score": 0.7666288018226624,
+  "system": "fixed",
+  "utt_id": "672-122797-0033",
+  "utt_key": "/home/hoyso/datasets/LibriSpeech/LibriSpeech/test-clean/672/122797/672-122797-0033.flac",
+  "orig_path": "/home/hoyso/datasets/LibriSpeech/LibriSpeech/test-clean/672/122797/672-122797-0033.flac",
+  "gt_path": "/home/hoyso/projects/AudioTokenization/results/results1203/fixedpatternmasking50hz-vq65536/eval/gt_16k/672/122797/672-122797-0033.wav",
+  "pred_path": "/home/hoyso/projects/AudioTokenization/results/results1203/fixedpatternmasking50hz-vq65536/eval/pred_16k/672/122797/672-122797-0033.wav",
+  "transcript_path": "/home/hoyso/datasets/LibriSpeech/LibriSpeech/test-clean/672/122797/672-122797.trans.txt",
+  "gt_text": "A STORY",
+  "asr_text": "A STORY"
+}

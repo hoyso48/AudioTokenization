@@ -18,6 +18,7 @@ lambdas:
   lambda_adv: 1.0
   lambda_stft_loss: 1.0
   lambda_perceptual_loss: 0.0
+  lambda_bow: 1.0
 
 use_mel_loss: true
 use_feat_match_loss: true

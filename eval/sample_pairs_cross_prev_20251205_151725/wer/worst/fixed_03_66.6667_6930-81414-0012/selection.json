@@ -1,0 +1,37 @@
+{
+  "anchor_system": "fixed",
+  "split": "best",
+  "rank": 3,
+  "anchor_score": 66.66666666666666,
+  "utt_id": "6930-81414-0012",
+  "utt_key": "/home/hoyso/datasets/LibriSpeech/LibriSpeech/test-clean/6930/81414/6930-81414-0012.flac",
+  "sample_dir": "/home/hoyso/projects/AudioTokenization/eval/sample_pairs_cross/wer/fixed/best/03_66.6667_6930-81414-0012",
+  "systems": {
+    "fixed": {
+      "metric": "wer",
+      "score": 66.66666666666666,
+      "system": "fixed",
+      "utt_id": "6930-81414-0012",
+      "utt_key": "/home/hoyso/datasets/LibriSpeech/LibriSpeech/test-clean/6930/81414/6930-81414-0012.flac",
+      "orig_path": "/home/hoyso/datasets/LibriSpeech/LibriSpeech/test-clean/6930/81414/6930-81414-0012.flac",
+      "gt_path": "/home/hoyso/projects/AudioTokenization/results/results1203/fixedpatternmasking50hz-vq65536/eval/gt_16k/6930/81414/6930-81414-0012.wav",
+      "pred_path": "/home/hoyso/projects/AudioTokenization/results/results1203/fixedpatternmasking50hz-vq65536/eval/pred_16k/6930/81414/6930-81414-0012.wav",
+      "transcript_path": "/home/hoyso/datasets/LibriSpeech/LibriSpeech/test-clean/6930/81414/6930-81414.trans.txt",
+      "gt_text": "SAID ANOTHER VOICE WHICH I RECOGNIZED AS VOLTAIRE'S KAFFAR",
+      "asr_text": "SAID ANOTHER VOICE WITH DABECING MANAZOFUL TERS KAFFER"
+    },
+    "ple_ms4": {
+      "metric": "wer",
+      "score": 22.22222222222222,
+      "system": "ple_ms4",
+      "utt_id": "6930-81414-0012",
+      "utt_key": "/home/hoyso/datasets/LibriSpeech/LibriSpeech/test-clean/6930/81414/6930-81414-0012.flac",
+      "orig_path": "/home/hoyso/datasets/LibriSpeech/LibriSpeech/test-clean/6930/81414/6930-81414-0012.flac",
+      "gt_path": "/home/hoyso/projects/AudioTokenization/results/results1203/PLE50hz-sampleprob1/eval_ft_ms4/gt_16k/6930/81414/6930-81414-0012.wav",
+      "pred_path": "/home/hoyso/projects/AudioTokenization/results/results1203/PLE50hz-sampleprob1/eval_ft_ms4/pred_16k/6930/81414/6930-81414-0012.wav",
+      "transcript_path": "/home/hoyso/datasets/LibriSpeech/LibriSpeech/test-clean/6930/81414/6930-81414.trans.txt",
+      "gt_text": "SAID ANOTHER VOICE WHICH I RECOGNIZED AS VOLTAIRE'S KAFFAR",
+      "asr_text": "SAID ANOTHER VOICE WHICH I RECOGNIZED AS VOLCERS KAFFER"
+    }
+  }
+}

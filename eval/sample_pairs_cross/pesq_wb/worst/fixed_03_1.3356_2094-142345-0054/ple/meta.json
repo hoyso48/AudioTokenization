@@ -1,0 +1,13 @@
+{
+  "metric": "pesq_wb",
+  "score": 2.5671262741088867,
+  "system": "ple",
+  "utt_id": "2094-142345-0054",
+  "utt_key": "/home/hoyso/datasets/LibriSpeech/LibriSpeech/test-clean/2094/142345/2094-142345-0054.flac",
+  "orig_path": "/home/hoyso/datasets/LibriSpeech/LibriSpeech/test-clean/2094/142345/2094-142345-0054.flac",
+  "gt_path": "/home/hoyso/projects/AudioTokenization/results/results1203/PLE50hz/eval_ft/gt_16k/2094/142345/2094-142345-0054.wav",
+  "pred_path": "/home/hoyso/projects/AudioTokenization/results/results1203/PLE50hz/eval_ft/pred_16k/2094/142345/2094-142345-0054.wav",
+  "transcript_path": "/home/hoyso/datasets/LibriSpeech/LibriSpeech/test-clean/2094/142345/2094-142345.trans.txt",
+  "gt_text": "OH SIR SAID MISSUS POYSER RATHER ALARMED YOU WOULDN'T LIKE IT AT ALL",
+  "asr_text": "OH SIR SAID MISSUS POYSER RATHER ALARMED YOU WOULDN'T LIKE IT AT ALL"
+}

@@ -502,6 +502,10 @@ class _BatchSelectorBase(nn.Module):
         tau_max: float,
         update_every: int,
         sample_prob: float,
+        min_mask_prob: float,
+        max_mask_prob: float,
+        min_mask_span: int,
+        max_mask_span: int,
         max_s: Optional[int] = None,
         fixed_tau: Optional[float] = None,
         update_test_time: bool = False,
@@ -516,6 +520,10 @@ class _BatchSelectorBase(nn.Module):
             raise ValueError("Batch selector: tau must be > 0")
 
         self.r = float(r)
+        self.min_mask_prob = float(min_mask_prob)
+        self.max_mask_prob = float(max_mask_prob)
+        self.min_mask_span = int(min_mask_span)
+        self.max_mask_span = int(max_mask_span)
         self.ema_mu = float(ema_mu)
         self.eta0 = float(eta0)
         self.decay_T = float(decay_T)
@@ -528,6 +536,11 @@ class _BatchSelectorBase(nn.Module):
         self.fixed_tau = float(fixed_tau) if fixed_tau is not None else None
         self.update_test_time = bool(update_test_time)
         self.controller_sign = -1.0 if invert_update else 1.0
+
+        if self.min_mask_span <= 0 or self.max_mask_span <= 0:
+            raise ValueError("Batch selector: mask spans must be >= 1")
+        if self.max_mask_span < self.min_mask_span:
+            raise ValueError("Batch selector: max_mask_span must be >= min_mask_span")
 
         init_val = self.fixed_tau if self.fixed_tau is not None else float(initial_tau)
         self.register_buffer("tau_train", torch.tensor(init_val))
@@ -647,8 +660,46 @@ class _BatchSelectorBase(nn.Module):
         B, N = mask.shape
         if B * N == 0:
             return mask
-        probs = torch.full((B, N), 1.0 - self.r, device=mask.device, dtype=dtype)
-        return torch.bernoulli(probs).bool()
+        device = mask.device
+
+        # Per-sequence sampling for mask probability and span length
+        mask_prob = torch.empty(B, device=device, dtype=dtype).uniform_(
+            self.min_mask_prob, self.max_mask_prob
+        )
+        span_lengths = torch.randint(
+            low=self.min_mask_span,
+            high=self.max_mask_span + 1,
+            size=(B,),
+            device=device,
+        )
+
+        keep_probs = (1.0 - mask_prob).clamp(min=0.0, max=1.0).unsqueeze(1).expand(B, N)
+        random_keep = torch.bernoulli(keep_probs).bool()
+
+        if N == 0:
+            return random_keep
+
+        final_mask = random_keep.clone()
+
+        # Vectorized span masking
+        to_mask = ~random_keep
+        bs_idx, pos_idx = to_mask.nonzero(as_tuple=True)
+        if bs_idx.numel() == 0:
+            return final_mask
+
+        span_offsets = torch.arange(self.max_mask_span, device=device, dtype=torch.long)
+        start_expanded = pos_idx.unsqueeze(1) + span_offsets  # [K, max_span]
+        span_cap = span_lengths[bs_idx].unsqueeze(1)  # [K, 1]
+        valid = span_offsets.unsqueeze(0) < span_cap  # [K, max_span]
+
+        idx = start_expanded[valid]
+        bsel = bs_idx.unsqueeze(1).expand_as(start_expanded)[valid]
+
+        within_bounds = idx < N
+        if within_bounds.any():
+            final_mask[bsel[within_bounds], idx[within_bounds]] = False
+
+        return final_mask
 
 
 class PLEBatchTopK(_BatchSelectorBase):
@@ -674,6 +725,10 @@ class PLEBatchTopK(_BatchSelectorBase):
         tau_max: float = 1e6,
         update_every: int = 1,
         sample_prob: float = 0.0,
+        min_mask_prob: float = 0.0,
+        max_mask_prob: float = 0.0,
+        min_mask_span: int = 1,
+        max_mask_span: int = 1,
         max_s: Optional[int] = None,
         fixed_tau: Optional[float] = None,
         update_test_time: bool = False,
@@ -688,6 +743,10 @@ class PLEBatchTopK(_BatchSelectorBase):
             tau_max=tau_max,
             update_every=update_every,
             sample_prob=sample_prob,
+            min_mask_prob=min_mask_prob,
+            max_mask_prob=max_mask_prob,
+            min_mask_span=min_mask_span,
+            max_mask_span=max_mask_span,
             max_s=max_s,
             fixed_tau=fixed_tau,
             update_test_time=update_test_time,
@@ -771,6 +830,8 @@ class BatchTopK(_BatchSelectorBase):
         tau_max: float = 0.999,
         update_every: int = 1,
         sample_prob: float = 0.0,
+        min_mask_span: int = 1,
+        max_mask_span: int = 1,
         max_s: Optional[int] = None,
         fixed_tau: Optional[float] = None,
         update_test_time: bool = False,
@@ -785,6 +846,8 @@ class BatchTopK(_BatchSelectorBase):
             tau_max=tau_max,
             update_every=update_every,
             sample_prob=sample_prob,
+            min_mask_span=min_mask_span,
+            max_mask_span=max_mask_span,
             max_s=max_s,
             fixed_tau=fixed_tau,
             update_test_time=update_test_time,
@@ -837,6 +900,8 @@ class BatchGreedy(_BatchSelectorBase):
         tau_max: float = 0.999,
         update_every: int = 1,
         sample_prob: float = 0.0,
+        min_mask_span: int = 1,
+        max_mask_span: int = 1,
         max_s: Optional[int] = None,
         fixed_tau: Optional[float] = None,
         update_test_time: bool = False,
@@ -851,6 +916,8 @@ class BatchGreedy(_BatchSelectorBase):
             tau_max=tau_max,
             update_every=update_every,
             sample_prob=sample_prob,
+            min_mask_span=min_mask_span,
+            max_mask_span=max_mask_span,
             max_s=max_s,
             fixed_tau=fixed_tau,
             update_test_time=update_test_time,

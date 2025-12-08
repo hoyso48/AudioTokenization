@@ -1,0 +1,13 @@
+{
+  "metric": "utmos",
+  "score": 1.5468519926071167,
+  "system": "ple_ms4",
+  "utt_id": "672-122797-0009",
+  "utt_key": "/home/hoyso/datasets/LibriSpeech/LibriSpeech/test-clean/672/122797/672-122797-0009.flac",
+  "orig_path": "/home/hoyso/datasets/LibriSpeech/LibriSpeech/test-clean/672/122797/672-122797-0009.flac",
+  "gt_path": "/home/hoyso/projects/AudioTokenization/results/results1203/PLE50hz-sampleprob1/eval_ft_ms4/gt_16k/672/122797/672-122797-0009.wav",
+  "pred_path": "/home/hoyso/projects/AudioTokenization/results/results1203/PLE50hz-sampleprob1/eval_ft_ms4/pred_16k/672/122797/672-122797-0009.wav",
+  "transcript_path": "/home/hoyso/datasets/LibriSpeech/LibriSpeech/test-clean/672/122797/672-122797.trans.txt",
+  "gt_text": "HAVE YOU NOT MET THEM ANYWHERE",
+  "asr_text": "HAVE YOU NOT MET THEM ANYWHERE"
+}

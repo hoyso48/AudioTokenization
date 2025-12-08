@@ -1,0 +1,37 @@
+{
+  "anchor_system": "fixed",
+  "split": "best",
+  "rank": 3,
+  "anchor_score": 4.490448951721191,
+  "utt_id": "2300-131720-0031",
+  "utt_key": "/home/hoyso/datasets/LibriSpeech/LibriSpeech/test-clean/2300/131720/2300-131720-0031.flac",
+  "sample_dir": "AudioTokenization/eval/sample_pairs_cross/utmos/best/fixed_03_4.4904_2300-131720-0031",
+  "systems": {
+    "fixed": {
+      "metric": "utmos",
+      "score": 4.490448951721191,
+      "system": "fixed",
+      "utt_id": "2300-131720-0031",
+      "utt_key": "/home/hoyso/datasets/LibriSpeech/LibriSpeech/test-clean/2300/131720/2300-131720-0031.flac",
+      "orig_path": "/home/hoyso/datasets/LibriSpeech/LibriSpeech/test-clean/2300/131720/2300-131720-0031.flac",
+      "gt_path": "/home/hoyso/projects/AudioTokenization/results/results1203/fixedpatternmasking50hz-vq65536/eval/gt_16k/2300/131720/2300-131720-0031.wav",
+      "pred_path": "/home/hoyso/projects/AudioTokenization/results/results1203/fixedpatternmasking50hz-vq65536/eval/pred_16k/2300/131720/2300-131720-0031.wav",
+      "transcript_path": "/home/hoyso/datasets/LibriSpeech/LibriSpeech/test-clean/2300/131720/2300-131720.trans.txt",
+      "gt_text": "ASSOCIATED WITH THIS SIMPLE FORM OF APPARATUS WERE VARIOUS INGENIOUS DETAILS AND REFINEMENTS TO SECURE REGULARITY OF OPERATION FREEDOM FROM INACCURACY AND IMMUNITY FROM SUCH TAMPERING AS WOULD PERMIT THEFT OF CURRENT OR DAMAGE",
+      "asr_text": "ASSOCIATED WITH THIS SIMPLE FORM OF APPARATUS WERE VARIOUS INGENIOUS DETAILS AND REFINEMENTS TO SECURE REGULARITY OF OPERATION FREEDOM FROM INACCURACY AND IMMUNITY FROM SUCH TAMPERING AS WOULD PERMIT THEFT OF CURRENT OR DAMAGE"
+    },
+    "ple": {
+      "metric": "utmos",
+      "score": 4.497034072875977,
+      "system": "ple",
+      "utt_id": "2300-131720-0031",
+      "utt_key": "/home/hoyso/datasets/LibriSpeech/LibriSpeech/test-clean/2300/131720/2300-131720-0031.flac",
+      "orig_path": "/home/hoyso/datasets/LibriSpeech/LibriSpeech/test-clean/2300/131720/2300-131720-0031.flac",
+      "gt_path": "/home/hoyso/projects/AudioTokenization/results/results1203/PLE50hz/eval_ft/gt_16k/2300/131720/2300-131720-0031.wav",
+      "pred_path": "/home/hoyso/projects/AudioTokenization/results/results1203/PLE50hz/eval_ft/pred_16k/2300/131720/2300-131720-0031.wav",
+      "transcript_path": "/home/hoyso/datasets/LibriSpeech/LibriSpeech/test-clean/2300/131720/2300-131720.trans.txt",
+      "gt_text": "ASSOCIATED WITH THIS SIMPLE FORM OF APPARATUS WERE VARIOUS INGENIOUS DETAILS AND REFINEMENTS TO SECURE REGULARITY OF OPERATION FREEDOM FROM INACCURACY AND IMMUNITY FROM SUCH TAMPERING AS WOULD PERMIT THEFT OF CURRENT OR DAMAGE",
+      "asr_text": "ASSOCIATED WITH THIS SIMPLE FORM OF APPARATUS WERE VARIOUS INGENIOUS DETAILS AND REFINEMENTS TO SECURE REGULARITY OF OPERATION FREEDOM FROM INACCURACY AND IMMINITY FROM SUCH TAMPERING AS WOULD PERMIT FEFTIVE CURRENT OR DAMAGE"
+    }
+  }
+}

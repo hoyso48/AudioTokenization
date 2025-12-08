@@ -1,0 +1,13 @@
+{
+  "metric": "wer",
+  "score": 80.0,
+  "system": "ple_ms4",
+  "utt_id": "4970-29093-0016",
+  "utt_key": "/home/hoyso/datasets/LibriSpeech/LibriSpeech/test-clean/4970/29093/4970-29093-0016.flac",
+  "orig_path": "/home/hoyso/datasets/LibriSpeech/LibriSpeech/test-clean/4970/29093/4970-29093-0016.flac",
+  "gt_path": "/home/hoyso/projects/AudioTokenization/results/results1203/PLE50hz-sampleprob1/eval_ft_ms4/gt_16k/4970/29093/4970-29093-0016.wav",
+  "pred_path": "/home/hoyso/projects/AudioTokenization/results/results1203/PLE50hz-sampleprob1/eval_ft_ms4/pred_16k/4970/29093/4970-29093-0016.wav",
+  "transcript_path": "/home/hoyso/datasets/LibriSpeech/LibriSpeech/test-clean/4970/29093/4970-29093.trans.txt",
+  "gt_text": "NO ITS NOT TOO SOON",
+  "asr_text": "NO IT'S THAT YOU SING"
+}

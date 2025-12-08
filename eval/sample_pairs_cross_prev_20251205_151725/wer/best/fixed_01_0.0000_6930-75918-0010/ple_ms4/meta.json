@@ -1,0 +1,13 @@
+{
+  "metric": "wer",
+  "score": 0.0,
+  "system": "ple_ms4",
+  "utt_id": "6930-75918-0010",
+  "utt_key": "/home/hoyso/datasets/LibriSpeech/LibriSpeech/test-clean/6930/75918/6930-75918-0010.flac",
+  "orig_path": "/home/hoyso/datasets/LibriSpeech/LibriSpeech/test-clean/6930/75918/6930-75918-0010.flac",
+  "gt_path": "/home/hoyso/projects/AudioTokenization/results/results1203/PLE50hz-sampleprob1/eval_ft_ms4/gt_16k/6930/75918/6930-75918-0010.wav",
+  "pred_path": "/home/hoyso/projects/AudioTokenization/results/results1203/PLE50hz-sampleprob1/eval_ft_ms4/pred_16k/6930/75918/6930-75918-0010.wav",
+  "transcript_path": "/home/hoyso/datasets/LibriSpeech/LibriSpeech/test-clean/6930/75918/6930-75918.trans.txt",
+  "gt_text": "I CAN PERCEIVE LOVE CLEARLY ENOUGH",
+  "asr_text": "I CAN PERCEIVE LOVE CLEARLY ENOUGH"
+}

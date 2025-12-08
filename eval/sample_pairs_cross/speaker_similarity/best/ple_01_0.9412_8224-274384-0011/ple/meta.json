@@ -1,0 +1,13 @@
+{
+  "metric": "speaker_similarity",
+  "score": 0.9412451982498169,
+  "system": "ple",
+  "utt_id": "8224-274384-0011",
+  "utt_key": "/home/hoyso/datasets/LibriSpeech/LibriSpeech/test-clean/8224/274384/8224-274384-0011.flac",
+  "orig_path": "/home/hoyso/datasets/LibriSpeech/LibriSpeech/test-clean/8224/274384/8224-274384-0011.flac",
+  "gt_path": "/home/hoyso/projects/AudioTokenization/results/results1203/PLE50hz/eval_ft/gt_16k/8224/274384/8224-274384-0011.wav",
+  "pred_path": "/home/hoyso/projects/AudioTokenization/results/results1203/PLE50hz/eval_ft/pred_16k/8224/274384/8224-274384-0011.wav",
+  "transcript_path": "/home/hoyso/datasets/LibriSpeech/LibriSpeech/test-clean/8224/274384/8224-274384.trans.txt",
+  "gt_text": "THE ENGLISH IT IS EVIDENT HAD THEY NOT BEEN PREVIOUSLY ASSURED OF RECEIVING THE KING WOULD NEVER HAVE PARTED WITH SO CONSIDERABLE A SUM AND WHILE THEY WEAKENED THEMSELVES BY THE SAME MEASURE HAVE STRENGTHENED A PEOPLE WITH WHOM THEY MUST AFTERWARDS HAVE SO MATERIAL AN INTEREST TO DISCUSS",
+  "asr_text": "THE ENGLISH IT IS EVIDENT HAD THEY NOT BEEN PREVIOUSLY ASSURED OF RECEIVING THE KING WOULD NEVER HAVE PARTED WITH SO CONSIDERABLE A SUM AND WHILE THEY WEAKENED THEMSELVES BY THE SAME MEASURE HAVE STRENGTHENED A PEOPLE WITH WHOM THEY MUST AFTERWARDS HAVE SO MATERIAL AN INTEREST TO DISCUSS"
+}

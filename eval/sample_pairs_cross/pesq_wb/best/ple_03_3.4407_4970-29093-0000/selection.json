@@ -1,0 +1,37 @@
+{
+  "anchor_system": "ple",
+  "split": "best",
+  "rank": 3,
+  "anchor_score": 3.4407260417938232,
+  "utt_id": "4970-29093-0000",
+  "utt_key": "/home/hoyso/datasets/LibriSpeech/LibriSpeech/test-clean/4970/29093/4970-29093-0000.flac",
+  "sample_dir": "AudioTokenization/eval/sample_pairs_cross/pesq_wb/best/ple_03_3.4407_4970-29093-0000",
+  "systems": {
+    "fixed": {
+      "metric": "pesq_wb",
+      "score": 2.6341969966888428,
+      "system": "fixed",
+      "utt_id": "4970-29093-0000",
+      "utt_key": "/home/hoyso/datasets/LibriSpeech/LibriSpeech/test-clean/4970/29093/4970-29093-0000.flac",
+      "orig_path": "/home/hoyso/datasets/LibriSpeech/LibriSpeech/test-clean/4970/29093/4970-29093-0000.flac",
+      "gt_path": "/home/hoyso/projects/AudioTokenization/results/results1203/fixedpatternmasking50hz-vq65536/eval/gt_16k/4970/29093/4970-29093-0000.wav",
+      "pred_path": "/home/hoyso/projects/AudioTokenization/results/results1203/fixedpatternmasking50hz-vq65536/eval/pred_16k/4970/29093/4970-29093-0000.wav",
+      "transcript_path": "/home/hoyso/datasets/LibriSpeech/LibriSpeech/test-clean/4970/29093/4970-29093.trans.txt",
+      "gt_text": "YOU'LL NEVER DIG IT OUT OF THE ASTOR LIBRARY",
+      "asr_text": "YOU'LL NEVER DIG IT OUT OF THE ASTRA LIBRARY"
+    },
+    "ple": {
+      "metric": "pesq_wb",
+      "score": 3.4407260417938232,
+      "system": "ple",
+      "utt_id": "4970-29093-0000",
+      "utt_key": "/home/hoyso/datasets/LibriSpeech/LibriSpeech/test-clean/4970/29093/4970-29093-0000.flac",
+      "orig_path": "/home/hoyso/datasets/LibriSpeech/LibriSpeech/test-clean/4970/29093/4970-29093-0000.flac",
+      "gt_path": "/home/hoyso/projects/AudioTokenization/results/results1203/PLE50hz/eval_ft/gt_16k/4970/29093/4970-29093-0000.wav",
+      "pred_path": "/home/hoyso/projects/AudioTokenization/results/results1203/PLE50hz/eval_ft/pred_16k/4970/29093/4970-29093-0000.wav",
+      "transcript_path": "/home/hoyso/datasets/LibriSpeech/LibriSpeech/test-clean/4970/29093/4970-29093.trans.txt",
+      "gt_text": "YOU'LL NEVER DIG IT OUT OF THE ASTOR LIBRARY",
+      "asr_text": "YOU'LL NEVER DIG IT OUT OF THE ASTER LIBRARY"
+    }
+  }
+}

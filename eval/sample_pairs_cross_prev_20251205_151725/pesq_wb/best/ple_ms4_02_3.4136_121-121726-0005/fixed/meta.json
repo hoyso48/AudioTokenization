@@ -1,0 +1,13 @@
+{
+  "metric": "pesq_wb",
+  "score": 3.1533396244049072,
+  "system": "fixed",
+  "utt_id": "121-121726-0005",
+  "utt_key": "/home/hoyso/datasets/LibriSpeech/LibriSpeech/test-clean/121/121726/121-121726-0005.flac",
+  "orig_path": "/home/hoyso/datasets/LibriSpeech/LibriSpeech/test-clean/121/121726/121-121726-0005.flac",
+  "gt_path": "/home/hoyso/projects/AudioTokenization/results/results1203/fixedpatternmasking50hz-vq65536/eval/gt_16k/121/121726/121-121726-0005.wav",
+  "pred_path": "/home/hoyso/projects/AudioTokenization/results/results1203/fixedpatternmasking50hz-vq65536/eval/pred_16k/121/121726/121-121726-0005.wav",
+  "transcript_path": "/home/hoyso/datasets/LibriSpeech/LibriSpeech/test-clean/121/121726/121-121726.trans.txt",
+  "gt_text": "HEDGE A FENCE",
+  "asr_text": "HEDGE THE FENCE"
+}

@@ -1,0 +1,37 @@
+{
+  "anchor_system": "ple_ms4",
+  "split": "worst",
+  "rank": 3,
+  "anchor_score": 0.0,
+  "utt_id": "6930-75918-0006",
+  "utt_key": "/home/hoyso/datasets/LibriSpeech/LibriSpeech/test-clean/6930/75918/6930-75918-0006.flac",
+  "sample_dir": "/home/hoyso/projects/AudioTokenization/eval/sample_pairs_cross/wer/ple_ms4/worst/03_0.0000_6930-75918-0006",
+  "systems": {
+    "fixed": {
+      "metric": "wer",
+      "score": 0.0,
+      "system": "fixed",
+      "utt_id": "6930-75918-0006",
+      "utt_key": "/home/hoyso/datasets/LibriSpeech/LibriSpeech/test-clean/6930/75918/6930-75918-0006.flac",
+      "orig_path": "/home/hoyso/datasets/LibriSpeech/LibriSpeech/test-clean/6930/75918/6930-75918-0006.flac",
+      "gt_path": "/home/hoyso/projects/AudioTokenization/results/results1203/fixedpatternmasking50hz-vq65536/eval/gt_16k/6930/75918/6930-75918-0006.wav",
+      "pred_path": "/home/hoyso/projects/AudioTokenization/results/results1203/fixedpatternmasking50hz-vq65536/eval/pred_16k/6930/75918/6930-75918-0006.wav",
+      "transcript_path": "/home/hoyso/datasets/LibriSpeech/LibriSpeech/test-clean/6930/75918/6930-75918.trans.txt",
+      "gt_text": "THIS HAS INDEED BEEN A HARASSING DAY CONTINUED THE YOUNG MAN HIS EYES FIXED UPON HIS FRIEND",
+      "asr_text": "THIS HAS INDEED BEEN A HARASSING DAY CONTINUED THE YOUNG MAN HIS EYES FIXED UPON HIS FRIEND"
+    },
+    "ple_ms4": {
+      "metric": "wer",
+      "score": 0.0,
+      "system": "ple_ms4",
+      "utt_id": "6930-75918-0006",
+      "utt_key": "/home/hoyso/datasets/LibriSpeech/LibriSpeech/test-clean/6930/75918/6930-75918-0006.flac",
+      "orig_path": "/home/hoyso/datasets/LibriSpeech/LibriSpeech/test-clean/6930/75918/6930-75918-0006.flac",
+      "gt_path": "/home/hoyso/projects/AudioTokenization/results/results1203/PLE50hz-sampleprob1/eval_ft_ms4/gt_16k/6930/75918/6930-75918-0006.wav",
+      "pred_path": "/home/hoyso/projects/AudioTokenization/results/results1203/PLE50hz-sampleprob1/eval_ft_ms4/pred_16k/6930/75918/6930-75918-0006.wav",
+      "transcript_path": "/home/hoyso/datasets/LibriSpeech/LibriSpeech/test-clean/6930/75918/6930-75918.trans.txt",
+      "gt_text": "THIS HAS INDEED BEEN A HARASSING DAY CONTINUED THE YOUNG MAN HIS EYES FIXED UPON HIS FRIEND",
+      "asr_text": "THIS HAS INDEED BEEN A HARASSING DAY CONTINUED THE YOUNG MAN HIS EYES FIXED UPON HIS FRIEND"
+    }
+  }
+}

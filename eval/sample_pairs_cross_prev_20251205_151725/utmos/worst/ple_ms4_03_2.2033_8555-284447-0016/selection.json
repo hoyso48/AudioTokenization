@@ -1,0 +1,37 @@
+{
+  "anchor_system": "ple_ms4",
+  "split": "worst",
+  "rank": 3,
+  "anchor_score": 2.2033233642578125,
+  "utt_id": "8555-284447-0016",
+  "utt_key": "/home/hoyso/datasets/LibriSpeech/LibriSpeech/test-clean/8555/284447/8555-284447-0016.flac",
+  "sample_dir": "/home/hoyso/projects/AudioTokenization/eval/sample_pairs_cross/utmos/ple_ms4/worst/03_2.2033_8555-284447-0016",
+  "systems": {
+    "fixed": {
+      "metric": "utmos",
+      "score": 2.421586513519287,
+      "system": "fixed",
+      "utt_id": "8555-284447-0016",
+      "utt_key": "/home/hoyso/datasets/LibriSpeech/LibriSpeech/test-clean/8555/284447/8555-284447-0016.flac",
+      "orig_path": "/home/hoyso/datasets/LibriSpeech/LibriSpeech/test-clean/8555/284447/8555-284447-0016.flac",
+      "gt_path": "/home/hoyso/projects/AudioTokenization/results/results1203/fixedpatternmasking50hz-vq65536/eval/gt_16k/8555/284447/8555-284447-0016.wav",
+      "pred_path": "/home/hoyso/projects/AudioTokenization/results/results1203/fixedpatternmasking50hz-vq65536/eval/pred_16k/8555/284447/8555-284447-0016.wav",
+      "transcript_path": "/home/hoyso/datasets/LibriSpeech/LibriSpeech/test-clean/8555/284447/8555-284447.trans.txt",
+      "gt_text": "FINE GLORIOUS",
+      "asr_text": "FINE GLORIOUS"
+    },
+    "ple_ms4": {
+      "metric": "utmos",
+      "score": 2.2033233642578125,
+      "system": "ple_ms4",
+      "utt_id": "8555-284447-0016",
+      "utt_key": "/home/hoyso/datasets/LibriSpeech/LibriSpeech/test-clean/8555/284447/8555-284447-0016.flac",
+      "orig_path": "/home/hoyso/datasets/LibriSpeech/LibriSpeech/test-clean/8555/284447/8555-284447-0016.flac",
+      "gt_path": "/home/hoyso/projects/AudioTokenization/results/results1203/PLE50hz-sampleprob1/eval_ft_ms4/gt_16k/8555/284447/8555-284447-0016.wav",
+      "pred_path": "/home/hoyso/projects/AudioTokenization/results/results1203/PLE50hz-sampleprob1/eval_ft_ms4/pred_16k/8555/284447/8555-284447-0016.wav",
+      "transcript_path": "/home/hoyso/datasets/LibriSpeech/LibriSpeech/test-clean/8555/284447/8555-284447.trans.txt",
+      "gt_text": "FINE GLORIOUS",
+      "asr_text": "FINE GLORIOUS"
+    }
+  }
+}

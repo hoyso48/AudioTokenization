@@ -1,0 +1,13 @@
+{
+  "metric": "pesq_wb",
+  "score": 3.3792076110839844,
+  "system": "ple_ms4",
+  "utt_id": "3575-170457-0016",
+  "utt_key": "/home/hoyso/datasets/LibriSpeech/LibriSpeech/test-clean/3575/170457/3575-170457-0016.flac",
+  "orig_path": "/home/hoyso/datasets/LibriSpeech/LibriSpeech/test-clean/3575/170457/3575-170457-0016.flac",
+  "gt_path": "/home/hoyso/projects/AudioTokenization/results/results1203/PLE50hz-sampleprob1/eval_ft_ms4/gt_16k/3575/170457/3575-170457-0016.wav",
+  "pred_path": "/home/hoyso/projects/AudioTokenization/results/results1203/PLE50hz-sampleprob1/eval_ft_ms4/pred_16k/3575/170457/3575-170457-0016.wav",
+  "transcript_path": "/home/hoyso/datasets/LibriSpeech/LibriSpeech/test-clean/3575/170457/3575-170457.trans.txt",
+  "gt_text": "FAREWELL MADAM",
+  "asr_text": "FAREWELL MADAME"
+}

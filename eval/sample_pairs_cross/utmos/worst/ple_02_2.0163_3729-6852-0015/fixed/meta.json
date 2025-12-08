@@ -1,0 +1,13 @@
+{
+  "metric": "utmos",
+  "score": 2.420135974884033,
+  "system": "fixed",
+  "utt_id": "3729-6852-0015",
+  "utt_key": "/home/hoyso/datasets/LibriSpeech/LibriSpeech/test-clean/3729/6852/3729-6852-0015.flac",
+  "orig_path": "/home/hoyso/datasets/LibriSpeech/LibriSpeech/test-clean/3729/6852/3729-6852-0015.flac",
+  "gt_path": "/home/hoyso/projects/AudioTokenization/results/results1203/fixedpatternmasking50hz-vq65536/eval/gt_16k/3729/6852/3729-6852-0015.wav",
+  "pred_path": "/home/hoyso/projects/AudioTokenization/results/results1203/fixedpatternmasking50hz-vq65536/eval/pred_16k/3729/6852/3729-6852-0015.wav",
+  "transcript_path": "/home/hoyso/datasets/LibriSpeech/LibriSpeech/test-clean/3729/6852/3729-6852.trans.txt",
+  "gt_text": "AT YOUR SERVICE SIR",
+  "asr_text": "AT YOUR SERVICE SIR"
+}

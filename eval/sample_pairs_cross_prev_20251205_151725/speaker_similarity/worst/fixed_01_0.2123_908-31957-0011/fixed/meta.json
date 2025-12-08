@@ -1,0 +1,13 @@
+{
+  "metric": "speaker_similarity",
+  "score": 0.2123105376958847,
+  "system": "fixed",
+  "utt_id": "908-31957-0011",
+  "utt_key": "/home/hoyso/datasets/LibriSpeech/LibriSpeech/test-clean/908/31957/908-31957-0011.flac",
+  "orig_path": "/home/hoyso/datasets/LibriSpeech/LibriSpeech/test-clean/908/31957/908-31957-0011.flac",
+  "gt_path": "/home/hoyso/projects/AudioTokenization/results/results1203/fixedpatternmasking50hz-vq65536/eval/gt_16k/908/31957/908-31957-0011.wav",
+  "pred_path": "/home/hoyso/projects/AudioTokenization/results/results1203/fixedpatternmasking50hz-vq65536/eval/pred_16k/908/31957/908-31957-0011.wav",
+  "transcript_path": "/home/hoyso/datasets/LibriSpeech/LibriSpeech/test-clean/908/31957/908-31957.trans.txt",
+  "gt_text": "AND LOVE BE FALSE",
+  "asr_text": "AND RALFH BE FALSE"
+}

@@ -1,0 +1,37 @@
+{
+  "anchor_system": "fixed",
+  "split": "worst",
+  "rank": 1,
+  "anchor_score": 1.1836061477661133,
+  "utt_id": "2830-3980-0072",
+  "utt_key": "/home/hoyso/datasets/LibriSpeech/LibriSpeech/test-clean/2830/3980/2830-3980-0072.flac",
+  "sample_dir": "/home/hoyso/projects/AudioTokenization/eval/sample_pairs_cross/pesq_wb/fixed/worst/01_1.1836_2830-3980-0072",
+  "systems": {
+    "fixed": {
+      "metric": "pesq_wb",
+      "score": 1.1836061477661133,
+      "system": "fixed",
+      "utt_id": "2830-3980-0072",
+      "utt_key": "/home/hoyso/datasets/LibriSpeech/LibriSpeech/test-clean/2830/3980/2830-3980-0072.flac",
+      "orig_path": "/home/hoyso/datasets/LibriSpeech/LibriSpeech/test-clean/2830/3980/2830-3980-0072.flac",
+      "gt_path": "/home/hoyso/projects/AudioTokenization/results/results1203/fixedpatternmasking50hz-vq65536/eval/gt_16k/2830/3980/2830-3980-0072.wav",
+      "pred_path": "/home/hoyso/projects/AudioTokenization/results/results1203/fixedpatternmasking50hz-vq65536/eval/pred_16k/2830/3980/2830-3980-0072.wav",
+      "transcript_path": "/home/hoyso/datasets/LibriSpeech/LibriSpeech/test-clean/2830/3980/2830-3980.trans.txt",
+      "gt_text": "THIS PASSAGE THEN BEARS OUT THE FACT THAT ALL MEN ARE SOLD UNDER SIN",
+      "asr_text": "THIS PASSAGE THEN DARS OUT THE FACT THAT ALL MEN ARE SOLD UNDERSIN"
+    },
+    "ple_ms4": {
+      "metric": "pesq_wb",
+      "score": 2.261507749557495,
+      "system": "ple_ms4",
+      "utt_id": "2830-3980-0072",
+      "utt_key": "/home/hoyso/datasets/LibriSpeech/LibriSpeech/test-clean/2830/3980/2830-3980-0072.flac",
+      "orig_path": "/home/hoyso/datasets/LibriSpeech/LibriSpeech/test-clean/2830/3980/2830-3980-0072.flac",
+      "gt_path": "/home/hoyso/projects/AudioTokenization/results/results1203/PLE50hz-sampleprob1/eval_ft_ms4/gt_16k/2830/3980/2830-3980-0072.wav",
+      "pred_path": "/home/hoyso/projects/AudioTokenization/results/results1203/PLE50hz-sampleprob1/eval_ft_ms4/pred_16k/2830/3980/2830-3980-0072.wav",
+      "transcript_path": "/home/hoyso/datasets/LibriSpeech/LibriSpeech/test-clean/2830/3980/2830-3980.trans.txt",
+      "gt_text": "THIS PASSAGE THEN BEARS OUT THE FACT THAT ALL MEN ARE SOLD UNDER SIN",
+      "asr_text": "THIS PASSAGE THEN BEARS OUT THE FACT THAT ALL MEN ARE SOLD UNDER SIN"
+    }
+  }
+}

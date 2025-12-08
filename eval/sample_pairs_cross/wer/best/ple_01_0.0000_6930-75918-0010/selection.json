@@ -1,0 +1,37 @@
+{
+  "anchor_system": "ple",
+  "split": "best",
+  "rank": 1,
+  "anchor_score": 0.0,
+  "utt_id": "6930-75918-0010",
+  "utt_key": "/home/hoyso/datasets/LibriSpeech/LibriSpeech/test-clean/6930/75918/6930-75918-0010.flac",
+  "sample_dir": "AudioTokenization/eval/sample_pairs_cross/wer/best/ple_01_0.0000_6930-75918-0010",
+  "systems": {
+    "fixed": {
+      "metric": "wer",
+      "score": 0.0,
+      "system": "fixed",
+      "utt_id": "6930-75918-0010",
+      "utt_key": "/home/hoyso/datasets/LibriSpeech/LibriSpeech/test-clean/6930/75918/6930-75918-0010.flac",
+      "orig_path": "/home/hoyso/datasets/LibriSpeech/LibriSpeech/test-clean/6930/75918/6930-75918-0010.flac",
+      "gt_path": "/home/hoyso/projects/AudioTokenization/results/results1203/fixedpatternmasking50hz-vq65536/eval/gt_16k/6930/75918/6930-75918-0010.wav",
+      "pred_path": "/home/hoyso/projects/AudioTokenization/results/results1203/fixedpatternmasking50hz-vq65536/eval/pred_16k/6930/75918/6930-75918-0010.wav",
+      "transcript_path": "/home/hoyso/datasets/LibriSpeech/LibriSpeech/test-clean/6930/75918/6930-75918.trans.txt",
+      "gt_text": "I CAN PERCEIVE LOVE CLEARLY ENOUGH",
+      "asr_text": "I CAN PERCEIVE LOVE CLEARLY ENOUGH"
+    },
+    "ple": {
+      "metric": "wer",
+      "score": 0.0,
+      "system": "ple",
+      "utt_id": "6930-75918-0010",
+      "utt_key": "/home/hoyso/datasets/LibriSpeech/LibriSpeech/test-clean/6930/75918/6930-75918-0010.flac",
+      "orig_path": "/home/hoyso/datasets/LibriSpeech/LibriSpeech/test-clean/6930/75918/6930-75918-0010.flac",
+      "gt_path": "/home/hoyso/projects/AudioTokenization/results/results1203/PLE50hz/eval_ft/gt_16k/6930/75918/6930-75918-0010.wav",
+      "pred_path": "/home/hoyso/projects/AudioTokenization/results/results1203/PLE50hz/eval_ft/pred_16k/6930/75918/6930-75918-0010.wav",
+      "transcript_path": "/home/hoyso/datasets/LibriSpeech/LibriSpeech/test-clean/6930/75918/6930-75918.trans.txt",
+      "gt_text": "I CAN PERCEIVE LOVE CLEARLY ENOUGH",
+      "asr_text": "I CAN PERCEIVE LOVE CLEARLY ENOUGH"
+    }
+  }
+}

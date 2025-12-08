@@ -1,0 +1,13 @@
+{
+  "metric": "utmos",
+  "score": 2.421586513519287,
+  "system": "fixed",
+  "utt_id": "8555-284447-0016",
+  "utt_key": "/home/hoyso/datasets/LibriSpeech/LibriSpeech/test-clean/8555/284447/8555-284447-0016.flac",
+  "orig_path": "/home/hoyso/datasets/LibriSpeech/LibriSpeech/test-clean/8555/284447/8555-284447-0016.flac",
+  "gt_path": "/home/hoyso/projects/AudioTokenization/results/results1203/fixedpatternmasking50hz-vq65536/eval/gt_16k/8555/284447/8555-284447-0016.wav",
+  "pred_path": "/home/hoyso/projects/AudioTokenization/results/results1203/fixedpatternmasking50hz-vq65536/eval/pred_16k/8555/284447/8555-284447-0016.wav",
+  "transcript_path": "/home/hoyso/datasets/LibriSpeech/LibriSpeech/test-clean/8555/284447/8555-284447.trans.txt",
+  "gt_text": "FINE GLORIOUS",
+  "asr_text": "FINE GLORIOUS"
+}

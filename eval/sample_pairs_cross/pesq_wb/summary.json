@@ -1,0 +1,455 @@
+{
+  "metric": "pesq_wb",
+  "higher_is_better": true,
+  "k": 3,
+  "systems": {
+    "fixed": "/home/hoyso/projects/AudioTokenization/results/results1203/fixedpatternmasking50hz-vq65536/eval/manifest.jsonl",
+    "ple": "/home/hoyso/projects/AudioTokenization/results/results1203/PLE50hz/eval_ft/manifest.jsonl"
+  },
+  "selections": [
+    {
+      "anchor_system": "fixed",
+      "split": "best",
+      "rank": 1,
+      "anchor_score": 3.3238332271575928,
+      "utt_id": "4507-16021-0000",
+      "utt_key": "/home/hoyso/datasets/LibriSpeech/LibriSpeech/test-clean/4507/16021/4507-16021-0000.flac",
+      "sample_dir": "AudioTokenization/eval/sample_pairs_cross/pesq_wb/best/fixed_01_3.3238_4507-16021-0000",
+      "systems": {
+        "fixed": {
+          "metric": "pesq_wb",
+          "score": 3.3238332271575928,
+          "system": "fixed",
+          "utt_id": "4507-16021-0000",
+          "utt_key": "/home/hoyso/datasets/LibriSpeech/LibriSpeech/test-clean/4507/16021/4507-16021-0000.flac",
+          "orig_path": "/home/hoyso/datasets/LibriSpeech/LibriSpeech/test-clean/4507/16021/4507-16021-0000.flac",
+          "gt_path": "/home/hoyso/projects/AudioTokenization/results/results1203/fixedpatternmasking50hz-vq65536/eval/gt_16k/4507/16021/4507-16021-0000.wav",
+          "pred_path": "/home/hoyso/projects/AudioTokenization/results/results1203/fixedpatternmasking50hz-vq65536/eval/pred_16k/4507/16021/4507-16021-0000.wav",
+          "transcript_path": "/home/hoyso/datasets/LibriSpeech/LibriSpeech/test-clean/4507/16021/4507-16021.trans.txt",
+          "gt_text": "CHAPTER ONE ORIGIN",
+          "asr_text": "CHAPTER ONE ORIGIN"
+        },
+        "ple": {
+          "metric": "pesq_wb",
+          "score": 2.75760555267334,
+          "system": "ple",
+          "utt_id": "4507-16021-0000",
+          "utt_key": "/home/hoyso/datasets/LibriSpeech/LibriSpeech/test-clean/4507/16021/4507-16021-0000.flac",
+          "orig_path": "/home/hoyso/datasets/LibriSpeech/LibriSpeech/test-clean/4507/16021/4507-16021-0000.flac",
+          "gt_path": "/home/hoyso/projects/AudioTokenization/results/results1203/PLE50hz/eval_ft/gt_16k/4507/16021/4507-16021-0000.wav",
+          "pred_path": "/home/hoyso/projects/AudioTokenization/results/results1203/PLE50hz/eval_ft/pred_16k/4507/16021/4507-16021-0000.wav",
+          "transcript_path": "/home/hoyso/datasets/LibriSpeech/LibriSpeech/test-clean/4507/16021/4507-16021.trans.txt",
+          "gt_text": "CHAPTER ONE ORIGIN",
+          "asr_text": "CHAPTER ONE ORIGIN"
+        }
+      }
+    },
+    {
+      "anchor_system": "fixed",
+      "split": "best",
+      "rank": 2,
+      "anchor_score": 3.3056719303131104,
+      "utt_id": "4507-16021-0044",
+      "utt_key": "/home/hoyso/datasets/LibriSpeech/LibriSpeech/test-clean/4507/16021/4507-16021-0044.flac",
+      "sample_dir": "AudioTokenization/eval/sample_pairs_cross/pesq_wb/best/fixed_02_3.3057_4507-16021-0044",
+      "systems": {
+        "fixed": {
+          "metric": "pesq_wb",
+          "score": 3.3056719303131104,
+          "system": "fixed",
+          "utt_id": "4507-16021-0044",
+          "utt_key": "/home/hoyso/datasets/LibriSpeech/LibriSpeech/test-clean/4507/16021/4507-16021-0044.flac",
+          "orig_path": "/home/hoyso/datasets/LibriSpeech/LibriSpeech/test-clean/4507/16021/4507-16021-0044.flac",
+          "gt_path": "/home/hoyso/projects/AudioTokenization/results/results1203/fixedpatternmasking50hz-vq65536/eval/gt_16k/4507/16021/4507-16021-0044.wav",
+          "pred_path": "/home/hoyso/projects/AudioTokenization/results/results1203/fixedpatternmasking50hz-vq65536/eval/pred_16k/4507/16021/4507-16021-0044.wav",
+          "transcript_path": "/home/hoyso/datasets/LibriSpeech/LibriSpeech/test-clean/4507/16021/4507-16021.trans.txt",
+          "gt_text": "LOOK CLOSELY AT LIFE",
+          "asr_text": "LOOK CLOSELY AT LIFE"
+        },
+        "ple": {
+          "metric": "pesq_wb",
+          "score": 3.01643443107605,
+          "system": "ple",
+          "utt_id": "4507-16021-0044",
+          "utt_key": "/home/hoyso/datasets/LibriSpeech/LibriSpeech/test-clean/4507/16021/4507-16021-0044.flac",
+          "orig_path": "/home/hoyso/datasets/LibriSpeech/LibriSpeech/test-clean/4507/16021/4507-16021-0044.flac",
+          "gt_path": "/home/hoyso/projects/AudioTokenization/results/results1203/PLE50hz/eval_ft/gt_16k/4507/16021/4507-16021-0044.wav",
+          "pred_path": "/home/hoyso/projects/AudioTokenization/results/results1203/PLE50hz/eval_ft/pred_16k/4507/16021/4507-16021-0044.wav",
+          "transcript_path": "/home/hoyso/datasets/LibriSpeech/LibriSpeech/test-clean/4507/16021/4507-16021.trans.txt",
+          "gt_text": "LOOK CLOSELY AT LIFE",
+          "asr_text": "LOOK CLOSELY AT LIFE"
+        }
+      }
+    },
+    {
+      "anchor_system": "fixed",
+      "split": "best",
+      "rank": 3,
+      "anchor_score": 3.292318105697632,
+      "utt_id": "1089-134691-0020",
+      "utt_key": "/home/hoyso/datasets/LibriSpeech/LibriSpeech/test-clean/1089/134691/1089-134691-0020.flac",
+      "sample_dir": "AudioTokenization/eval/sample_pairs_cross/pesq_wb/best/fixed_03_3.2923_1089-134691-0020",
+      "systems": {
+        "fixed": {
+          "metric": "pesq_wb",
+          "score": 3.292318105697632,
+          "system": "fixed",
+          "utt_id": "1089-134691-0020",
+          "utt_key": "/home/hoyso/datasets/LibriSpeech/LibriSpeech/test-clean/1089/134691/1089-134691-0020.flac",
+          "orig_path": "/home/hoyso/datasets/LibriSpeech/LibriSpeech/test-clean/1089/134691/1089-134691-0020.flac",
+          "gt_path": "/home/hoyso/projects/AudioTokenization/results/results1203/fixedpatternmasking50hz-vq65536/eval/gt_16k/1089/134691/1089-134691-0020.wav",
+          "pred_path": "/home/hoyso/projects/AudioTokenization/results/results1203/fixedpatternmasking50hz-vq65536/eval/pred_16k/1089/134691/1089-134691-0020.wav",
+          "transcript_path": "/home/hoyso/datasets/LibriSpeech/LibriSpeech/test-clean/1089/134691/1089-134691.trans.txt",
+          "gt_text": "HELLO STEPHANOS HERE COMES THE DEDALUS",
+          "asr_text": "HELLO STEPHANOS HERE COMES THE DEDALUS"
+        },
+        "ple": {
+          "metric": "pesq_wb",
+          "score": 3.52763032913208,
+          "system": "ple",
+          "utt_id": "1089-134691-0020",
+          "utt_key": "/home/hoyso/datasets/LibriSpeech/LibriSpeech/test-clean/1089/134691/1089-134691-0020.flac",
+          "orig_path": "/home/hoyso/datasets/LibriSpeech/LibriSpeech/test-clean/1089/134691/1089-134691-0020.flac",
+          "gt_path": "/home/hoyso/projects/AudioTokenization/results/results1203/PLE50hz/eval_ft/gt_16k/1089/134691/1089-134691-0020.wav",
+          "pred_path": "/home/hoyso/projects/AudioTokenization/results/results1203/PLE50hz/eval_ft/pred_16k/1089/134691/1089-134691-0020.wav",
+          "transcript_path": "/home/hoyso/datasets/LibriSpeech/LibriSpeech/test-clean/1089/134691/1089-134691.trans.txt",
+          "gt_text": "HELLO STEPHANOS HERE COMES THE DEDALUS",
+          "asr_text": "HELLO STEPHANOS HERE COMES THE DEDALUS"
+        }
+      }
+    },
+    {
+      "anchor_system": "fixed",
+      "split": "worst",
+      "rank": 1,
+      "anchor_score": 1.1836061477661133,
+      "utt_id": "2830-3980-0072",
+      "utt_key": "/home/hoyso/datasets/LibriSpeech/LibriSpeech/test-clean/2830/3980/2830-3980-0072.flac",
+      "sample_dir": "AudioTokenization/eval/sample_pairs_cross/pesq_wb/worst/fixed_01_1.1836_2830-3980-0072",
+      "systems": {
+        "fixed": {
+          "metric": "pesq_wb",
+          "score": 1.1836061477661133,
+          "system": "fixed",
+          "utt_id": "2830-3980-0072",
+          "utt_key": "/home/hoyso/datasets/LibriSpeech/LibriSpeech/test-clean/2830/3980/2830-3980-0072.flac",
+          "orig_path": "/home/hoyso/datasets/LibriSpeech/LibriSpeech/test-clean/2830/3980/2830-3980-0072.flac",
+          "gt_path": "/home/hoyso/projects/AudioTokenization/results/results1203/fixedpatternmasking50hz-vq65536/eval/gt_16k/2830/3980/2830-3980-0072.wav",
+          "pred_path": "/home/hoyso/projects/AudioTokenization/results/results1203/fixedpatternmasking50hz-vq65536/eval/pred_16k/2830/3980/2830-3980-0072.wav",
+          "transcript_path": "/home/hoyso/datasets/LibriSpeech/LibriSpeech/test-clean/2830/3980/2830-3980.trans.txt",
+          "gt_text": "THIS PASSAGE THEN BEARS OUT THE FACT THAT ALL MEN ARE SOLD UNDER SIN",
+          "asr_text": "THIS PASSAGE THEN DARS OUT THE FACT THAT ALL MEN ARE SOLD UNDERSIN"
+        },
+        "ple": {
+          "metric": "pesq_wb",
+          "score": 2.6664955615997314,
+          "system": "ple",
+          "utt_id": "2830-3980-0072",
+          "utt_key": "/home/hoyso/datasets/LibriSpeech/LibriSpeech/test-clean/2830/3980/2830-3980-0072.flac",
+          "orig_path": "/home/hoyso/datasets/LibriSpeech/LibriSpeech/test-clean/2830/3980/2830-3980-0072.flac",
+          "gt_path": "/home/hoyso/projects/AudioTokenization/results/results1203/PLE50hz/eval_ft/gt_16k/2830/3980/2830-3980-0072.wav",
+          "pred_path": "/home/hoyso/projects/AudioTokenization/results/results1203/PLE50hz/eval_ft/pred_16k/2830/3980/2830-3980-0072.wav",
+          "transcript_path": "/home/hoyso/datasets/LibriSpeech/LibriSpeech/test-clean/2830/3980/2830-3980.trans.txt",
+          "gt_text": "THIS PASSAGE THEN BEARS OUT THE FACT THAT ALL MEN ARE SOLD UNDER SIN",
+          "asr_text": "THIS PASSAGE THEN BEARS OUT THE FACT THAT ALL MEN ARE SOLD UNDER SIN"
+        }
+      }
+    },
+    {
+      "anchor_system": "fixed",
+      "split": "worst",
+      "rank": 2,
+      "anchor_score": 1.2377992868423462,
+      "utt_id": "260-123440-0007",
+      "utt_key": "/home/hoyso/datasets/LibriSpeech/LibriSpeech/test-clean/260/123440/260-123440-0007.flac",
+      "sample_dir": "AudioTokenization/eval/sample_pairs_cross/pesq_wb/worst/fixed_02_1.2378_260-123440-0007",
+      "systems": {
+        "fixed": {
+          "metric": "pesq_wb",
+          "score": 1.2377992868423462,
+          "system": "fixed",
+          "utt_id": "260-123440-0007",
+          "utt_key": "/home/hoyso/datasets/LibriSpeech/LibriSpeech/test-clean/260/123440/260-123440-0007.flac",
+          "orig_path": "/home/hoyso/datasets/LibriSpeech/LibriSpeech/test-clean/260/123440/260-123440-0007.flac",
+          "gt_path": "/home/hoyso/projects/AudioTokenization/results/results1203/fixedpatternmasking50hz-vq65536/eval/gt_16k/260/123440/260-123440-0007.wav",
+          "pred_path": "/home/hoyso/projects/AudioTokenization/results/results1203/fixedpatternmasking50hz-vq65536/eval/pred_16k/260/123440/260-123440-0007.wav",
+          "transcript_path": "/home/hoyso/datasets/LibriSpeech/LibriSpeech/test-clean/260/123440/260-123440.trans.txt",
+          "gt_text": "I ALMOST THINK I CAN REMEMBER FEELING A LITTLE DIFFERENT",
+          "asr_text": "I ALMOST THINK I CAN REMEMBER FEELING A LITTLE DIFFERENT"
+        },
+        "ple": {
+          "metric": "pesq_wb",
+          "score": 1.4237945079803467,
+          "system": "ple",
+          "utt_id": "260-123440-0007",
+          "utt_key": "/home/hoyso/datasets/LibriSpeech/LibriSpeech/test-clean/260/123440/260-123440-0007.flac",
+          "orig_path": "/home/hoyso/datasets/LibriSpeech/LibriSpeech/test-clean/260/123440/260-123440-0007.flac",
+          "gt_path": "/home/hoyso/projects/AudioTokenization/results/results1203/PLE50hz/eval_ft/gt_16k/260/123440/260-123440-0007.wav",
+          "pred_path": "/home/hoyso/projects/AudioTokenization/results/results1203/PLE50hz/eval_ft/pred_16k/260/123440/260-123440-0007.wav",
+          "transcript_path": "/home/hoyso/datasets/LibriSpeech/LibriSpeech/test-clean/260/123440/260-123440.trans.txt",
+          "gt_text": "I ALMOST THINK I CAN REMEMBER FEELING A LITTLE DIFFERENT",
+          "asr_text": "I ALMOST THINK I CAN REMEMBER FEELING A LITTLE DIFFERENT"
+        }
+      }
+    },
+    {
+      "anchor_system": "fixed",
+      "split": "worst",
+      "rank": 3,
+      "anchor_score": 1.3356496095657349,
+      "utt_id": "2094-142345-0054",
+      "utt_key": "/home/hoyso/datasets/LibriSpeech/LibriSpeech/test-clean/2094/142345/2094-142345-0054.flac",
+      "sample_dir": "AudioTokenization/eval/sample_pairs_cross/pesq_wb/worst/fixed_03_1.3356_2094-142345-0054",
+      "systems": {
+        "fixed": {
+          "metric": "pesq_wb",
+          "score": 1.3356496095657349,
+          "system": "fixed",
+          "utt_id": "2094-142345-0054",
+          "utt_key": "/home/hoyso/datasets/LibriSpeech/LibriSpeech/test-clean/2094/142345/2094-142345-0054.flac",
+          "orig_path": "/home/hoyso/datasets/LibriSpeech/LibriSpeech/test-clean/2094/142345/2094-142345-0054.flac",
+          "gt_path": "/home/hoyso/projects/AudioTokenization/results/results1203/fixedpatternmasking50hz-vq65536/eval/gt_16k/2094/142345/2094-142345-0054.wav",
+          "pred_path": "/home/hoyso/projects/AudioTokenization/results/results1203/fixedpatternmasking50hz-vq65536/eval/pred_16k/2094/142345/2094-142345-0054.wav",
+          "transcript_path": "/home/hoyso/datasets/LibriSpeech/LibriSpeech/test-clean/2094/142345/2094-142345.trans.txt",
+          "gt_text": "OH SIR SAID MISSUS POYSER RATHER ALARMED YOU WOULDN'T LIKE IT AT ALL",
+          "asr_text": "OH SIR SAID MISSUS POYSER RATHER ALARMED YOU WOULDN'T LIKE IT AT ALL"
+        },
+        "ple": {
+          "metric": "pesq_wb",
+          "score": 2.5671262741088867,
+          "system": "ple",
+          "utt_id": "2094-142345-0054",
+          "utt_key": "/home/hoyso/datasets/LibriSpeech/LibriSpeech/test-clean/2094/142345/2094-142345-0054.flac",
+          "orig_path": "/home/hoyso/datasets/LibriSpeech/LibriSpeech/test-clean/2094/142345/2094-142345-0054.flac",
+          "gt_path": "/home/hoyso/projects/AudioTokenization/results/results1203/PLE50hz/eval_ft/gt_16k/2094/142345/2094-142345-0054.wav",
+          "pred_path": "/home/hoyso/projects/AudioTokenization/results/results1203/PLE50hz/eval_ft/pred_16k/2094/142345/2094-142345-0054.wav",
+          "transcript_path": "/home/hoyso/datasets/LibriSpeech/LibriSpeech/test-clean/2094/142345/2094-142345.trans.txt",
+          "gt_text": "OH SIR SAID MISSUS POYSER RATHER ALARMED YOU WOULDN'T LIKE IT AT ALL",
+          "asr_text": "OH SIR SAID MISSUS POYSER RATHER ALARMED YOU WOULDN'T LIKE IT AT ALL"
+        }
+      }
+    },
+    {
+      "anchor_system": "ple",
+      "split": "best",
+      "rank": 1,
+      "anchor_score": 3.52763032913208,
+      "utt_id": "1089-134691-0020",
+      "utt_key": "/home/hoyso/datasets/LibriSpeech/LibriSpeech/test-clean/1089/134691/1089-134691-0020.flac",
+      "sample_dir": "AudioTokenization/eval/sample_pairs_cross/pesq_wb/best/ple_01_3.5276_1089-134691-0020",
+      "systems": {
+        "fixed": {
+          "metric": "pesq_wb",
+          "score": 3.292318105697632,
+          "system": "fixed",
+          "utt_id": "1089-134691-0020",
+          "utt_key": "/home/hoyso/datasets/LibriSpeech/LibriSpeech/test-clean/1089/134691/1089-134691-0020.flac",
+          "orig_path": "/home/hoyso/datasets/LibriSpeech/LibriSpeech/test-clean/1089/134691/1089-134691-0020.flac",
+          "gt_path": "/home/hoyso/projects/AudioTokenization/results/results1203/fixedpatternmasking50hz-vq65536/eval/gt_16k/1089/134691/1089-134691-0020.wav",
+          "pred_path": "/home/hoyso/projects/AudioTokenization/results/results1203/fixedpatternmasking50hz-vq65536/eval/pred_16k/1089/134691/1089-134691-0020.wav",
+          "transcript_path": "/home/hoyso/datasets/LibriSpeech/LibriSpeech/test-clean/1089/134691/1089-134691.trans.txt",
+          "gt_text": "HELLO STEPHANOS HERE COMES THE DEDALUS",
+          "asr_text": "HELLO STEPHANOS HERE COMES THE DEDALUS"
+        },
+        "ple": {
+          "metric": "pesq_wb",
+          "score": 3.52763032913208,
+          "system": "ple",
+          "utt_id": "1089-134691-0020",
+          "utt_key": "/home/hoyso/datasets/LibriSpeech/LibriSpeech/test-clean/1089/134691/1089-134691-0020.flac",
+          "orig_path": "/home/hoyso/datasets/LibriSpeech/LibriSpeech/test-clean/1089/134691/1089-134691-0020.flac",
+          "gt_path": "/home/hoyso/projects/AudioTokenization/results/results1203/PLE50hz/eval_ft/gt_16k/1089/134691/1089-134691-0020.wav",
+          "pred_path": "/home/hoyso/projects/AudioTokenization/results/results1203/PLE50hz/eval_ft/pred_16k/1089/134691/1089-134691-0020.wav",
+          "transcript_path": "/home/hoyso/datasets/LibriSpeech/LibriSpeech/test-clean/1089/134691/1089-134691.trans.txt",
+          "gt_text": "HELLO STEPHANOS HERE COMES THE DEDALUS",
+          "asr_text": "HELLO STEPHANOS HERE COMES THE DEDALUS"
+        }
+      }
+    },
+    {
+      "anchor_system": "ple",
+      "split": "best",
+      "rank": 2,
+      "anchor_score": 3.475970506668091,
+      "utt_id": "2830-3979-0012",
+      "utt_key": "/home/hoyso/datasets/LibriSpeech/LibriSpeech/test-clean/2830/3979/2830-3979-0012.flac",
+      "sample_dir": "AudioTokenization/eval/sample_pairs_cross/pesq_wb/best/ple_02_3.4760_2830-3979-0012",
+      "systems": {
+        "fixed": {
+          "metric": "pesq_wb",
+          "score": 2.9917654991149902,
+          "system": "fixed",
+          "utt_id": "2830-3979-0012",
+          "utt_key": "/home/hoyso/datasets/LibriSpeech/LibriSpeech/test-clean/2830/3979/2830-3979-0012.flac",
+          "orig_path": "/home/hoyso/datasets/LibriSpeech/LibriSpeech/test-clean/2830/3979/2830-3979-0012.flac",
+          "gt_path": "/home/hoyso/projects/AudioTokenization/results/results1203/fixedpatternmasking50hz-vq65536/eval/gt_16k/2830/3979/2830-3979-0012.wav",
+          "pred_path": "/home/hoyso/projects/AudioTokenization/results/results1203/fixedpatternmasking50hz-vq65536/eval/pred_16k/2830/3979/2830-3979-0012.wav",
+          "transcript_path": "/home/hoyso/datasets/LibriSpeech/LibriSpeech/test-clean/2830/3979/2830-3979.trans.txt",
+          "gt_text": "THE WORD OF OUR GOD SHALL STAND FOREVER",
+          "asr_text": "THE WORD OF OUR GOD SHALL STAND FOR EVER"
+        },
+        "ple": {
+          "metric": "pesq_wb",
+          "score": 3.475970506668091,
+          "system": "ple",
+          "utt_id": "2830-3979-0012",
+          "utt_key": "/home/hoyso/datasets/LibriSpeech/LibriSpeech/test-clean/2830/3979/2830-3979-0012.flac",
+          "orig_path": "/home/hoyso/datasets/LibriSpeech/LibriSpeech/test-clean/2830/3979/2830-3979-0012.flac",
+          "gt_path": "/home/hoyso/projects/AudioTokenization/results/results1203/PLE50hz/eval_ft/gt_16k/2830/3979/2830-3979-0012.wav",
+          "pred_path": "/home/hoyso/projects/AudioTokenization/results/results1203/PLE50hz/eval_ft/pred_16k/2830/3979/2830-3979-0012.wav",
+          "transcript_path": "/home/hoyso/datasets/LibriSpeech/LibriSpeech/test-clean/2830/3979/2830-3979.trans.txt",
+          "gt_text": "THE WORD OF OUR GOD SHALL STAND FOREVER",
+          "asr_text": "THE WORD OF OUR GOD SHALL STAND FOR EVER"
+        }
+      }
+    },
+    {
+      "anchor_system": "ple",
+      "split": "best",
+      "rank": 3,
+      "anchor_score": 3.4407260417938232,
+      "utt_id": "4970-29093-0000",
+      "utt_key": "/home/hoyso/datasets/LibriSpeech/LibriSpeech/test-clean/4970/29093/4970-29093-0000.flac",
+      "sample_dir": "AudioTokenization/eval/sample_pairs_cross/pesq_wb/best/ple_03_3.4407_4970-29093-0000",
+      "systems": {
+        "fixed": {
+          "metric": "pesq_wb",
+          "score": 2.6341969966888428,
+          "system": "fixed",
+          "utt_id": "4970-29093-0000",
+          "utt_key": "/home/hoyso/datasets/LibriSpeech/LibriSpeech/test-clean/4970/29093/4970-29093-0000.flac",
+          "orig_path": "/home/hoyso/datasets/LibriSpeech/LibriSpeech/test-clean/4970/29093/4970-29093-0000.flac",
+          "gt_path": "/home/hoyso/projects/AudioTokenization/results/results1203/fixedpatternmasking50hz-vq65536/eval/gt_16k/4970/29093/4970-29093-0000.wav",
+          "pred_path": "/home/hoyso/projects/AudioTokenization/results/results1203/fixedpatternmasking50hz-vq65536/eval/pred_16k/4970/29093/4970-29093-0000.wav",
+          "transcript_path": "/home/hoyso/datasets/LibriSpeech/LibriSpeech/test-clean/4970/29093/4970-29093.trans.txt",
+          "gt_text": "YOU'LL NEVER DIG IT OUT OF THE ASTOR LIBRARY",
+          "asr_text": "YOU'LL NEVER DIG IT OUT OF THE ASTRA LIBRARY"
+        },
+        "ple": {
+          "metric": "pesq_wb",
+          "score": 3.4407260417938232,
+          "system": "ple",
+          "utt_id": "4970-29093-0000",
+          "utt_key": "/home/hoyso/datasets/LibriSpeech/LibriSpeech/test-clean/4970/29093/4970-29093-0000.flac",
+          "orig_path": "/home/hoyso/datasets/LibriSpeech/LibriSpeech/test-clean/4970/29093/4970-29093-0000.flac",
+          "gt_path": "/home/hoyso/projects/AudioTokenization/results/results1203/PLE50hz/eval_ft/gt_16k/4970/29093/4970-29093-0000.wav",
+          "pred_path": "/home/hoyso/projects/AudioTokenization/results/results1203/PLE50hz/eval_ft/pred_16k/4970/29093/4970-29093-0000.wav",
+          "transcript_path": "/home/hoyso/datasets/LibriSpeech/LibriSpeech/test-clean/4970/29093/4970-29093.trans.txt",
+          "gt_text": "YOU'LL NEVER DIG IT OUT OF THE ASTOR LIBRARY",
+          "asr_text": "YOU'LL NEVER DIG IT OUT OF THE ASTER LIBRARY"
+        }
+      }
+    },
+    {
+      "anchor_system": "ple",
+      "split": "worst",
+      "rank": 1,
+      "anchor_score": 1.1245815753936768,
+      "utt_id": "2830-3980-0023",
+      "utt_key": "/home/hoyso/datasets/LibriSpeech/LibriSpeech/test-clean/2830/3980/2830-3980-0023.flac",
+      "sample_dir": "AudioTokenization/eval/sample_pairs_cross/pesq_wb/worst/ple_01_1.1246_2830-3980-0023",
+      "systems": {
+        "fixed": {
+          "metric": "pesq_wb",
+          "score": 2.05584454536438,
+          "system": "fixed",
+          "utt_id": "2830-3980-0023",
+          "utt_key": "/home/hoyso/datasets/LibriSpeech/LibriSpeech/test-clean/2830/3980/2830-3980-0023.flac",
+          "orig_path": "/home/hoyso/datasets/LibriSpeech/LibriSpeech/test-clean/2830/3980/2830-3980-0023.flac",
+          "gt_path": "/home/hoyso/projects/AudioTokenization/results/results1203/fixedpatternmasking50hz-vq65536/eval/gt_16k/2830/3980/2830-3980-0023.wav",
+          "pred_path": "/home/hoyso/projects/AudioTokenization/results/results1203/fixedpatternmasking50hz-vq65536/eval/pred_16k/2830/3980/2830-3980-0023.wav",
+          "transcript_path": "/home/hoyso/datasets/LibriSpeech/LibriSpeech/test-clean/2830/3980/2830-3980.trans.txt",
+          "gt_text": "THESE PERVERTERS OF THE RIGHTEOUSNESS OF CHRIST RESIST THE FATHER AND THE SON AND THE WORKS OF THEM BOTH",
+          "asr_text": "THESE PERVERTERS OF THE RIGHTEOUSNESS OF CHRIST RESIST THE FATHER AND THE SON AND THE WORKS OF THEM BOTH"
+        },
+        "ple": {
+          "metric": "pesq_wb",
+          "score": 1.1245815753936768,
+          "system": "ple",
+          "utt_id": "2830-3980-0023",
+          "utt_key": "/home/hoyso/datasets/LibriSpeech/LibriSpeech/test-clean/2830/3980/2830-3980-0023.flac",
+          "orig_path": "/home/hoyso/datasets/LibriSpeech/LibriSpeech/test-clean/2830/3980/2830-3980-0023.flac",
+          "gt_path": "/home/hoyso/projects/AudioTokenization/results/results1203/PLE50hz/eval_ft/gt_16k/2830/3980/2830-3980-0023.wav",
+          "pred_path": "/home/hoyso/projects/AudioTokenization/results/results1203/PLE50hz/eval_ft/pred_16k/2830/3980/2830-3980-0023.wav",
+          "transcript_path": "/home/hoyso/datasets/LibriSpeech/LibriSpeech/test-clean/2830/3980/2830-3980.trans.txt",
+          "gt_text": "THESE PERVERTERS OF THE RIGHTEOUSNESS OF CHRIST RESIST THE FATHER AND THE SON AND THE WORKS OF THEM BOTH",
+          "asr_text": "THESE PERVERTERS OF THE RIGHTEOUSNESS OF CHRIST RESIST THE FATHER AND THE SON AND THE WORKS OF THEM BOTH"
+        }
+      }
+    },
+    {
+      "anchor_system": "ple",
+      "split": "worst",
+      "rank": 2,
+      "anchor_score": 1.1342638731002808,
+      "utt_id": "2830-3980-0061",
+      "utt_key": "/home/hoyso/datasets/LibriSpeech/LibriSpeech/test-clean/2830/3980/2830-3980-0061.flac",
+      "sample_dir": "AudioTokenization/eval/sample_pairs_cross/pesq_wb/worst/ple_02_1.1343_2830-3980-0061",
+      "systems": {
+        "fixed": {
+          "metric": "pesq_wb",
+          "score": 1.9839961528778076,
+          "system": "fixed",
+          "utt_id": "2830-3980-0061",
+          "utt_key": "/home/hoyso/datasets/LibriSpeech/LibriSpeech/test-clean/2830/3980/2830-3980-0061.flac",
+          "orig_path": "/home/hoyso/datasets/LibriSpeech/LibriSpeech/test-clean/2830/3980/2830-3980-0061.flac",
+          "gt_path": "/home/hoyso/projects/AudioTokenization/results/results1203/fixedpatternmasking50hz-vq65536/eval/gt_16k/2830/3980/2830-3980-0061.wav",
+          "pred_path": "/home/hoyso/projects/AudioTokenization/results/results1203/fixedpatternmasking50hz-vq65536/eval/pred_16k/2830/3980/2830-3980-0061.wav",
+          "transcript_path": "/home/hoyso/datasets/LibriSpeech/LibriSpeech/test-clean/2830/3980/2830-3980.trans.txt",
+          "gt_text": "NOT GOLD OR SILVER OR PASCHAL LAMBS OR AN ANGEL BUT HIMSELF WHAT FOR",
+          "asr_text": "NOT GOLD OR SILVER OR PASSHAL LAMBS OR AN ANGEL BUT HIMSELF WHAT FOR"
+        },
+        "ple": {
+          "metric": "pesq_wb",
+          "score": 1.1342638731002808,
+          "system": "ple",
+          "utt_id": "2830-3980-0061",
+          "utt_key": "/home/hoyso/datasets/LibriSpeech/LibriSpeech/test-clean/2830/3980/2830-3980-0061.flac",
+          "orig_path": "/home/hoyso/datasets/LibriSpeech/LibriSpeech/test-clean/2830/3980/2830-3980-0061.flac",
+          "gt_path": "/home/hoyso/projects/AudioTokenization/results/results1203/PLE50hz/eval_ft/gt_16k/2830/3980/2830-3980-0061.wav",
+          "pred_path": "/home/hoyso/projects/AudioTokenization/results/results1203/PLE50hz/eval_ft/pred_16k/2830/3980/2830-3980-0061.wav",
+          "transcript_path": "/home/hoyso/datasets/LibriSpeech/LibriSpeech/test-clean/2830/3980/2830-3980.trans.txt",
+          "gt_text": "NOT GOLD OR SILVER OR PASCHAL LAMBS OR AN ANGEL BUT HIMSELF WHAT FOR",
+          "asr_text": "NOT GOLD OR SILVER OR PASHO LAMBS OR AN ANGEL BUT HIMSELF WHAT FOR"
+        }
+      }
+    },
+    {
+      "anchor_system": "ple",
+      "split": "worst",
+      "rank": 3,
+      "anchor_score": 1.2151974439620972,
+      "utt_id": "672-122797-0033",
+      "utt_key": "/home/hoyso/datasets/LibriSpeech/LibriSpeech/test-clean/672/122797/672-122797-0033.flac",
+      "sample_dir": "AudioTokenization/eval/sample_pairs_cross/pesq_wb/worst/ple_03_1.2152_672-122797-0033",
+      "systems": {
+        "fixed": {
+          "metric": "pesq_wb",
+          "score": 2.1212642192840576,
+          "system": "fixed",
+          "utt_id": "672-122797-0033",
+          "utt_key": "/home/hoyso/datasets/LibriSpeech/LibriSpeech/test-clean/672/122797/672-122797-0033.flac",
+          "orig_path": "/home/hoyso/datasets/LibriSpeech/LibriSpeech/test-clean/672/122797/672-122797-0033.flac",
+          "gt_path": "/home/hoyso/projects/AudioTokenization/results/results1203/fixedpatternmasking50hz-vq65536/eval/gt_16k/672/122797/672-122797-0033.wav",
+          "pred_path": "/home/hoyso/projects/AudioTokenization/results/results1203/fixedpatternmasking50hz-vq65536/eval/pred_16k/672/122797/672-122797-0033.wav",
+          "transcript_path": "/home/hoyso/datasets/LibriSpeech/LibriSpeech/test-clean/672/122797/672-122797.trans.txt",
+          "gt_text": "A STORY",
+          "asr_text": "A STORY"
+        },
+        "ple": {
+          "metric": "pesq_wb",
+          "score": 1.2151974439620972,
+          "system": "ple",
+          "utt_id": "672-122797-0033",
+          "utt_key": "/home/hoyso/datasets/LibriSpeech/LibriSpeech/test-clean/672/122797/672-122797-0033.flac",
+          "orig_path": "/home/hoyso/datasets/LibriSpeech/LibriSpeech/test-clean/672/122797/672-122797-0033.flac",
+          "gt_path": "/home/hoyso/projects/AudioTokenization/results/results1203/PLE50hz/eval_ft/gt_16k/672/122797/672-122797-0033.wav",
+          "pred_path": "/home/hoyso/projects/AudioTokenization/results/results1203/PLE50hz/eval_ft/pred_16k/672/122797/672-122797-0033.wav",
+          "transcript_path": "/home/hoyso/datasets/LibriSpeech/LibriSpeech/test-clean/672/122797/672-122797.trans.txt",
+          "gt_text": "A STORY",
+          "asr_text": "A STORY"
+        }
+      }
+    }
+  ]
+}

@@ -9,6 +9,7 @@ import torch.nn.functional as F
 import torch.optim as optim
 import pytorch_lightning as pl
 import torchmetrics
+from torchmetrics.classification import MultilabelF1Score
 import torchaudio
 
 import wandb
@@ -79,6 +80,12 @@ class CodecLightningModule(pl.LightningModule):
         super().__init__()
         self.cfg = cfg
         # self.ocwd = hydra.utils.get_original_cwd()
+        self.use_bow = bool(getattr(cfg.dataset, "bow", {}).get("enable", False))
+        self.bow_vocab_size = None
+        if self.use_bow:
+            self.bow_vocab_size = cfg.dataset.bow.get("vocab_size")
+            if self.bow_vocab_size is None:
+                raise ValueError("dataset.bow.enable is True but dataset.bow.vocab_size is not set.")
         self.construct_model()
         self.construct_criteria()
         self.val_metrics = self.construct_metrics(prefix='val_')
@@ -162,6 +169,10 @@ class CodecLightningModule(pl.LightningModule):
         self.downsampler = getattr(dtp.resampler, resamplercfg.downsampler_cls)(**resamplercfg.downsampler_params)
         self.upsampler = getattr(dtp.resampler, resamplercfg.upsampler_cls)(**resamplercfg.upsampler_params)
 
+        if self.use_bow:
+            head_dim = self.cfg.model.codec_decoder.in_channels
+            self.bow_head = nn.Linear(head_dim, self.bow_vocab_size)
+
     def construct_criteria(self):
         cfg = self.cfg.train
         self.criteria = nn.ModuleDict()
@@ -178,6 +189,8 @@ class CodecLightningModule(pl.LightningModule):
         self.criteria['gan_loss'] = GANLoss()
         self.criteria['l1_loss'] = nn.L1Loss()
         self.criteria['l2_loss'] = nn.MSELoss()
+        if self.use_bow:
+            self.criteria['bow_loss'] = nn.BCEWithLogitsLoss()
         print(self.criteria)
 
     def construct_metrics(self, prefix=''):
@@ -190,6 +203,8 @@ class CodecLightningModule(pl.LightningModule):
         metrics['codebook_utilization'] = CodebookUtilization(codebook_size=self.cfg.model.codec_decoder.codebook_size)
         if self.use_dtp:
             metrics['avg_r'] = MeanMetric()
+        if self.use_bow:
+            metrics['bow_f1'] = MultilabelF1Score(num_labels=self.bow_vocab_size, average='macro', threshold=0.5)
         return torchmetrics.MetricCollection(prefix=prefix, metrics=metrics)
     
     @torch.compile
@@ -220,6 +235,20 @@ class CodecLightningModule(pl.LightningModule):
             
             vq_emb = self.downsampler(vq_emb)
         vq_emb = self.encoder(vq_emb, position_ids=position_ids, cu_seqlens=cu_seqlens, max_seqlen=max_seqlen, level=2)
+        bow_logits = None
+        if self.use_bow:
+            if cu_seqlens is not None and max_seqlen is not None:
+                # Varlen packed: vq_emb is [total_tokens, C]
+                B = cu_seqlens.numel() - 1
+                lengths = (cu_seqlens[1:] - cu_seqlens[:-1]).to(device=vq_emb.device, dtype=vq_emb.dtype)
+                batch_ids = torch.repeat_interleave(torch.arange(B, device=vq_emb.device, dtype=torch.long), lengths.to(torch.long))
+                pooled = torch.zeros(B, vq_emb.shape[-1], device=vq_emb.device, dtype=vq_emb.dtype)
+                pooled.scatter_add_(0, batch_ids.unsqueeze(-1).expand(-1, vq_emb.shape[-1]), vq_emb)
+                pooled = pooled / lengths.unsqueeze(-1).clamp_min(1.0)
+            else:
+                pooled = vq_emb.mean(dim=1)  # [B, C]
+            pooled = pooled.detach()  # linear probe: stop grads to encoder
+            bow_logits = self.bow_head(pooled)
         vq_post_emb, vq_code, vq_loss = self.decoder(vq_emb, vq=True)
         vq_post_emb = self.decoder(vq_post_emb, vq=False, position_ids=position_ids, cu_seqlens=cu_seqlens, max_seqlen=max_seqlen, level=2)
         if self.use_dtp:
@@ -237,6 +266,7 @@ class CodecLightningModule(pl.LightningModule):
             'avg_r': avg_r,
             'tau_used': tau_used,
             'aux_loss': aux_loss, # Added for DifferentiablePLE
+            'bow_logits': bow_logits,
         }
         return output
     
@@ -337,6 +367,14 @@ class CodecLightningModule(pl.LightningModule):
             vq_loss = sum(vq_loss)
             gen_loss += vq_loss
             output_dict['vq_loss'] = vq_loss
+
+        # Bag-of-Words classification loss (optional)
+        if self.use_bow and output.get('bow_logits') is not None and 'bow' in batch:
+            bow_logits = output['bow_logits']
+            bow_target = batch['bow'].to(bow_logits.device)
+            bow_loss = self.criteria['bow_loss'](bow_logits, bow_target)
+            gen_loss += bow_loss * cfg.lambdas.lambda_bow
+            output_dict['bow_loss'] = bow_loss
         
         if 'entropy_loss' in output:
             gen_loss += output['entropy_loss']
@@ -405,6 +443,9 @@ class CodecLightningModule(pl.LightningModule):
             pass
         perplexity = self.val_metrics['codebook_perplexity'].update(vq_code)
         utilization = self.val_metrics['codebook_utilization'].update(vq_code)
+        if self.use_bow and output.get('bow_logits') is not None and 'bow' in batch:
+            bow_probs = torch.sigmoid(output['bow_logits'])
+            self.val_metrics['bow_f1'].update(bow_probs, batch['bow'])
         if batch_idx in self.cfg.dataset.val.log_idxs:
             y_ = y_[0].squeeze().float().cpu().numpy()
             y = y[0].squeeze().float().cpu().numpy()
@@ -441,6 +482,9 @@ class CodecLightningModule(pl.LightningModule):
             pass
         perplexity = self.test_metrics['codebook_perplexity'].update(vq_code)
         utilization = self.test_metrics['codebook_utilization'].update(vq_code)
+        if self.use_bow and output.get('bow_logits') is not None and 'bow' in batch:
+            bow_probs = torch.sigmoid(output['bow_logits'])
+            self.test_metrics['bow_f1'].update(bow_probs, batch['bow'])
         if batch_idx in self.cfg.dataset.test.log_idxs:
             y_ = y_[0].squeeze().float().cpu().numpy()
             y = y[0].squeeze().float().cpu().numpy()
@@ -470,6 +514,8 @@ class CodecLightningModule(pl.LightningModule):
             self.encoder.parameters(),
             self.decoder.parameters(),
         )
+        if self.use_bow:
+            gen_params = chain(gen_params, self.bow_head.parameters())
 
         gen_opt = optim.AdamW(gen_params, **self.cfg.train.gen_optim_params)
         disc_opt = optim.AdamW(disc_params, **self.cfg.train.disc_optim_params)

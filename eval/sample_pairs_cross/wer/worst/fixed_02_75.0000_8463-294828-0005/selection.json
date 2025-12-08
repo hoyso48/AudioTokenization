@@ -1,0 +1,37 @@
+{
+  "anchor_system": "fixed",
+  "split": "worst",
+  "rank": 2,
+  "anchor_score": 75.0,
+  "utt_id": "8463-294828-0005",
+  "utt_key": "/home/hoyso/datasets/LibriSpeech/LibriSpeech/test-clean/8463/294828/8463-294828-0005.flac",
+  "sample_dir": "AudioTokenization/eval/sample_pairs_cross/wer/worst/fixed_02_75.0000_8463-294828-0005",
+  "systems": {
+    "fixed": {
+      "metric": "wer",
+      "score": 75.0,
+      "system": "fixed",
+      "utt_id": "8463-294828-0005",
+      "utt_key": "/home/hoyso/datasets/LibriSpeech/LibriSpeech/test-clean/8463/294828/8463-294828-0005.flac",
+      "orig_path": "/home/hoyso/datasets/LibriSpeech/LibriSpeech/test-clean/8463/294828/8463-294828-0005.flac",
+      "gt_path": "/home/hoyso/projects/AudioTokenization/results/results1203/fixedpatternmasking50hz-vq65536/eval/gt_16k/8463/294828/8463-294828-0005.wav",
+      "pred_path": "/home/hoyso/projects/AudioTokenization/results/results1203/fixedpatternmasking50hz-vq65536/eval/pred_16k/8463/294828/8463-294828-0005.wav",
+      "transcript_path": "/home/hoyso/datasets/LibriSpeech/LibriSpeech/test-clean/8463/294828/8463-294828.trans.txt",
+      "gt_text": "CONSEIL WAS MY MANSERVANT",
+      "asr_text": "CORSET WAS MY NANT SERVANT"
+    },
+    "ple": {
+      "metric": "wer",
+      "score": 75.0,
+      "system": "ple",
+      "utt_id": "8463-294828-0005",
+      "utt_key": "/home/hoyso/datasets/LibriSpeech/LibriSpeech/test-clean/8463/294828/8463-294828-0005.flac",
+      "orig_path": "/home/hoyso/datasets/LibriSpeech/LibriSpeech/test-clean/8463/294828/8463-294828-0005.flac",
+      "gt_path": "/home/hoyso/projects/AudioTokenization/results/results1203/PLE50hz/eval_ft/gt_16k/8463/294828/8463-294828-0005.wav",
+      "pred_path": "/home/hoyso/projects/AudioTokenization/results/results1203/PLE50hz/eval_ft/pred_16k/8463/294828/8463-294828-0005.wav",
+      "transcript_path": "/home/hoyso/datasets/LibriSpeech/LibriSpeech/test-clean/8463/294828/8463-294828.trans.txt",
+      "gt_text": "CONSEIL WAS MY MANSERVANT",
+      "asr_text": "COSEIL WAS MY MAN SERVANT"
+    }
+  }
+}

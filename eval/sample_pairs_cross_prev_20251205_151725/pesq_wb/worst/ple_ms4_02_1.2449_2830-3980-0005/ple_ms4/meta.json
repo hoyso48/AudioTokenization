@@ -1,0 +1,13 @@
+{
+  "metric": "pesq_wb",
+  "score": 1.2448947429656982,
+  "system": "ple_ms4",
+  "utt_id": "2830-3980-0005",
+  "utt_key": "/home/hoyso/datasets/LibriSpeech/LibriSpeech/test-clean/2830/3980/2830-3980-0005.flac",
+  "orig_path": "/home/hoyso/datasets/LibriSpeech/LibriSpeech/test-clean/2830/3980/2830-3980-0005.flac",
+  "gt_path": "/home/hoyso/projects/AudioTokenization/results/results1203/PLE50hz-sampleprob1/eval_ft_ms4/gt_16k/2830/3980/2830-3980-0005.wav",
+  "pred_path": "/home/hoyso/projects/AudioTokenization/results/results1203/PLE50hz-sampleprob1/eval_ft_ms4/pred_16k/2830/3980/2830-3980-0005.wav",
+  "transcript_path": "/home/hoyso/datasets/LibriSpeech/LibriSpeech/test-clean/2830/3980/2830-3980.trans.txt",
+  "gt_text": "DO YOU SUPPOSE THAT GOD FOR THE SAKE OF A FEW LUTHERAN HERETICS WOULD DISOWN HIS ENTIRE CHURCH",
+  "asr_text": "DO YOU SUPPOSE THAT GOD FOR THE SAKE OF A FEW LUTHERAN HERETICS WOULD DISOWN HIS ENTIRE CHURCH"
+}

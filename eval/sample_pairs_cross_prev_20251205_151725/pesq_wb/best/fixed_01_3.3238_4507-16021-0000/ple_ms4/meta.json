@@ -1,0 +1,13 @@
+{
+  "metric": "pesq_wb",
+  "score": 3.2605652809143066,
+  "system": "ple_ms4",
+  "utt_id": "4507-16021-0000",
+  "utt_key": "/home/hoyso/datasets/LibriSpeech/LibriSpeech/test-clean/4507/16021/4507-16021-0000.flac",
+  "orig_path": "/home/hoyso/datasets/LibriSpeech/LibriSpeech/test-clean/4507/16021/4507-16021-0000.flac",
+  "gt_path": "/home/hoyso/projects/AudioTokenization/results/results1203/PLE50hz-sampleprob1/eval_ft_ms4/gt_16k/4507/16021/4507-16021-0000.wav",
+  "pred_path": "/home/hoyso/projects/AudioTokenization/results/results1203/PLE50hz-sampleprob1/eval_ft_ms4/pred_16k/4507/16021/4507-16021-0000.wav",
+  "transcript_path": "/home/hoyso/datasets/LibriSpeech/LibriSpeech/test-clean/4507/16021/4507-16021.trans.txt",
+  "gt_text": "CHAPTER ONE ORIGIN",
+  "asr_text": "CHAPTER ONE ORIGIN"
+}

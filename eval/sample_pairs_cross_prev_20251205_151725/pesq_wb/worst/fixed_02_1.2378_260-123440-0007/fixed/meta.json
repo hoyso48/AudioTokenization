@@ -1,0 +1,13 @@
+{
+  "metric": "pesq_wb",
+  "score": 1.2377992868423462,
+  "system": "fixed",
+  "utt_id": "260-123440-0007",
+  "utt_key": "/home/hoyso/datasets/LibriSpeech/LibriSpeech/test-clean/260/123440/260-123440-0007.flac",
+  "orig_path": "/home/hoyso/datasets/LibriSpeech/LibriSpeech/test-clean/260/123440/260-123440-0007.flac",
+  "gt_path": "/home/hoyso/projects/AudioTokenization/results/results1203/fixedpatternmasking50hz-vq65536/eval/gt_16k/260/123440/260-123440-0007.wav",
+  "pred_path": "/home/hoyso/projects/AudioTokenization/results/results1203/fixedpatternmasking50hz-vq65536/eval/pred_16k/260/123440/260-123440-0007.wav",
+  "transcript_path": "/home/hoyso/datasets/LibriSpeech/LibriSpeech/test-clean/260/123440/260-123440.trans.txt",
+  "gt_text": "I ALMOST THINK I CAN REMEMBER FEELING A LITTLE DIFFERENT",
+  "asr_text": "I ALMOST THINK I CAN REMEMBER FEELING A LITTLE DIFFERENT"
+}

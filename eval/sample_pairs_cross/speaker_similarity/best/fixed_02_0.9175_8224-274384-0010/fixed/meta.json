@@ -1,0 +1,13 @@
+{
+  "metric": "speaker_similarity",
+  "score": 0.9174643754959106,
+  "system": "fixed",
+  "utt_id": "8224-274384-0010",
+  "utt_key": "/home/hoyso/datasets/LibriSpeech/LibriSpeech/test-clean/8224/274384/8224-274384-0010.flac",
+  "orig_path": "/home/hoyso/datasets/LibriSpeech/LibriSpeech/test-clean/8224/274384/8224-274384-0010.flac",
+  "gt_path": "/home/hoyso/projects/AudioTokenization/results/results1203/fixedpatternmasking50hz-vq65536/eval/gt_16k/8224/274384/8224-274384-0010.wav",
+  "pred_path": "/home/hoyso/projects/AudioTokenization/results/results1203/fixedpatternmasking50hz-vq65536/eval/pred_16k/8224/274384/8224-274384-0010.wav",
+  "transcript_path": "/home/hoyso/datasets/LibriSpeech/LibriSpeech/test-clean/8224/274384/8224-274384.trans.txt",
+  "gt_text": "BEFORE THE SETTLEMENT OF TERMS THE ADMINISTRATION MUST BE POSSESSED ENTIRELY BY THE PARLIAMENTS OF BOTH KINGDOMS AND HOW INCOMPATIBLE THAT SCHEME WITH THE LIBERTY OF THE KING IS EASILY IMAGINED",
+  "asr_text": "BEFORE THE SETTLEMENT OF TERMS THE ADMINISTRATION MUST BE POSSESSED ENTIRELY BY THE PARLIAMENTS OF BOTH KINGDOMS AND HOW INCOMPATIBLE THAT SCHEME WITH THE LIBERTY OF THE KING IS EASILY IMAGINED"
+}

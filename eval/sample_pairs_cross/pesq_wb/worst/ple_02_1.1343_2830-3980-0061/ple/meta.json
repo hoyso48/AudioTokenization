@@ -1,0 +1,13 @@
+{
+  "metric": "pesq_wb",
+  "score": 1.1342638731002808,
+  "system": "ple",
+  "utt_id": "2830-3980-0061",
+  "utt_key": "/home/hoyso/datasets/LibriSpeech/LibriSpeech/test-clean/2830/3980/2830-3980-0061.flac",
+  "orig_path": "/home/hoyso/datasets/LibriSpeech/LibriSpeech/test-clean/2830/3980/2830-3980-0061.flac",
+  "gt_path": "/home/hoyso/projects/AudioTokenization/results/results1203/PLE50hz/eval_ft/gt_16k/2830/3980/2830-3980-0061.wav",
+  "pred_path": "/home/hoyso/projects/AudioTokenization/results/results1203/PLE50hz/eval_ft/pred_16k/2830/3980/2830-3980-0061.wav",
+  "transcript_path": "/home/hoyso/datasets/LibriSpeech/LibriSpeech/test-clean/2830/3980/2830-3980.trans.txt",
+  "gt_text": "NOT GOLD OR SILVER OR PASCHAL LAMBS OR AN ANGEL BUT HIMSELF WHAT FOR",
+  "asr_text": "NOT GOLD OR SILVER OR PASHO LAMBS OR AN ANGEL BUT HIMSELF WHAT FOR"
+}
