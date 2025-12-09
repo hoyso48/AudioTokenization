@@ -55,8 +55,10 @@ resampler:
     tau_max: 1e6
     update_every: 1
     max_s: 4
-    sample_prob: 1
-    min_mask_prob: 0.5
+    sample_prob: 0
+    min_mask_span: 1
+    max_mask_span: 1
+    min_mask_prob: 0.2
     max_mask_prob: 0.8
   downsampler_cls: FrontierDownsampler
   downsampler_params: {}

@@ -1,6 +1,5 @@
 import os
 import re
-import json
 import torch
 import torch.nn as nn
 import torch.nn.functional as F
@@ -10,10 +9,10 @@ import pytorch_lightning as pl
 import random
 import librosa
 from os.path import basename, exists, join
-from pathlib import Path
 from torch.utils.data import Dataset, DataLoader
 import hydra
 import utils
+import torchaudio
 from transformers import AutoFeatureExtractor
 from torchaudio.transforms import Resample
 from tqdm import tqdm
@@ -63,6 +62,9 @@ class FSDataset(Dataset):
         self.cfg = cfg
         self.phase_cfg = cfg.dataset.get(phase)
         self.ocwd = hydra.utils.get_original_cwd()
+        self.transcript_cfg = getattr(cfg.dataset, 'transcript', None)
+        self.use_transcript = self.transcript_cfg is not None and getattr(self.transcript_cfg, 'enable', False)
+        self.lower_transcript = getattr(self.transcript_cfg, 'lowercase', True) if self.transcript_cfg else False
         
         self.sr = cfg.preprocess.audio.sr
         
@@ -72,35 +74,6 @@ class FSDataset(Dataset):
         self.multiple_of = self.cfg.dataset.multiple_of
         # if self.cfg.train.use_semantic:
         #     self.feature_extractor = AutoFeatureExtractor.from_pretrained("facebook/w2v-bert-2.0")
-
-        bow_cfg = self.cfg.dataset.get('bow', {}) or {}
-        self.use_bow = bool(bow_cfg.get('enable', False))
-        self.bow_cfg = bow_cfg
-        self.bow_vocab_size = bow_cfg.get('vocab_size')
-        self.bow_labels = {}
-        self.bow_missing = 0
-        self.bow_meta = None
-
-        if self.use_bow:
-            label_path = bow_cfg.get('label_path')
-            meta_path = bow_cfg.get('meta_path')
-            if meta_path:
-                meta_full = meta_path if os.path.isabs(meta_path) else join(self.ocwd, meta_path)
-                self.bow_meta = self.load_bow_meta(meta_full)
-                if self.bow_vocab_size is None:
-                    self.bow_vocab_size = self.bow_meta.get('vocab_size')
-                split_key = Path(self.phase_cfg.filelist).stem
-                label_path = self.bow_meta.get('label_paths', {}).get(split_key, label_path)
-
-            if label_path is None:
-                raise ValueError("bow.enable=True but no label_path provided (set bow.label_path or bow.meta_path).")
-            if not os.path.isabs(label_path):
-                label_path = join(self.ocwd, label_path)
-
-            if self.bow_vocab_size is None:
-                raise ValueError("bow.vocab_size is required when bow is enabled (or provide meta_path with vocab_size).")
-
-            self.bow_labels = self.load_bow_labels(label_path)
 
     def __len__(self):
         return len(self.filelist)
@@ -115,27 +88,13 @@ class FSDataset(Dataset):
             flist = [l.strip().split('\t')[0] for l in f if l.strip()]
         return flist
 
-    def load_bow_meta(self, meta_path):
-        with open(meta_path, 'r') as f:
-            return json.load(f)
-
-    def load_bow_labels(self, label_path):
-        bow = {}
-        with open(label_path, 'r') as f:
-            for line in f:
-                if not line.strip():
-                    continue
-                entry = json.loads(line)
-                audio = entry.get('audio')
-                if audio is None:
-                    continue
-                bow[str(Path(audio).resolve())] = entry.get('token_ids', [])
-        return bow
-
     def __getitem__(self, idx):
         # (  wavpath,fid) = self.filelist[idx]
         wavpath  = self.filelist[idx]
-        wavpath_full = join(self.cfg.preprocess.datasets.LibriSpeech.root, wavpath)
+        if os.path.isabs(wavpath):
+            wavpath_full = wavpath
+        else:
+            wavpath_full = join(self.cfg.preprocess.datasets.LibriSpeech.root, wavpath)
         # wav = self.load_wav(wavpath)
         # wav = torch.from_numpy(wav)
  
@@ -165,18 +124,10 @@ class FSDataset(Dataset):
             'wav': wav,
             # 'paths': wavpath_full
         }
-
-        if self.use_bow:
-            bow_vec = torch.zeros(self.bow_vocab_size, dtype=torch.float32)
-            bow_entry = self.bow_labels.get(str(Path(wavpath_full).resolve()))
-            if bow_entry is not None:
-                bow_idx = torch.as_tensor(bow_entry, dtype=torch.long)
-                if bow_idx.numel() > 0:
-                    valid_mask = bow_idx < self.bow_vocab_size
-                    bow_vec[bow_idx[valid_mask]] = 1.0
-            else:
-                self.bow_missing += 1
-            out['bow'] = bow_vec
+        if self.use_transcript:
+            utt_id, transcript = self.load_transcript(wavpath_full)
+            out['utt_id'] = utt_id
+            out['transcript'] = transcript
 
         # if self.cfg.train.use_semantic:
         #     wav_pad = F.pad(wav, (160, 160))
@@ -184,6 +135,28 @@ class FSDataset(Dataset):
         #     out['feat'] = feat
         
         return out
+    
+    def load_transcript(self, wavpath_full):
+        fname = os.path.splitext(os.path.basename(wavpath_full))[0]
+        parts = fname.split('-')
+        if len(parts) < 3:
+            raise ValueError(f'Unexpected filename format for LibriSpeech sample: {fname}')
+        transcript_path = join(os.path.dirname(wavpath_full), f'{parts[0]}-{parts[1]}.trans.txt')
+        if not exists(transcript_path):
+            raise FileNotFoundError(f'Transcript file missing: {transcript_path}')
+
+        target_prefix = f'{fname} '
+        transcript = None
+        with open(transcript_path, 'r') as f:
+            for line in f:
+                if line.startswith(target_prefix):
+                    transcript = line[len(target_prefix):].strip()
+                    break
+        if transcript is None:
+            raise ValueError(f'No transcript line found for {fname} in {transcript_path}')
+        if self.lower_transcript:
+            transcript = transcript.lower()
+        return fname, transcript
     
     def collate_fn(self, bs):
  
@@ -193,9 +166,9 @@ class FSDataset(Dataset):
             'wav': wavs,
             # 'paths': [b['paths'] for b in bs]
         }
-        if self.use_bow:
-            bows = [b['bow'] for b in bs]
-            out['bow'] = torch.stack(bows)
+        if self.use_transcript:
+            out['utt_id'] = [b['utt_id'] for b in bs]
+            out['transcript'] = [b['transcript'] for b in bs]
         # if self.cfg.train.use_semantic:
         #     feats = [b['feat'] for b in bs]
         #     feats = torch.stack(feats)

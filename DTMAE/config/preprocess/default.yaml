@@ -1,6 +1,6 @@
 datasets:
     LibriSpeech:
-        root: /datasets/LibriSpeech/LibriSpeech
+        root: /home/hoyso/datasets/LibriSpeech/LibriSpeech
         trainsets: ['train-clean-100', 'train-clean-360', 'train-other-500']
         testsets: ['dev-clean']
 view:

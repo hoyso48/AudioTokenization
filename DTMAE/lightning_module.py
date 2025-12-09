@@ -9,7 +9,7 @@ import torch.nn.functional as F
 import torch.optim as optim
 import pytorch_lightning as pl
 import torchmetrics
-from torchmetrics.classification import MultilabelF1Score
+from torchmetrics.text import CharErrorRate, WordErrorRate
 import torchaudio
 
 import wandb
@@ -80,16 +80,11 @@ class CodecLightningModule(pl.LightningModule):
         super().__init__()
         self.cfg = cfg
         # self.ocwd = hydra.utils.get_original_cwd()
-        self.use_bow = bool(getattr(cfg.dataset, "bow", {}).get("enable", False))
-        self.bow_vocab_size = None
-        if self.use_bow:
-            self.bow_vocab_size = cfg.dataset.bow.get("vocab_size")
-            if self.bow_vocab_size is None:
-                raise ValueError("dataset.bow.enable is True but dataset.bow.vocab_size is not set.")
         self.construct_model()
         self.construct_criteria()
         self.val_metrics = self.construct_metrics(prefix='val_')
         self.test_metrics = self.construct_metrics(prefix='test_')
+        self.construct_asr_probe()
         self.save_hyperparameters()
         self.automatic_optimization = False
 
@@ -169,9 +164,25 @@ class CodecLightningModule(pl.LightningModule):
         self.downsampler = getattr(dtp.resampler, resamplercfg.downsampler_cls)(**resamplercfg.downsampler_params)
         self.upsampler = getattr(dtp.resampler, resamplercfg.upsampler_cls)(**resamplercfg.upsampler_params)
 
-        if self.use_bow:
-            head_dim = self.cfg.model.codec_decoder.in_channels
-            self.bow_head = nn.Linear(head_dim, self.bow_vocab_size)
+    def construct_asr_probe(self):
+        # CTC probe is optional and should not backprop into encoder
+        self.use_asr_probe = bool(getattr(self.cfg.train, "use_asr_probe", False)) and getattr(self.cfg.dataset, "transcript", None) and getattr(self.cfg.dataset.transcript, "enable", False)
+        if not self.use_asr_probe:
+            self.asr_head = None
+            return
+        feature_dim = self.cfg.model.codec_decoder.in_channels
+        # Simple lowercase character set with space and apostrophe; index 0 is blank
+        vocab_list = ["<blank>"] + ["'"] + [" "] + [chr(i) for i in range(ord('a'), ord('z') + 1)]
+        self.asr_vocab = vocab_list
+        self.blank_id = 0
+        self.asr_token_map = {ch: idx for idx, ch in enumerate(self.asr_vocab)}
+        self.asr_head = nn.Linear(feature_dim, len(self.asr_vocab))
+        self.ctc_loss = nn.CTCLoss(blank=self.blank_id, zero_infinity=True)
+        # Metrics for validation/test
+        self.val_cer = CharErrorRate()
+        self.val_wer = WordErrorRate()
+        self.test_cer = CharErrorRate()
+        self.test_wer = WordErrorRate()
 
     def construct_criteria(self):
         cfg = self.cfg.train
@@ -189,8 +200,6 @@ class CodecLightningModule(pl.LightningModule):
         self.criteria['gan_loss'] = GANLoss()
         self.criteria['l1_loss'] = nn.L1Loss()
         self.criteria['l2_loss'] = nn.MSELoss()
-        if self.use_bow:
-            self.criteria['bow_loss'] = nn.BCEWithLogitsLoss()
         print(self.criteria)
 
     def construct_metrics(self, prefix=''):
@@ -203,8 +212,6 @@ class CodecLightningModule(pl.LightningModule):
         metrics['codebook_utilization'] = CodebookUtilization(codebook_size=self.cfg.model.codec_decoder.codebook_size)
         if self.use_dtp:
             metrics['avg_r'] = MeanMetric()
-        if self.use_bow:
-            metrics['bow_f1'] = MultilabelF1Score(num_labels=self.bow_vocab_size, average='macro', threshold=0.5)
         return torchmetrics.MetricCollection(prefix=prefix, metrics=metrics)
     
     @torch.compile
@@ -235,20 +242,6 @@ class CodecLightningModule(pl.LightningModule):
             
             vq_emb = self.downsampler(vq_emb)
         vq_emb = self.encoder(vq_emb, position_ids=position_ids, cu_seqlens=cu_seqlens, max_seqlen=max_seqlen, level=2)
-        bow_logits = None
-        if self.use_bow:
-            if cu_seqlens is not None and max_seqlen is not None:
-                # Varlen packed: vq_emb is [total_tokens, C]
-                B = cu_seqlens.numel() - 1
-                lengths = (cu_seqlens[1:] - cu_seqlens[:-1]).to(device=vq_emb.device, dtype=vq_emb.dtype)
-                batch_ids = torch.repeat_interleave(torch.arange(B, device=vq_emb.device, dtype=torch.long), lengths.to(torch.long))
-                pooled = torch.zeros(B, vq_emb.shape[-1], device=vq_emb.device, dtype=vq_emb.dtype)
-                pooled.scatter_add_(0, batch_ids.unsqueeze(-1).expand(-1, vq_emb.shape[-1]), vq_emb)
-                pooled = pooled / lengths.unsqueeze(-1).clamp_min(1.0)
-            else:
-                pooled = vq_emb.mean(dim=1)  # [B, C]
-            pooled = pooled.detach()  # linear probe: stop grads to encoder
-            bow_logits = self.bow_head(pooled)
         vq_post_emb, vq_code, vq_loss = self.decoder(vq_emb, vq=True)
         vq_post_emb = self.decoder(vq_post_emb, vq=False, position_ids=position_ids, cu_seqlens=cu_seqlens, max_seqlen=max_seqlen, level=2)
         if self.use_dtp:
@@ -266,7 +259,9 @@ class CodecLightningModule(pl.LightningModule):
             'avg_r': avg_r,
             'tau_used': tau_used,
             'aux_loss': aux_loss, # Added for DifferentiablePLE
-            'bow_logits': bow_logits,
+            'pre_quant_emb': vq_emb,  # used for ASR probe (gradients detached later)
+            'cu_seqlens': cu_seqlens,
+            'max_seqlen': max_seqlen,
         }
         return output
     
@@ -367,14 +362,6 @@ class CodecLightningModule(pl.LightningModule):
             vq_loss = sum(vq_loss)
             gen_loss += vq_loss
             output_dict['vq_loss'] = vq_loss
-
-        # Bag-of-Words classification loss (optional)
-        if self.use_bow and output.get('bow_logits') is not None and 'bow' in batch:
-            bow_logits = output['bow_logits']
-            bow_target = batch['bow'].to(bow_logits.device)
-            bow_loss = self.criteria['bow_loss'](bow_logits, bow_target)
-            gen_loss += bow_loss * cfg.lambdas.lambda_bow
-            output_dict['bow_loss'] = bow_loss
         
         if 'entropy_loss' in output:
             gen_loss += output['entropy_loss']
@@ -395,6 +382,70 @@ class CodecLightningModule(pl.LightningModule):
         self.set_discriminator_gradients(True)
         output_dict['gen_loss'] = gen_loss
         return output_dict
+
+    def text_to_int(self, text):
+        # Converts transcript string to list of ints (CTC targets)
+        return [self.asr_token_map[ch] for ch in text if ch in self.asr_token_map]
+
+    def int_to_text(self, indices):
+        return ''.join([self.asr_vocab[i] for i in indices if i != self.blank_id])
+
+    def ctc_greedy_decode(self, log_probs, input_lengths):
+        # log_probs: (T, B, V)
+        preds = log_probs.argmax(dim=-1)  # (T, B)
+        preds = preds.transpose(0, 1)     # (B, T)
+        decoded = []
+        for b, length in enumerate(input_lengths.tolist()):
+            prev = self.blank_id
+            tokens = []
+            for t in range(length):
+                idx = preds[b, t].item()
+                if idx != self.blank_id and idx != prev:
+                    tokens.append(idx)
+                prev = idx
+            decoded.append(self.int_to_text(tokens))
+        return decoded
+
+    def compute_asr_probe(self, batch, output):
+        if not self.use_asr_probe or 'transcript' not in batch:
+            return None
+
+        transcripts = batch['transcript']
+        if len(transcripts) == 0:
+            return None
+
+        feats = output['pre_quant_emb'].detach()
+        cu_seqlens = output.get('cu_seqlens')
+        max_seqlen = output.get('max_seqlen')
+
+        if cu_seqlens is not None and max_seqlen is not None:
+            lengths = (cu_seqlens[1:] - cu_seqlens[:-1]).to(torch.long)
+            seqs = torch.split(feats, lengths.tolist())
+            padded = torch.nn.utils.rnn.pad_sequence(seqs, batch_first=True)  # (B, T, C)
+            input_lengths = lengths
+        else:
+            padded = feats  # (B, T, C)
+            input_lengths = torch.full((padded.size(0),), padded.size(1), device=padded.device, dtype=torch.long)
+
+        logits = self.asr_head(padded)
+        log_probs = F.log_softmax(logits, dim=-1).transpose(0, 1)  # (T, B, V)
+
+        targets = [torch.tensor(self.text_to_int(t), device=log_probs.device, dtype=torch.long) for t in transcripts]
+        target_lengths = torch.tensor([len(t) for t in targets], device=log_probs.device, dtype=torch.long)
+
+        # Skip if any target is empty (CTC cannot handle zero-length)
+        if torch.any(target_lengths == 0):
+            return None
+
+        flat_targets = torch.cat(targets)
+        loss = self.ctc_loss(log_probs, flat_targets, input_lengths, target_lengths)
+
+        decoded = self.ctc_greedy_decode(log_probs.detach(), input_lengths)
+        return {
+            'ctc_loss': loss,
+            'predicted_text': decoded,
+            'target_text': transcripts,
+        }
     
     @torch.compile
     def training_step(self, batch, batch_idx):
@@ -415,6 +466,14 @@ class CodecLightningModule(pl.LightningModule):
         # generator
         gen_losses = self.compute_gen_loss(batch, output)
         gen_loss = gen_losses['gen_loss']
+
+        # ASR probe (no encoder gradients; features detached inside compute_asr_probe)
+        asr_out = self.compute_asr_probe(batch, output)
+        if asr_out is not None:
+            lambda_ctc = float(getattr(self.cfg.train.lambdas, "lambda_ctc", 0.0))
+            gen_loss = gen_loss + asr_out['ctc_loss'] * lambda_ctc
+            gen_losses['ctc_loss'] = asr_out['ctc_loss']
+
         gen_opt.zero_grad()
         self.manual_backward(gen_loss)
         self.clip_gradients(gen_opt, gradient_clip_val=self.cfg.train.gen_grad_clip, gradient_clip_algorithm='norm')
@@ -443,9 +502,12 @@ class CodecLightningModule(pl.LightningModule):
             pass
         perplexity = self.val_metrics['codebook_perplexity'].update(vq_code)
         utilization = self.val_metrics['codebook_utilization'].update(vq_code)
-        if self.use_bow and output.get('bow_logits') is not None and 'bow' in batch:
-            bow_probs = torch.sigmoid(output['bow_logits'])
-            self.val_metrics['bow_f1'].update(bow_probs, batch['bow'])
+        if self.use_asr_probe:
+            asr_out = self.compute_asr_probe(batch, output)
+            if asr_out is not None:
+                self.log_dict({'val_ctc_loss': asr_out['ctc_loss']}, on_step=False, on_epoch=True, prog_bar=True, logger=True, batch_size=self.cfg.dataset.val.batch_size, sync_dist=True)
+                self.val_cer.update(asr_out['predicted_text'], asr_out['target_text'])
+                self.val_wer.update(asr_out['predicted_text'], asr_out['target_text'])
         if batch_idx in self.cfg.dataset.val.log_idxs:
             y_ = y_[0].squeeze().float().cpu().numpy()
             y = y[0].squeeze().float().cpu().numpy()
@@ -463,6 +525,10 @@ class CodecLightningModule(pl.LightningModule):
     
     def on_validation_epoch_end(self):
         self.log_dict(self.val_metrics.compute(), logger=True, batch_size=self.cfg.dataset.val.batch_size, sync_dist=True)
+        if self.use_asr_probe:
+            self.log_dict({'val_cer': self.val_cer.compute(), 'val_wer': self.val_wer.compute()}, logger=True, batch_size=self.cfg.dataset.val.batch_size, sync_dist=True)
+            self.val_cer.reset()
+            self.val_wer.reset()
         self.val_metrics.reset()
 
     def test_step(self, batch, batch_idx):
@@ -482,9 +548,12 @@ class CodecLightningModule(pl.LightningModule):
             pass
         perplexity = self.test_metrics['codebook_perplexity'].update(vq_code)
         utilization = self.test_metrics['codebook_utilization'].update(vq_code)
-        if self.use_bow and output.get('bow_logits') is not None and 'bow' in batch:
-            bow_probs = torch.sigmoid(output['bow_logits'])
-            self.test_metrics['bow_f1'].update(bow_probs, batch['bow'])
+        if self.use_asr_probe:
+            asr_out = self.compute_asr_probe(batch, output)
+            if asr_out is not None:
+                self.log_dict({'test_ctc_loss': asr_out['ctc_loss']}, on_step=False, on_epoch=True, prog_bar=True, logger=True, batch_size=self.cfg.dataset.test.batch_size, sync_dist=True)
+                self.test_cer.update(asr_out['predicted_text'], asr_out['target_text'])
+                self.test_wer.update(asr_out['predicted_text'], asr_out['target_text'])
         if batch_idx in self.cfg.dataset.test.log_idxs:
             y_ = y_[0].squeeze().float().cpu().numpy()
             y = y[0].squeeze().float().cpu().numpy()
@@ -502,6 +571,10 @@ class CodecLightningModule(pl.LightningModule):
 
     def on_test_epoch_end(self):
         self.log_dict(self.test_metrics.compute(), logger=True, batch_size=self.cfg.dataset.test.batch_size, sync_dist=True)
+        if self.use_asr_probe:
+            self.log_dict({'test_cer': self.test_cer.compute(), 'test_wer': self.test_wer.compute()}, logger=True, batch_size=self.cfg.dataset.test.batch_size, sync_dist=True)
+            self.test_cer.reset()
+            self.test_wer.reset()
         self.test_metrics.reset()
 
     def configure_optimizers(self):
@@ -514,8 +587,8 @@ class CodecLightningModule(pl.LightningModule):
             self.encoder.parameters(),
             self.decoder.parameters(),
         )
-        if self.use_bow:
-            gen_params = chain(gen_params, self.bow_head.parameters())
+        if self.use_asr_probe and self.asr_head is not None:
+            gen_params = chain(gen_params, self.asr_head.parameters())
 
         gen_opt = optim.AdamW(gen_params, **self.cfg.train.gen_optim_params)
         disc_opt = optim.AdamW(disc_params, **self.cfg.train.disc_optim_params)

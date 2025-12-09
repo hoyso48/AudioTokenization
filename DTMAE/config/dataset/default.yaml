@@ -23,9 +23,6 @@ test:
 
 sample_rate: 16000
 multiple_of: 320
-bow:
+transcript:
   enable: true
-  label_path: null            # optional override; meta_path covers splits
-  vocab_path: ./filelists/bow/vocab.json
-  meta_path: ./filelists/bow/bow_meta.json
-  vocab_size: 512
+  lowercase: true
