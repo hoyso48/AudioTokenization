@@ -110,6 +110,7 @@ class CodecLightningModule(pl.LightningModule):
         )
 
         deccfg = self.cfg.model.codec_decoder
+        quantizer_cfg = self.cfg.model.quantizer
         self.decoder = TransformerDecoderISTFT(
                 in_channels=deccfg.in_channels,
                 hop_length=deccfg.hop_length,
@@ -125,14 +126,18 @@ class CodecLightningModule(pl.LightningModule):
                 max_position_embeddings=deccfg.max_position_embeddings,
                 base=deccfg.base,
                 causal=deccfg.causal,
-                fsq=deccfg.fsq,
-                fsq_levels=deccfg.fsq_levels,
-                vq_num_quantizers=deccfg.vq_num_quantizers,
-                vq_commit_weight=deccfg.vq_commit_weight,
-                vq_weight_init=deccfg.vq_weight_init,
-                vq_full_commit_loss=deccfg.vq_full_commit_loss,
-                codebook_size=deccfg.codebook_size,
-                codebook_dim=deccfg.codebook_dim,
+                # Extensible quantizer config (like resampler pattern)
+                quantizer_cls=quantizer_cfg.cls,
+                quantizer_params=dict(quantizer_cfg.params),
+                # Legacy quantizer params (kept for reference):
+                # fsq=deccfg.fsq,
+                # fsq_levels=deccfg.fsq_levels,
+                # vq_num_quantizers=deccfg.vq_num_quantizers,
+                # vq_commit_weight=deccfg.vq_commit_weight,
+                # vq_weight_init=deccfg.vq_weight_init,
+                # vq_full_commit_loss=deccfg.vq_full_commit_loss,
+                # codebook_size=deccfg.codebook_size,
+                # codebook_dim=deccfg.codebook_dim,
                 norm_eps=deccfg.norm_eps,
                 attn_window_size=deccfg.attn_window_size,
         )
@@ -208,8 +213,29 @@ class CodecLightningModule(pl.LightningModule):
         metrics['pesq'] = PerceptualEvaluationSpeechQuality(fs=16000,mode='wb')
         metrics['si_snr'] = ScaleInvariantSignalNoiseRatio()
         metrics['si_sdr'] = ScaleInvariantSignalDistortionRatio()
-        metrics['codebook_perplexity'] = CodebookPerplexity(codebook_size=self.cfg.model.codec_decoder.codebook_size)
-        metrics['codebook_utilization'] = CodebookUtilization(codebook_size=self.cfg.model.codec_decoder.codebook_size)
+        # Calculate codebook_size based on quantizer type
+        quantizer_params = self.cfg.model.quantizer.params
+        if 'codebook_size' in quantizer_params:
+            # ResidualVQ, FSQ, SimVQ
+            codebook_size = quantizer_params.codebook_size
+        elif 'inference_levels' in quantizer_params:
+            # DitheredFSQ: inference_levels can be int or list
+            inf_levels = quantizer_params.inference_levels
+            if isinstance(inf_levels, (list, tuple)) or hasattr(inf_levels, '__iter__') and not isinstance(inf_levels, (int, str)):
+                # List: product of all levels
+                codebook_size = 1
+                for L in inf_levels:
+                    codebook_size *= L
+            else:
+                # Int: level^codebook_dim
+                codebook_size = int(inf_levels) ** quantizer_params.codebook_dim
+        elif 'train_levels' in quantizer_params and 'codebook_dim' in quantizer_params:
+            # DitheredFSQ (inference_levels defaults to max(train_levels))
+            codebook_size = max(quantizer_params.train_levels) ** quantizer_params.codebook_dim
+        else:
+            codebook_size = 16384  # fallback default
+        metrics['codebook_perplexity'] = CodebookPerplexity(codebook_size=codebook_size)
+        metrics['codebook_utilization'] = CodebookUtilization(codebook_size=codebook_size)
         if self.use_dtp:
             metrics['avg_r'] = MeanMetric()
         return torchmetrics.MetricCollection(prefix=prefix, metrics=metrics)
@@ -488,7 +514,7 @@ class CodecLightningModule(pl.LightningModule):
     def validation_step(self, batch, batch_idx):
         with torch.no_grad():
             output = self(batch)
-        y, y_, vq_code = output['gt_wav'], output['gen_wav'], output['vq_code']
+        y, y_, vq_code = output['gt_wav'], output['gen_wav'].float(), output['vq_code']
         rs_y_ = torchaudio.functional.resample(y_, self.cfg.dataset.sample_rate, 16000)
         rs_y = torchaudio.functional.resample(y, self.cfg.dataset.sample_rate, 16000)
         si_snr = self.val_metrics['si_snr'].update(y_, y)
@@ -534,7 +560,7 @@ class CodecLightningModule(pl.LightningModule):
     def test_step(self, batch, batch_idx):
         with torch.no_grad():
             output = self(batch)
-        y, y_, vq_code = output['gt_wav'], output['gen_wav'], output['vq_code']
+        y, y_, vq_code = output['gt_wav'], output['gen_wav'].float(), output['vq_code']
         rs_y_ = torchaudio.functional.resample(y_, self.cfg.dataset.sample_rate, 16000)
         rs_y = torchaudio.functional.resample(y, self.cfg.dataset.sample_rate, 16000)
         si_snr = self.test_metrics['si_snr'].update(y_, y)

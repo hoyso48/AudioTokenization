@@ -414,8 +414,8 @@ class TransformerLayer(nn.Module):
         super().__init__()
         self.ffn1 = FeedForward(dim, mult=ffn_mult, dropout=dropout)
         self.self_attn = SelfAttention(dim, window_size=attn_window_size, n_head=n_head, dropout=dropout, max_position_embeddings=max_position_embeddings, base=base, causal=causal, norm_eps=norm_eps)
-        self.attn_scale = LayerScale(dim, gamma_init=1.0)
-        self.ffn_scale = LayerScale(dim, gamma_init=1.0)
+        self.attn_scale = LayerScale(dim, gamma_init=1)
+        self.ffn_scale = LayerScale(dim, gamma_init=1)
         self.ffn1_norm_in = RMSNorm(dim, eps=norm_eps)
         self.attn_norm_in = RMSNorm(dim, eps=norm_eps)
         # self.dropout = nn.Dropout(dropout)
@@ -442,11 +442,11 @@ class Transformer(nn.Module):
         x = self.norm(x)
         return x
 
-class Patchify(nn.Module):
+class Patchify2D(nn.Module):
     def __init__(self, in_channels, out_channels, patch_size):
         super().__init__()
         self.patch_size = patch_size
-        self.conv = nn.Conv2d(in_channels, out_channels, kernel_size=patch_size, stride=patch_size)
+        self.conv = nn.Conv2d(in_channels, out_channels, kernel_size=patch_size, stride=patch_size, bias=False)
     
     def forward(self, x):
         x = x.permute(0, 3, 1, 2) #(B, H, W, C) -> (B, C, H, W)
@@ -454,17 +454,41 @@ class Patchify(nn.Module):
         x = x.permute(0, 2, 3, 1) #(B, H//patch_size, W//patch_size, C)
         return x
 
-class UnPatchify(nn.Module):
+class UnPatchify2D(nn.Module):
     def __init__(self, in_channels, out_channels, patch_size):
         super().__init__()
         self.patch_size = (patch_size, patch_size) if isinstance(patch_size, int) else patch_size
-        self.conv = nn.ConvTranspose2d(in_channels, out_channels, kernel_size=patch_size, stride=patch_size)
+        self.conv = nn.ConvTranspose2d(in_channels, out_channels, kernel_size=patch_size, stride=patch_size, bias=False)
     
     def forward(self, x):
         B, H, W, C = x.shape
         x = x.permute(0, 3, 1, 2) #(B, C, H, W) -> (B, C, H, W)
         x = self.conv(x) #(B, C, H*patch_size, W*patch_size)
         x = x.permute(0, 2, 3, 1) #(B, H*patch_size, W*patch_size, C)
+        return x
+    
+class Patchify1D(nn.Module):
+    def __init__(self, in_channels, out_channels, patch_size):
+        super().__init__()
+        self.patch_size = patch_size
+        self.conv = nn.Conv1d(in_channels, out_channels, kernel_size=patch_size, stride=patch_size, bias=False)
+    
+    def forward(self, x):
+        x = x.permute(0, 2, 1)  # (B, N, C) -> (B, C, N)
+        x = self.conv(x)        # (B, C', N//patch_size)
+        x = x.permute(0, 2, 1)  # (B, N//patch_size, C')
+        return x
+
+class UnPatchify1D(nn.Module):
+    def __init__(self, in_channels, out_channels, patch_size):
+        super().__init__()
+        self.patch_size = patch_size
+        self.conv = nn.ConvTranspose1d(in_channels, out_channels, kernel_size=patch_size, stride=patch_size, bias=False)
+    
+    def forward(self, x):
+        x = x.permute(0, 2, 1)  # (B, N, C) -> (B, C, N)
+        x = self.conv(x)        # (B, C', N*patch_size)
+        x = x.permute(0, 2, 1)  # (B, N*patch_size, C')
         return x
 
 class Downsample(nn.Module):

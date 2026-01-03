@@ -1,10 +1,11 @@
 import numpy as np
 import torch
 import torch.nn as nn
-from .residual_vq import ResidualVQ
-from .module import Transformer, ConvUpsample
+from .module import Transformer, ConvUpsample, UnPatchify1D
 from .alias_free_torch import *
-from vector_quantize_pytorch import FSQ, SimVQ
+
+# Quantizer imports - for dynamic instantiation
+import vq.quantizers as quantizers
 
 class ISTFT(nn.Module):
     """
@@ -168,49 +169,40 @@ class TransformerDecoderISTFT(nn.Module):
                  max_position_embeddings=2048,
                  base=10000.0,
                  causal=False,
-                 # Quantizer parameters
-                 fsq=False,
-                 simvq=False,
-                 fsq_levels=[4,4,4,8],
-                 vq_num_quantizers=1,
-                 vq_commit_weight=0.25,
-                 vq_weight_init=False,
-                 vq_full_commit_loss=False,
-                 codebook_size=8192,
-                 codebook_dim=8,
+                 # Quantizer config (extensible pattern like resampler)
+                 quantizer_cls='ResidualVQ',
+                 quantizer_params=None,
+                 # Legacy quantizer parameters (kept for reference, use quantizer_cls/params instead)
+                 # fsq=False,
+                 # simvq=False,
+                 # fsq_levels=[4,4,4,8],
+                 # vq_num_quantizers=1,
+                 # vq_commit_weight=0.25,
+                 # vq_weight_init=False,
+                 # vq_full_commit_loss=False,
+                 # codebook_size=8192,
+                 # codebook_dim=8,
                  norm_eps: float = 1e-2,
                  attn_window_size=(64, 64),
                 ):
         super().__init__()
         self.hop_length = hop_length
         self.n_fft = n_fft
-        self.fsq = fsq
-        self.simvq = simvq
+        self.quantizer_cls = quantizer_cls
         
-        # Quantizer
-        if fsq:
-            self.quantizer = FSQ(
-                levels = fsq_levels,
-                channel_first = False,
-                dim = in_channels,
-            )
-            assert codebook_size == np.prod(fsq_levels), "codebook_size must be equal to the product of fsq_levels"
-        elif simvq:
-            self.quantizer = SimVQ(
-                dim=in_channels,
-                codebook_size=codebook_size,
-            )
-        else:
-            self.quantizer = ResidualVQ(
-                num_quantizers=vq_num_quantizers,
-                dim=in_channels,
-                codebook_size=codebook_size,
-                codebook_dim=codebook_dim,
-                threshold_ema_dead_code=2,
-                commitment=vq_commit_weight,
-                weight_init=vq_weight_init,
-                full_commit_loss=vq_full_commit_loss,
-            )
+        # Default quantizer params if not provided
+        if quantizer_params is None:
+            quantizer_params = {
+                'dim': in_channels,
+                'codebook_size': 16384,
+                'codebook_dim': 8,
+                'num_quantizers': 1,
+                'commitment': 0.5,
+            }
+        
+        # Dynamic quantizer instantiation (like resampler pattern)
+        quantizer_class = getattr(quantizers, quantizer_cls)
+        self.quantizer = quantizer_class(**quantizer_params)
         
         # Input projection from quantized features to conformer dimension
         if in_channels != dim:
@@ -252,6 +244,7 @@ class TransformerDecoderISTFT(nn.Module):
         
         # Use existing ISTFTHead
         self.head = ISTFTHead(dim=n_fft+2, n_fft=n_fft, hop_length=hop_length, padding="same")
+        # self.head = UnPatchify1D(dim, 1, hop_length)
 
         self.conv = ConvUpsample(dim, n_fft+2, norm_eps=norm_eps)
         
@@ -259,14 +252,23 @@ class TransformerDecoderISTFT(nn.Module):
 
     def forward(self, x, vq=True, position_ids=None, cu_seqlens=None, max_seqlen=None, level=1):
         if vq is True:
-            if self.fsq:
-                x, q = self.quantizer(x)
+            # Unified quantizer interface
+            # All quantizers return: (quantized, indices, commit_loss_or_none)
+            result = self.quantizer(x)
+            
+            # Handle different return formats
+            if len(result) == 2:
+                # FSQ-style: (quantized, indices)
+                x, q = result
                 commit_loss = None
-            elif self.simvq:
-                x, q, commit_loss = self.quantizer(x)
-                commit_loss = [commit_loss]
             else:
-                x, q, commit_loss = self.quantizer(x)
+                # VQ-style: (quantized, indices, commit_loss)
+                x, q, commit_loss = result
+                # Ensure commit_loss is a list for consistency
+                if commit_loss is not None and not isinstance(commit_loss, list):
+                    if isinstance(commit_loss, torch.Tensor) and commit_loss.dim() == 0:
+                        commit_loss = [commit_loss]
+            
             return x, q, commit_loss
         
         if level == 2:
@@ -281,6 +283,9 @@ class TransformerDecoderISTFT(nn.Module):
             x = self.conv(x)
             
             audio, x_pred = self.head(x)
+
+            # audio = self.head(x)
+            # audio = audio.permute(0, 2, 1)
 
             return audio
         else:
