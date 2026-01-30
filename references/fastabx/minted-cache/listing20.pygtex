@@ -1,0 +1,11 @@
+\begin{Verbatim}[commandchars=\\\{\},codes={\catcode`\$=3\catcode`\^=7\catcode`\_=8\relax}]
+\PYG{k+kn}{from} \PYG{n+nn}{fastabx} \PYG{k+kn}{import} \PYG{n}{Dataset}
+
+\PYG{n}{dataset} \PYG{o}{=} \PYG{n}{Dataset}\PYG{o}{.}\PYG{n}{from\PYGZus{}item}\PYG{p}{(}
+  \PYG{n}{item}\PYG{p}{,} \PYG{c+c1}{\PYGZsh{} Path to the item file}
+  \PYG{n}{root}\PYG{p}{,} \PYG{c+c1}{\PYGZsh{} Path to the pre\PYGZhy{}extracted features}
+  \PYG{n}{frequency}\PYG{p}{,} \PYG{c+c1}{\PYGZsh{} Feature frequency (in Hz)}
+  \PYG{n}{feature\PYGZus{}maker}\PYG{o}{=}\PYG{n}{torch}\PYG{o}{.}\PYG{n}{load}\PYG{p}{,}
+  \PYG{n}{extension}\PYG{o}{=}\PYG{l+s+s2}{\PYGZdq{}.pt\PYGZdq{}}\PYG{p}{,}
+\PYG{p}{)}
+\end{Verbatim}

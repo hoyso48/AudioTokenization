@@ -27,6 +27,29 @@ from pesq import NoUtterancesError
 import dtp.ops
 import dtp.resampler
 
+class LengthEmbedding(nn.Module):
+    """
+    Trainable embedding for integer "length ids" (e.g., token span length).
+
+    This is intentionally similar to learned absolute positional embeddings:
+    embed(id) is added to token features.
+    """
+    def __init__(self, max_len: int, dim: int, init_std: float = 0.02, scale: float = 1.0):
+        super().__init__()
+        if max_len <= 0:
+            raise ValueError("LengthEmbedding: max_len must be > 0")
+        if dim <= 0:
+            raise ValueError("LengthEmbedding: dim must be > 0")
+        self.max_len = int(max_len)
+        self.scale = float(scale)
+        self.emb = nn.Embedding(self.max_len + 1, dim)
+        nn.init.normal_(self.emb.weight, mean=0.0, std=float(init_std))
+
+    def forward(self, length_ids: torch.Tensor) -> torch.Tensor:
+        # length_ids: (...,) integer >= 0 (we clamp to [0, max_len])
+        length_ids = length_ids.to(torch.long).clamp(min=0, max=self.max_len)
+        return self.emb(length_ids) * self.scale
+
 class CodebookPerplexity(torchmetrics.Metric):
     def __init__(self, codebook_size, **kwargs):
         super().__init__(**kwargs)
@@ -87,6 +110,40 @@ class CodecLightningModule(pl.LightningModule):
         self.construct_asr_probe()
         self.save_hyperparameters()
         self.automatic_optimization = False
+
+    @staticmethod
+    def _length_ids_from_frontier_mask(mask: torch.Tensor) -> torch.Tensor:
+        """
+        Convert frontier mask [B, N] (True at kept/frontier positions) into per-position
+        length ids [B, N], where each position gets the length (span size) of its segment.
+
+        Example mask: 1 0 0 1 0 1 0 0
+          segments:   [0..2] [3..4] [5..7]
+          length ids:  3 3 3 2 2 3 3 3
+        """
+        if mask.dim() != 2:
+            raise ValueError("length_ids_from_frontier_mask expects mask of shape [B, N]")
+        B, N = mask.shape
+        if N == 0:
+            return mask.to(torch.long)
+
+        # DTP/resampler assumes the first token is always kept.
+        # Use torch._assert to keep `torch.compile` happy (avoid .item()).
+        torch._assert(mask[:, 0].all(), "Frontier mask must keep the first token (mask[:, 0] == True)")
+
+        device = mask.device
+        mask_l = mask.to(torch.long)
+
+        # Segment id per position: cumulative frontier count - 1 (in [0, N-1])
+        seg_id = (mask_l.cumsum(dim=1) - 1).clamp_min(0)
+
+        # Count positions per segment (allocate [B, N] to avoid data-dependent shapes).
+        ones = torch.ones((B, N), device=device, dtype=torch.long)
+        seg_counts = torch.zeros((B, N), device=device, dtype=torch.long)
+        seg_counts.scatter_add_(dim=1, index=seg_id, src=ones)
+
+        # Broadcast back to positions: length id for each position = seg_counts[b, seg_id[b, t]]
+        return seg_counts.gather(dim=1, index=seg_id)
 
     def construct_model(self):
         enccfg = self.cfg.model.codec_encoder
@@ -168,6 +225,18 @@ class CodecLightningModule(pl.LightningModule):
             self.dtp = getattr(dtp.ops, resamplercfg.dtp_cls)(**resamplercfg.dtp_params)
         self.downsampler = getattr(dtp.resampler, resamplercfg.downsampler_cls)(**resamplercfg.downsampler_params)
         self.upsampler = getattr(dtp.resampler, resamplercfg.upsampler_cls)(**resamplercfg.upsampler_params)
+
+        # Optional: length embedding derived from frontier mask (span length).
+        len_cfg = getattr(resamplercfg, "length_embedding", None)
+        enable_len_emb = bool(getattr(len_cfg, "enable", False)) if len_cfg is not None else False
+        if enable_len_emb:
+            max_len = int(getattr(len_cfg, "max_len", 512))
+            init_std = float(getattr(len_cfg, "init_std", 0.02))
+            scale = float(getattr(len_cfg, "scale", 1.0))
+            dim = int(self.cfg.model.codec_decoder.in_channels)
+            self.length_embedding = LengthEmbedding(max_len=max_len, dim=dim, init_std=init_std, scale=scale)
+        else:
+            self.length_embedding = None
 
     def construct_asr_probe(self):
         # CTC probe is optional and should not backprop into encoder
@@ -267,6 +336,17 @@ class CodecLightningModule(pl.LightningModule):
             aux_loss = 0.0
             
             vq_emb = self.downsampler(vq_emb)
+            mask = None
+
+        # Add length embedding to DTP tokens right after downsampling.
+        # - DTP path uses packed tokens [total_kept, C], and we add embeddings for kept positions.
+        # - We also keep full-length ids for later (decoder-side embedding).
+        length_ids_full = None
+        if self.use_dtp and (self.length_embedding is not None):
+            length_ids_full = self._length_ids_from_frontier_mask(mask)  # [B, N]
+            length_ids_kept = length_ids_full[mask]  # [total_kept]
+            vq_emb = vq_emb + self.length_embedding(length_ids_kept).to(dtype=vq_emb.dtype)
+
         vq_emb = self.encoder(vq_emb, position_ids=position_ids, cu_seqlens=cu_seqlens, max_seqlen=max_seqlen, level=2)
         vq_post_emb, vq_code, vq_loss = self.decoder(vq_emb, vq=True)
         vq_post_emb = self.decoder(vq_post_emb, vq=False, position_ids=position_ids, cu_seqlens=cu_seqlens, max_seqlen=max_seqlen, level=2)
@@ -274,6 +354,15 @@ class CodecLightningModule(pl.LightningModule):
             vq_post_emb = self.upsampler(vq_post_emb, mask)
         else:
             vq_post_emb = self.upsampler(vq_post_emb)
+
+        # Add length embedding to dense tokens after mask upsampling (duplicate by span length).
+        if self.use_dtp and (self.length_embedding is not None):
+            if length_ids_full is None:
+                length_ids_full = self._length_ids_from_frontier_mask(mask)
+            if vq_post_emb.shape[:2] != length_ids_full.shape:
+                raise ValueError("Length embedding: vq_post_emb length does not match mask length")
+            vq_post_emb = vq_post_emb + self.length_embedding(length_ids_full).to(dtype=vq_post_emb.dtype)
+
         y_ = self.decoder(vq_post_emb, vq=False, level=1) # [B, 1, T]
         y = wav.unsqueeze(1)
         

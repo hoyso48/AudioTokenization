@@ -94,6 +94,82 @@ PLE achieves state-of-the-art performance with negligible computational overhead
     *   **Hypothesis to test:** Will strategy (1) prove superior to (2) in semantic evaluation?
 5.  The 300M model with DTM scales well, outperforming the 30M model and achieving SOTA results at a comparable bitrate.
 
+\begin{table}[t]
+\centering
+\small
+\setlength{\tabcolsep}{4pt}
+\caption{LibriSpeech test-clean reconstruction metrics (count = 2620). Bold = global best; underline = best within its subgroup; higher is better except MCD and WER.}
+\begin{tabular}{lcccccccc}
+\toprule
+\textbf{Inference setup} & \textbf{kbps} & PESQ$_\text{WB}$ ↑ & PESQ$_\text{NB}$ ↑ & STOI ↑ & MCD ↓ & Spk-Sim ↑ & WER ↓ & UTMOS ↑ \\
+\midrule
+Ground Truth & - & 4.644 & 4.549 & 1.000 & - & 1.000 & 2.077 & 4.086 \\
+\midrule
+\multicolumn{9}{l}{\textbf{(i) Fixed pattern masking}} \\
+\quad Fixed stride & 0.8 & 2.351 & 3.070 & 0.919 & 3.933 & 0.699 & 3.483 & 4.033 \\
+\midrule
+\multicolumn{9}{l}{\textbf{(ii) PLE training}} \\
+\quad PLE & 0.8 & \underline{2.668} & \underline{3.343} & \underline{0.934} & \underline{\textbf{3.683}} & \underline{0.781} & \underline{2.876} & \underline{\textbf{4.216}} \\
+\quad PLE @25hz & 0.4 & 2.072 & 2.782 & 0.895 & 4.672 & 0.575 & 4.742 & 4.107 \\
+\midrule
+\multicolumn{9}{l}{\textbf{(iii) Random masking ($p=0.5$) training}} \\
+\quad PLE & 0.8 & \underline{2.564} & \underline{3.251} & \underline{0.927} & \underline{3.795} & \underline{0.728} & \underline{3.036} & \underline{4.194} \\
+\quad Top-K & 0.8 & 2.096 & 2.846 & 0.897 & 4.567 & 0.709 & 6.260 & 3.501 \\
+\quad Greedy & 0.8 & 2.512 & 3.216 & 0.924 & 3.903 & 0.726 & 3.161 & 4.134 \\
+\midrule
+\quad X-Codec2 & 0.8 & 2.430 & 3.040 & 0.920 & - & 0.820 & 2.470 & 4.130 \\
+\bottomrule
+\end{tabular}
+\end{table}
+
+\begin{table}[t]
+\centering
+\small
+\setlength{\tabcolsep}{4pt}
+\caption{LibriSpeech test-clean (4--10s filtered) reconstruction metrics (count = 1237). Bold = global best; underline = best within its subgroup; higher is better except MCD and WER.}
+\begin{tabular}{lcccccccc}
+\toprule
+\textbf{Inference setup} & \textbf{kbps} & PESQ$_\text{WB}$ ↑ & PESQ$_\text{NB}$ ↑ & STOI ↑ & MCD ↓ & Spk-Sim ↑ & WER ↓ & UTMOS ↑ \\
+\midrule
+Ground Truth & - & 4.644 & 4.549 & 1.000 & - & 1.000 & 2.181 & 4.103 \\
+\midrule
+\multicolumn{9}{l}{\textbf{(i) Fixed pattern masking}} \\
+\quad Fixed stride & 0.8 & 2.351 & 3.068 & 0.920 & 3.925 & 0.706 & 3.627 & 4.047 \\
+\midrule
+\multicolumn{9}{l}{\textbf{(ii) PLE training}} \\
+\quad PLE & 0.8 & \underline{\textbf{2.650}} & \underline{3.329} & \underline{\textbf{0.933}} & \underline{3.679} & \underline{0.785} & \underline{3.187} & \underline{\textbf{4.225}} \\
+\quad PLE @25hz & 0.4 & 2.068 & 2.774 & 0.895 & 4.670 & 0.575 & 5.136 & 4.128 \\
+\midrule
+\multicolumn{9}{l}{\textbf{(iii) Random masking ($p=0.5$) training}} \\
+\quad PLE & 0.8 & \underline{2.552} & \underline{3.243} & \underline{0.927} & \underline{3.795} & \underline{0.731} & 3.441 & \underline{4.207} \\
+\quad Top-K & 0.8 & 2.087 & 2.835 & 0.898 & 4.549 & 0.715 & 6.528 & 3.524 \\
+\quad Greedy & 0.8 & 2.509 & 3.213 & 0.925 & 3.895 & 0.730 & \underline{3.359} & 4.149 \\
+\midrule
+\multicolumn{9}{l}{\textbf{(iv) FlexiCodec}} \\
+\quad FlexiCodec @12.5Hz & 1.30 & - & \underline{\textbf{3.350}} & - & \underline{\textbf{2.760}} & 0.85 & \underline{\textbf{2.230}} & \underline{4.220} \\
+\quad FlexiCodec @8.3Hz & 0.85 & - & 3.030 & - & 3.100 & \underline{0.780} & 2.280 & 4.210 \\
+\quad FlexiCodec @6.25Hz & 0.64 & - & 2.760 & - & 3.420 & 0.710 & 2.530 & 4.180 \\
+\midrule
+\quad X-Codec2 & 0.8 & - & 2.770 & - & 3.650 & \textbf{0.820} & 2.800 & 4.080 \\
+\bottomrule
+\end{tabular}
+\end{table}
+
+\begin{table}[t]
+\centering
+\small
+\setlength{\tabcolsep}{4pt}
+\caption{LibriSpeech test-clean upsampling ablation (PLE 50Hz; count = 2620).}
+\begin{tabular}{lcccccccc}
+\toprule
+\textbf{Upsampling} & \textbf{kbps} & PESQ$_\text{WB}$ ↑ & PESQ$_\text{NB}$ ↑ & STOI ↑ & MCD ↓ & Spk-Sim ↑ & WER ↓ & UTMOS ↑ \\
+\midrule
+Mask token upsampling & 0.8 & \textbf{2.668} & \textbf{3.343} & \textbf{0.934} & \textbf{3.683} & 0.781 & \textbf{2.876} & \textbf{4.216} \\
+Repeat upsampling & 0.8 & 2.618 & 3.305 & 0.932 & 3.684 & \textbf{0.794} & 3.133 & 4.179 \\
+\bottomrule
+\end{tabular}
+\end{table}
+
 ---
 
 ## 5. Critical Questions & Future Work

@@ -4,6 +4,7 @@ import sys
 import json
 import math
 import argparse
+import shutil
 from collections import OrderedDict
 from pathlib import Path
 from typing import List, Optional, Tuple, Dict, Iterable
@@ -50,6 +51,40 @@ from mel_cepstral_distance import compare_audio_files as mcd_compare
 
 ALLOWED_AUDIO_EXTS = {".wav", ".flac"}
 
+def infer_codebook_size_from_cfg(cfg) -> int:
+    """
+    New configs store quantizer info in cfg.model.quantizer.params.
+    Legacy configs stored codebook_size in cfg.model.codec_decoder.codebook_size.
+    """
+    # Legacy fallback
+    try:
+        legacy = cfg.model.codec_decoder.codebook_size
+        if legacy is not None:
+            return int(legacy)
+    except Exception:
+        pass
+
+    if not hasattr(cfg.model, "quantizer"):
+        raise RuntimeError("Config missing cfg.model.quantizer (run utils/update_legacy_config.py).")
+    qparams = cfg.model.quantizer.params
+
+    # Mirror DTMAE.lightning_module.CodecLightningModule.construct_metrics logic.
+    if "codebook_size" in qparams:
+        return int(qparams.codebook_size)
+    if "inference_levels" in qparams:
+        inf_levels = qparams.inference_levels
+        if isinstance(inf_levels, (list, tuple)) or (hasattr(inf_levels, "__iter__") and not isinstance(inf_levels, (int, str))):
+            size = 1
+            for L in inf_levels:
+                size *= int(L)
+            return int(size)
+        return int(inf_levels) ** int(qparams.codebook_dim)
+    if "train_levels" in qparams and "codebook_dim" in qparams:
+        return int(max(qparams.train_levels)) ** int(qparams.codebook_dim)
+
+    # Conservative fallback: match previous default.
+    return 16384
+
 
 def read_lines(path: str) -> List[str]:
     with open(path, "r") as f:
@@ -69,6 +104,46 @@ def pad_to_multiple_1d(waveform: torch.Tensor, multiple_of: int) -> Tuple[torch.
 
 def ensure_parent_dir(path: Path) -> None:
     path.parent.mkdir(parents=True, exist_ok=True)
+
+
+def _is_within_dir(path: Path, root: Path) -> bool:
+    try:
+        path.resolve().relative_to(root.resolve())
+        return True
+    except Exception:
+        return False
+
+
+def maybe_cleanup_audio_dirs(
+    *,
+    eval_dir: Path,
+    gt_out_dir: Optional[Path],
+    pred_out_dir: Optional[Path],
+    keep_audio: bool,
+    gt_was_default: bool,
+    pred_was_default: bool,
+) -> None:
+    """
+    Delete generated audio directories after evaluation to save disk.
+
+    Safety rules:
+    - Only delete if keep_audio=False
+    - Only delete directories that are inside eval_dir
+    - Only delete directories that were created by default paths (unless user explicitly wants to keep audio)
+    """
+    if keep_audio:
+        return
+
+    to_delete: List[Path] = []
+    if gt_out_dir is not None and gt_was_default and _is_within_dir(gt_out_dir, eval_dir):
+        to_delete.append(gt_out_dir)
+    if pred_out_dir is not None and pred_was_default and _is_within_dir(pred_out_dir, eval_dir):
+        to_delete.append(pred_out_dir)
+
+    for p in to_delete:
+        if p.exists() and p.is_dir():
+            shutil.rmtree(p)
+            print(f"[Cleanup] Deleted audio directory: {p}")
 
 
 def last_k_parts(path: Path, k: int) -> Path:
@@ -297,8 +372,9 @@ def run_save_stage(args, cfg, model, input_paths: List[str], eval_dir: Path, gt_
     print('total to be evaluated:', len(ds))
     dl = DataLoader(ds, batch_size=1, shuffle=False, num_workers=args.num_workers, pin_memory=True, collate_fn=AudioDataset.collate_fn)
 
-    codebook_perplexity = CodebookPerplexity(codebook_size=cfg.model.codec_decoder.codebook_size)
-    codebook_utilization = CodebookUtilization(codebook_size=cfg.model.codec_decoder.codebook_size)
+    codebook_size = infer_codebook_size_from_cfg(cfg)
+    codebook_perplexity = CodebookPerplexity(codebook_size=codebook_size)
+    codebook_utilization = CodebookUtilization(codebook_size=codebook_size)
 
     avg_sims: List[float] = []
 
@@ -565,6 +641,11 @@ def main():
         "(e.g., --cfg_override model.resampler.dtp_params.r=0.4). "
         "Use multiple flags for multiple overrides.",
     )
+    parser.add_argument(
+        "--keep_audio",
+        action="store_true",
+        help="Keep generated gt_16k/pred_16k audio directories. Default behavior is to delete them after metrics are computed.",
+    )
     args = parser.parse_args()
 
     torch.set_grad_enabled(False)
@@ -585,8 +666,14 @@ def main():
     eval_dir.mkdir(parents=True, exist_ok=True)
 
     manifest_path = Path(args.manifest) if args.manifest else (eval_dir / "manifest.jsonl")
-    pred_out_dir = Path(args.pred_out_dir) if args.pred_out_dir else (eval_dir / "pred_16k")
-    gt_out_dir = Path(args.gt_out_dir) if args.gt_out_dir else (eval_dir / "gt_16k" if args.stage in ("save", "all") else None)
+    pred_was_default = args.pred_out_dir is None
+    gt_was_default = args.gt_out_dir is None
+    pred_out_dir = Path(args.pred_out_dir).resolve() if args.pred_out_dir else (eval_dir / "pred_16k")
+    gt_out_dir = (
+        Path(args.gt_out_dir).resolve()
+        if args.gt_out_dir
+        else (eval_dir / "gt_16k" if args.stage in ("save", "all") else None)
+    )
     save_stage_stats_path = eval_dir / "save_stage_stats.json"
     audio_metrics_path = eval_dir / "audio_metrics.json"
     final_metrics_path = eval_dir / "metrics.json"
@@ -648,6 +735,18 @@ def main():
         json.dump(final_metrics, f, indent=2)
 
     print(json.dumps(final_metrics, indent=2))
+
+    # Default: remove generated audio after metrics are computed (disk-saving).
+    # Only applies when metrics are computed in this invocation (stage=metrics/all).
+    if args.stage in ("metrics", "all"):
+        maybe_cleanup_audio_dirs(
+            eval_dir=eval_dir,
+            gt_out_dir=gt_out_dir,
+            pred_out_dir=pred_out_dir,
+            keep_audio=bool(args.keep_audio),
+            gt_was_default=bool(gt_was_default),
+            pred_was_default=bool(pred_was_default),
+        )
 
 
 if __name__ == "__main__":

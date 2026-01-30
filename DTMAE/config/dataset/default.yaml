@@ -1,13 +1,20 @@
 dataset:
   _target_: data_module.FSDataset
 
+dataloader:
+  num_workers: 28
+  pin_memory: true
+  persistent_workers: true
+
 train:
+  backend: filelist
   filelist: ./filelists/librispeech_train_all.txt
   batch_size: 64
   shuffle: true
   min_audio_length: 64000
 
 val:
+  backend: filelist
   filelist: ./filelists/librispeech_test_clean.txt
   batch_size: 64
   shuffle: false
@@ -15,6 +22,7 @@ val:
   log_idxs: [0,1,2,3]
 
 test:
+  backend: filelist
   filelist: ./filelists/librispeech_test_clean.txt
   batch_size: 1
   shuffle: false

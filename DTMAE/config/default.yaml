@@ -3,7 +3,7 @@ defaults:
   - dataset: default
   - model: base
   - train: default
-name: base-transformer-bs64-600k-100hz-tome25hzPLEBatchTopk-ms8-vq16384-2stage-ropebase10kposids-window128-lneps1e2-layerscale1-qknorm-nodropout
+name: base-transformer-bs64-600k-100hz-tome50hzPLEBatchTopk-vq16384-2stage-ropebase10kposids-window128-lneps1e2-layerscale1-qknorm-nodropout
 log_dir: pl_log
 debug: false
 resume_ckpt: null

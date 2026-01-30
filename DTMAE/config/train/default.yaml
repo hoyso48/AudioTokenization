@@ -8,6 +8,11 @@ trainer:
   limit_test_batches: 1.0
   num_sanity_val_steps: 4
   accumulate_grad_batches: 1
+  # Validation scheduling:
+  # - `val_check_interval` (int) runs validation every N *training steps* (batches).
+  # - `check_val_every_n_epoch` gates which epochs run validation; set to 1 to enable step-based eval.
+  # Example: run eval every 100k steps:
+  val_check_interval: null
   check_val_every_n_epoch: 5
 
 # loss

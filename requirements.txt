@@ -5,6 +5,7 @@ einops
 torch
 pytorch_lightning
 transformers
+datasets<4
 hydra-core
 torchaudio
 einx

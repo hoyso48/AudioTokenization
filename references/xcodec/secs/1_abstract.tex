@@ -1,0 +1,80 @@
+\begin{abstract}
+  % The abstract paragraph should be indented \nicefrac{1}{2}~inch (3~picas) on
+  % both the left- and right-hand margins. Use 10~point type, with a vertical
+  % spacing (leading) of 11~points.  The word \textbf{Abstract} must be centered,
+  % bold, and in point size 12. Two line spaces precede the abstract. The abstract
+  % must be limited to one paragraph.
+
+
+% Current self-supervised learning (SSL) for audio representation focuses on specific audio domains, such as speech, music, and sound. 
+% It is challenging to explore the unify semantic features across different domains. However, existing methods adopt domain-specific pseudo-label. For example, the MFCC feature for speech or the CQT feature for music. In this paper, we propose ART,  a general audio feature that unifies speech, music, and sound. Specifically, a general audio codec is used to provide pseudo-labels. We start with an off-shelf audio codec to train  representation using SSL. Next, we train the second version audio codec with semantic distillation via previous SSL representation and waveform reconstruction. Therefore, both semantic tokens and the acoustic token can be provide  for the next step representation learning. Iterative step-by-step, better audio representation will be learned. As a bonus, an semantic audio codec is obtained while semantic token can be used by language model. 
+% Experiments show that our model can achieve SOTA performance on downstream task for speech, music, and sound. 
+
+% Current approaches in self-supervised learning (SSL) for audio representations predominantly concentrate on specific domains such as speech, music, and environmental sounds, making it challenging to capture unified semantic features across these domains. Typically, existing methods rely on domain-specific pseudo-labels, such as MFCC features for speech and CQT features for music. In this paper, we introduce UniAR, a unified representation that crosses speech, music, and environmental sounds. Our method utilizes a general audio codec to generate pseudo-labels, starting with an off-the-shelf codec to train initial representations through SSL. Subsequently, we retrain our codec with semantic distillation leveraging prior SSL representations and reconstruction to provide both semantic and acoustic tokens for the next step of SSL training. With the number of iterations, our method progressively improves the performance of the general audio representation. Additionally, the development of a semantic audio codec emerges as a secondary benefit that enables the application of language models. Our experiments demonstrate that UniAR achieves state-of-the-art (SOTA) performance on various downstream tasks across speech, music, and environmental sound domains. Meanwhile, the additional semantic audio codec can be more suitable than the normal audio codec for language modeling techniques.
+
+
+
+
+% In this paper, we propose AR, a general audio representation that handles downstream tasks on different domains such as speech, music, sound effect.
+% Specifically,we design novel training methods..
+
+% both semantic and acoustic pseudo labels...
+
+
+% Exp show 1,achieve better or comparable perfomance on others task
+% 2, tokenizer achieve better dicrect-level semantic repsenatation than kmeans? for language model.
+
+% Audio tokenization is typically divided into two main categories: semantic and acoustic.
+% Semantic tokenizers, utilizing self-supervised pre-trained models such as HuBERT and Wav2Vec-BERT, employ clustering algorithms like k-means to transform extracted features into discrete tokens.
+% In contrast, acoustic tokenizers leverage structures such as Residual Vector Quantizers (RVQ) and encoder-decoder frameworks to reconstruct audio waveforms As demonstrated in AudioLM, two kinds of token used for language modeling often face challenges—semantic tokenizers with poor reconstruction quality and acoustic tokenizers with no long-term consistency, leading to a common two-stage generation pipeline where predicted semantic tokens are first transformed into acoustic tokens, which are then used to generate the waveform. This approach is prevalent in the generation of speech and music such as SPEAR-TTS, MusicLM, SingSong, etc. 
+
+% Inspired by the successes of foundation models in NLP, our work proposes a unified tokenizer that integrates both semantic and acoustic features, enabling a streamlined single decoder-only audio generation process. Our experiments indicate the potential of this unified approach to serve as a foundation for building audio models in a GPT-like fashion, facilitating next-token prediction with a single tokenizer. Audio samples can be found in \href{https://x-codec-audio.github.io/}{this https URL \footnote{Demo page and checkpoints:\href{https://x-codec-audio.github.io/}{https://x-codec-audio.github.io/}}}.
+% Audio tokenization, pivotal for effective audio processing, traditionally bifurcates into semantic and acoustic types. Semantic tokenizers like HuBERT and Wav2Vec-BERT employ clustering algorithms such as k-means to convert features into discrete tokens, whereas acoustic tokenizers use structures like Residual Vector Quantizers (RVQ) and encoder-decoder models to reconstruct waveforms. This separation leads to significant challenges, primarily the need for a two-stage generation process where semantic tokens are transformed into acoustic tokens to produce the waveform, introducing unnecessary complexity and potential for error propagation.
+% Therefore, our work introduces a unified tokenizer that integrates semantic and acoustic features, simplifying the audio generation process into a single, decoder-only, GPT-style approach.   By merging the advantages of both token types, our tokenizer shows strong ability in both semantic understanding and audio reconstruction quality.
+% Experimental results highlight the superiority of our approach, demonstrating marked enhancements in semantic understanding and the fidelity of audio reconstruction compared to the previous audio codec. In addition, our tokenizer also unlocks the potential of GPT-style autoregressive methods in the audio domain, previously hindered by previous audio codec focused solely on acoustic features. Audio samples can be found in \href{https://x-codec-audio.github.io/}{this https URL \footnote{Demo page and checkpoints:\href{https://x-codec-audio.github.io/}{https://x-codec-audio.github.io/}}}.
+
+% Audio tokenization is crucial for effective audio processing and traditionally divides into two primary categories: semantic and acoustic tokenization. Semantic tokenizers such as HuBERT and Wav2Vec-BERT utilize clustering algorithms like K-Means to transform features into discrete tokens. On the other hand, acoustic tokenizers rely on structures like Residual Vector Quantizers (RVQ) and encoder-decoder models to reconstruct audio waveforms. This traditional bifurcation presents significant challenges, most notably the complexity introduced by the two-stage audio generation process. In this process, semantic tokens are first converted into acoustic tokens, which then generate the waveform. This multistage approach is not only sub-optimal because of inconsistent learning targets for two stages but also increases the potential for error accumulation.
+% In this work, we propose a unified tokenizer, X-Codec, that integrates both semantic and acoustic features into a single framework. The proposed X-Codec simplifies the audio generation process by allowing for a decoder-only GPT-style pipeline. By merging the advantages of both token types, as demonstrated by experiments, the proposed tokenizer shows strong capabilities in both semantic understanding and audio reconstruction quality and also unlocks the potential of GPT-style autoregressive methods in the audio domain, previously hindered by previous audio codec focused solely on acoustic features. Also, x-codec can significantly improve VALL-E by simply replacing the original Encodec. Audio samples can be found in \href{https://x-codec-audio.github.io/}{this https URL \footnote{Demo page and checkpoints:\href{https://x-codec-audio.github.io/}{https://x-codec-audio.github.io/}}}.
+
+% 1，
+
+% 2，
+
+% 3，
+
+% 4，
+
+Recent advancements in audio generation have been significantly propelled by the capabilities of Large Language Models (LLMs). The existing research on audio LLM has primarily focused on enhancing the architecture and scale of audio language models, as well as leveraging larger datasets, and generally, acoustic codecs, such as EnCodec, are used for audio tokenization. However, these codecs were originally designed for audio compression, which may lead to suboptimal performance in the context of audio LLM. Our research aims to address the shortcomings of current audio LLM codecs, particularly their challenges in maintaining semantic integrity in generated audio. For instance, existing methods like VALL-E, which condition acoustic token generation on text transcriptions, often suffer from content inaccuracies and elevated word error rates (WER) due to semantic misinterpretations of acoustic tokens, resulting in word skipping and errors. To overcome these issues, we propose a straightforward yet effective approach called X-Codec. X-Codec incorporates semantic features from a pre-trained semantic encoder before the Residual Vector Quantization (RVQ) stage and introduces a semantic reconstruction loss after RVQ. By enhancing the semantic ability of the codec, X-Codec significantly reduces WER in speech synthesis tasks and extends these benefits to non-speech applications, including music and sound generation. Our experiments in text-to-speech, music continuation, and text-to-sound tasks demonstrate that integrating semantic information substantially improves the overall performance of language models in audio generation. 
+Our code and demo are available 
+\footnote{\begin{minipage}[t]{\linewidth} Demo: https://x-codec-audio.github.io \\ Code: https://github.com/zhenye234/xcodec \end{minipage}}
+% \footnote{Demo: https://x-codec-audio.github.io}
+% Our 
+% demos can be found at \href{https://x-codec-audio.github.io}{https://x-codec-audio.github.io}.
+
+% Recent advancements in audio generation have been significantly propelled by the capabilities of Large Language Models (LLMs). Prior research on audio LLM  has predominantly focused on enhancing the architecture and scale of audio language models and leveraging larger datasets. However, in the realm of audio tokenization, acoustic codecs such as EnCodec have often been utilized. These codecs, were initially designed to compress audio rather than for audio language models. This misalignment means the design may not be optimal for the audio LLM.
+% Our research highlights the shortcomings of codecs in current audio LLM, particularly their challenges in maintaining semantic integrity in generated audio. For instance, methods like VALL-E, which condition acoustic token generation on text transcriptions, frequently result in content inaccuracies and elevated word error rates (WER), stemming from the semantic misinterpretations of acoustic tokens, leading to word skipping and errors.
+% To address these issues, we propose a straightforward but effective approach termed
+% X-Codec, which incorporates semantic features from a pre-trained semantic encoder prior to the Residual Vector Quantization (RVQ) stage and introduces a semantic reconstruction loss after RVQ. This method enhances semantic ability leading to lower WER in speech synthesis tasks and extends the benefits to non-speech applications, including music and sound generation. Our experiments in text-to-speech, music continuation, and text-to-sound tasks demonstrate that the integration of semantic information substantially enhances the overall performance of language models in audio generation. The demo page can be found in \href{https://x-codec-audio.github.io}{https://x-codec-audio.github.io} 
+
+% we explore the gap between the visual embedding space of
+% CLIP and vision-only self-supervised learning.
+
+
+\end{abstract}
+
+
+% 两阶段pipeline complex
+% 两阶段错误传递 
+% 两阶段彼此限制  
+% 两阶段过程复杂
+% 想实现 GPT-style autoregressive methods 
+% In contrast to the remarkable achievements of LLMs, the power of autoregressive models in audio appears to be somewhat locked
+% 之前的token 没有一个统一的理解，探索前后逻辑的能力被挖掘，gpt2-like transformer
+% 忽略了 semantic ， 之前acoustic预测，需要模型容量去理解acoustic， 
+% 主要目的，结合了两者优势，比之前要好。
+% why gpt-style 1 大量数据 pretrain 2 简单 灵活性 3，bert maybe two stage 模型应用受限
+% 之前两阶段，训练目标，训练过程，结构都不一样，复杂。  错误传递 
+% 之前纯acoustic token性能受限
+% unlock gpt-style autoregressive methods 
+%soundstream 改encodec
+

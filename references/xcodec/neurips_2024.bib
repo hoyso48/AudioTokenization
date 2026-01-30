@@ -1,0 +1,899 @@
+ 
+% Journals
+
+% First the Full Name is given, then the abbreviation used in the AMS Math
+% Reviews, with an indication if it could not be found there.
+% Note the 2nd overwrites the 1st, so swap them if you want the full name.
+
+ %{AMS}
+ @String{AMSTrans = "American Mathematical Society Translations" }
+ @String{AMSTrans = "Amer. Math. Soc. Transl." }
+ @String{BullAMS = "Bulletin of the American Mathematical Society" }
+ @String{BullAMS = "Bull. Amer. Math. Soc." }
+ @String{ProcAMS = "Proceedings of the American Mathematical Society" }
+ @String{ProcAMS = "Proc. Amer. Math. Soc." }
+ @String{TransAMS = "Transactions of the American Mathematical Society" }
+ @String{TransAMS = "Trans. Amer. Math. Soc." }
+
+ %ACM
+ @String{CACM = "Communications of the {ACM}" }
+ @String{CACM = "Commun. {ACM}" }
+ @String{CompServ = "Comput. Surveys" }
+ @String{JACM = "J. ACM" }
+ @String{ACMMathSoft = "{ACM} Transactions on Mathematical Software" }
+ @String{ACMMathSoft = "{ACM} Trans. Math. Software" }
+ @String{SIGNUM = "{ACM} {SIGNUM} Newsletter" }
+ @String{SIGNUM = "{ACM} {SIGNUM} Newslett." }
+
+ @String{AmerSocio = "American Journal of Sociology" }
+ @String{AmerStatAssoc = "Journal of the American Statistical Association" }
+ @String{AmerStatAssoc = "J. Amer. Statist. Assoc." }
+ @String{ApplMathComp = "Applied Mathematics and Computation" }
+ @String{ApplMathComp = "Appl. Math. Comput." }
+ @String{AmerMathMonthly = "American Mathematical Monthly" }
+ @String{AmerMathMonthly = "Amer. Math. Monthly" }
+ @String{BIT = "{BIT}" }
+ @String{BritStatPsych = "British Journal of Mathematical and Statistical
+          Psychology" }
+ @String{BritStatPsych = "Brit. J. Math. Statist. Psych." }
+ @String{CanMathBull = "Canadian Mathematical Bulletin" }
+ @String{CanMathBull = "Canad. Math. Bull." }
+ @String{CompApplMath = "Journal of Computational and Applied Mathematics" }
+ @String{CompApplMath = "J. Comput. Appl. Math." }
+ @String{CompPhys = "Journal of Computational Physics" }
+ @String{CompPhys = "J. Comput. Phys." }
+ @String{CompStruct = "Computers and Structures" }
+ @String{CompStruct = "Comput. \& Structures" }
+ @String{CompJour = "The Computer Journal" }
+ @String{CompJour = "Comput. J." }
+ @String{CompSysSci = "Journal of Computer and System Sciences" }
+ @String{CompSysSci = "J. Comput. System Sci." }
+ @String{Computing = "Computing" }
+ @String{ContempMath = "Contemporary Mathematics" }
+ @String{ContempMath = "Contemp. Math." }
+ @String{Crelle = "Crelle's Journal" }
+ @String{GiornaleMath = "Giornale di Mathematiche" }
+ @String{GiornaleMath = "Giorn. Mat." } % didn't find in AMS MR., ibid.
+
+ %IEEE
+ @String{Computer = "{IEEE} Computer" }
+ @String{IEEETransComp = "{IEEE} Transactions on Computers" }
+ @String{IEEETransComp = "{IEEE} Trans. Comput." }
+ @String{IEEETransAC = "{IEEE} Transactions on Automatic Control" }
+ @String{IEEETransAC = "{IEEE} Trans. Automat. Control" }
+ @String{IEEESpec = "{IEEE} Spectrum" } % didn't find in AMS MR
+ @String{ProcIEEE = "Proceedings of the {IEEE}" }
+ @String{ProcIEEE = "Proc. {IEEE}" } % didn't find in AMS MR
+ @String{IEEETransAeroElec = "{IEEE} Transactions on Aerospace and Electronic
+     Systems" }
+ @String{IEEETransAeroElec = "{IEEE} Trans. Aerospace Electron. Systems" }
+
+ @String{IMANumerAna = "{IMA} Journal of Numerical Analysis" }
+ @String{IMANumerAna = "{IMA} J. Numer. Anal." }
+ @String{InfProcLet = "Information Processing Letters" }
+ @String{InfProcLet = "Inform. Process. Lett." }
+ @String{InstMathApp = "Journal of the Institute of Mathematics and
+     its Applications" }
+ @String{InstMathApp = "J. Inst. Math. Appl." }
+ @String{IntControl = "International Journal of Control" }
+ @String{IntControl = "Internat. J. Control" }
+ @String{IntNumerEng = "International Journal for Numerical Methods in
+     Engineering" }
+ @String{IntNumerEng = "Internat. J. Numer. Methods Engrg." }
+ @String{IntSuper = "International Journal of Supercomputing Applications" }
+ @String{IntSuper = "Internat. J. Supercomputing Applic." } % didn't find
+%% in AMS MR
+ @String{Kibernetika = "Kibernetika" }
+ @String{JResNatBurStand = "Journal of Research of the National Bureau
+     of Standards" }
+ @String{JResNatBurStand = "J. Res. Nat. Bur. Standards" }
+ @String{LinAlgApp = "Linear Algebra and its Applications" }
+ @String{LinAlgApp = "Linear Algebra Appl." }
+ @String{MathAnaAppl = "Journal of Mathematical Analysis and Applications" }
+ @String{MathAnaAppl = "J. Math. Anal. Appl." }
+ @String{MathAnnalen = "Mathematische Annalen" }
+ @String{MathAnnalen = "Math. Ann." }
+ @String{MathPhys = "Journal of Mathematical Physics" }
+ @String{MathPhys = "J. Math. Phys." }
+ @String{MathComp = "Mathematics of Computation" }
+ @String{MathComp = "Math. Comp." }
+ @String{MathScand = "Mathematica Scandinavica" }
+ @String{MathScand = "Math. Scand." }
+ @String{TablesAidsComp = "Mathematical Tables and Other Aids to Computation" }
+ @String{TablesAidsComp = "Math. Tables Aids Comput." }
+ @String{NumerMath = "Numerische Mathematik" }
+ @String{NumerMath = "Numer. Math." }
+ @String{PacificMath = "Pacific Journal of Mathematics" }
+ @String{PacificMath = "Pacific J. Math." }
+ @String{ParDistComp = "Journal of Parallel and Distributed Computing" }
+ @String{ParDistComp = "J. Parallel and Distrib. Comput." } % didn't find
+%% in AMS MR
+ @String{ParComputing = "Parallel Computing" }
+ @String{ParComputing = "Parallel Comput." }
+ @String{PhilMag = "Philosophical Magazine" }
+ @String{PhilMag = "Philos. Mag." }
+ @String{ProcNAS = "Proceedings of the National Academy of Sciences
+                    of the USA" }
+ @String{ProcNAS = "Proc. Nat. Acad. Sci. U. S. A." }
+ @String{Psychometrika = "Psychometrika" }
+ @String{QuartMath = "Quarterly Journal of Mathematics, Oxford, Series (2)" }
+ @String{QuartMath = "Quart. J. Math. Oxford Ser. (2)" }
+ @String{QuartApplMath = "Quarterly of Applied Mathematics" }
+ @String{QuartApplMath = "Quart. Appl. Math." }
+ @String{RevueInstStat = "Review of the International Statisical Institute" }
+ @String{RevueInstStat = "Rev. Inst. Internat. Statist." }
+
+@String{ICLR = {Proc. Intl. Conf. Learning Representations (ICLR)}}
+@String{ICML = {Proc. Intl. Conf. Machine Learning (ICML)}}
+@String{NeurIPS = {Proc. Conf. Neural Information Processing Systems (NeurIPS)}}
+@String{IEEE_JSTSP = {IEEE J. Sel. Top. Signal Process.}}
+@String{IEEE_TACM_TASLP = {IEEE/ACM Trans. Audio, Speech, Lang. Process.}}
+@String{Interspeech = {Proc. Interspeech}}
+@String{AAAI = {Proc. AAAI Conf. Artif. Intell. (AAAI)}}
+@String{ACL = {Proc. Assoc. for Computational Linguistics ({ACL}}}
+@String{CVPR = {Proc. IEEE/CVF Conf. Comput. Vis. Pattern Recogn (CVPR)}}
+@String{ACM_MM = {Proc. ACM Multimedia (ACM MM)}}
+@String{ICASSP = {Proc. IEEE Intl. Conf. Acoustics, Speech, Signal Process. (ICASSP)}}
+@String{ISMIR = {Proc. Intl. Soc. Music Information Retrieval Conf. (ISMIR)}} 
+
+
+ %SIAM
+ @String{JSIAM = "Journal of the Society for Industrial and Applied
+     Mathematics" }
+ @String{JSIAM = "J. Soc. Indust. Appl. Math." }
+ @String{JSIAMB = "Journal of the Society for Industrial and Applied
+     Mathematics, Series B, Numerical Analysis" }
+ @String{JSIAMB = "J. Soc. Indust. Appl. Math. Ser. B Numer. Anal." }
+ @String{SIAMAlgMeth = "{SIAM} Journal on Algebraic and Discrete Methods" }
+ @String{SIAMAlgMeth = "{SIAM} J. Algebraic Discrete Methods" }
+ @String{SIAMAppMath = "{SIAM} Journal on Applied Mathematics" }
+ @String{SIAMAppMath = "{SIAM} J. Appl. Math." }
+ @String{SIAMComp = "{SIAM} Journal on Computing" }
+ @String{SIAMComp = "{SIAM} J. Comput." }
+ @String{SIAMMatrix = "{SIAM} Journal on Matrix Analysis and Applications" }
+ @String{SIAMMatrix = "{SIAM} J. Matrix Anal. Appl." }
+ @String{SIAMNumAnal = "{SIAM} Journal on Numerical Analysis" }
+ @String{SIAMNumAnal = "{SIAM} J. Numer. Anal." }
+ @String{SIAMReview = "{SIAM} Review" }
+ @String{SIAMReview = "{SIAM} Rev." }
+ @String{SIAMSciStat = "{SIAM} Journal on Scientific and Statistical
+     Computing" }
+ @String{SIAMSciStat = "{SIAM} J. Sci. Statist. Comput." }
+
+ @String{SoftPracExp = "Software Practice and Experience" }
+ @String{SoftPracExp = "Software Prac. Experience" } % didn't find in AMS MR
+ @String{StatScience = "Statistical Science" }
+ @String{StatScience = "Statist. Sci." }
+ @String{Techno = "Technometrics" }
+ @String{USSRCompMathPhys = "{USSR} Computational Mathematics and Mathematical
+     Physics" }
+ @String{USSRCompMathPhys = "{U. S. S. R.} Comput. Math. and Math. Phys." }
+ @String{VLSICompSys = "Journal of {VLSI} and Computer Systems" }
+ @String{VLSICompSys = "J. {VLSI} Comput. Syst." }
+ @String{ZAngewMathMech = "Zeitschrift fur Angewandte Mathematik und
+     Mechanik" }
+ @String{ZAngewMathMech = "Z. Angew. Math. Mech." }
+ @String{ZAngewMathPhys = "Zeitschrift fur Angewandte Mathematik und Physik" }
+ @String{ZAngewMathPhys = "Z. Angew. Math. Phys." }
+
+% Publishers % ================================================= |
+
+ @String{Academic = "Academic Press" }
+ @String{ACMPress = "{ACM} Press" }
+ @String{AdamHilger = "Adam Hilger" }
+ @String{AddisonWesley = "Addison-Wesley" }
+ @String{AllynBacon = "Allyn and Bacon" }
+ @String{AMS = "American Mathematical Society" }
+ @String{Birkhauser = "Birkha{\"u}ser" }
+ @String{CambridgePress = "Cambridge University Press" }
+ @String{Chelsea = "Chelsea" }
+ @String{ClaredonPress = "Claredon Press" }
+ @String{DoverPub = "Dover Publications" }
+ @String{Eyolles = "Eyolles" }
+ @String{HoltRinehartWinston = "Holt, Rinehart and Winston" }
+ @String{Interscience = "Interscience" }
+ @String{JohnsHopkinsPress = "The Johns Hopkins University Press" }
+ @String{JohnWileySons = "John Wiley and Sons" }
+ @String{Macmillan = "Macmillan" }
+ @String{MathWorks = "The Math Works Inc." }
+ @String{McGrawHill = "McGraw-Hill" }
+ @String{NatBurStd = "National Bureau of Standards" }
+ @String{NorthHolland = "North-Holland" }
+ @String{OxfordPress = "Oxford University Press" }  %address Oxford or London?
+ @String{PergamonPress = "Pergamon Press" }
+ @String{PlenumPress = "Plenum Press" }
+ @String{PrenticeHall = "Prentice-Hall" }
+ @String{SIAMPub = "{SIAM} Publications" }
+ @String{Springer = "Springer-Verlag" }
+ @String{TexasPress = "University of Texas Press" }
+ @String{VanNostrand = "Van Nostrand" }
+ @String{WHFreeman = "W. H. Freeman and Co." }
+
+
+
+%Entries
+
+@article{hsu2021hubert,
+  title={Hubert: Self-supervised speech representation learning by masked prediction of hidden units},
+  author={Hsu, Wei-Ning and Bolte, Benjamin and Tsai, Yao-Hung Hubert and Lakhotia, Kushal and Salakhutdinov, Ruslan and Mohamed, Abdelrahman},
+  journal={IEEE/ACM Transactions on Audio, Speech, and Language Processing},
+  volume={29},
+  pages={3451--3460},
+  year={2021},
+  publisher={IEEE}
+}
+@article{chen2022wavlm,
+  title={Wavlm: Large-scale self-supervised pre-training for full stack speech processing},
+  author={Chen, Sanyuan and Wang, Chengyi and Chen, Zhengyang and Wu, Yu and Liu, Shujie and Chen, Zhuo and Li, Jinyu and Kanda, Naoyuki and Yoshioka, Takuya and Xiao, Xiong and others},
+  journal={IEEE Journal of Selected Topics in Signal Processing},
+  volume={16},
+  number={6},
+  pages={1505--1518},
+  year={2022},
+  publisher={IEEE}
+}
+@inproceedings{baevski2022data2vec,
+  title={Data2vec: A general framework for self-supervised learning in speech, vision and language},
+  author={Baevski, Alexei and Hsu, Wei-Ning and Xu, Qiantong and Babu, Arun and Gu, Jiatao and Auli, Michael},
+  booktitle={International Conference on Machine Learning},
+  pages={1298--1312},
+  year={2022},
+  organization={PMLR}
+}
+@inproceedings{baevski2023efficient,
+  title={Efficient self-supervised learning with contextualized target representations for vision, speech and language},
+  author={Baevski, Alexei and Babu, Arun and Hsu, Wei-Ning and Auli, Michael},
+  booktitle={International Conference on Machine Learning},
+  pages={1416--1429},
+  year={2023},
+  organization={PMLR}
+}
+@article{schneider2019wav2vec,
+  title={wav2vec: Unsupervised pre-training for speech recognition},
+  author={Schneider, Steffen and Baevski, Alexei and Collobert, Ronan and Auli, Michael},
+  journal={arXiv preprint arXiv:1904.05862},
+  year={2019}
+}
+@article{baevski2020wav2vec,
+  title={wav2vec 2.0: A framework for self-supervised learning of speech representations},
+  author={Baevski, Alexei and Zhou, Yuhao and Mohamed, Abdelrahman and Auli, Michael},
+  journal={Advances in neural information processing systems},
+  volume={33},
+  pages={12449--12460},
+  year={2020}
+}
+@inproceedings{chung2021w2v,
+  title={W2v-bert: Combining contrastive learning and masked language modeling for self-supervised speech pre-training},
+  author={Chung, Yu-An and Zhang, Yu and Han, Wei and Chiu, Chung-Cheng and Qin, James and Pang, Ruoming and Wu, Yonghui},
+  booktitle={2021 IEEE Automatic Speech Recognition and Understanding Workshop (ASRU)},
+  pages={244--250},
+  year={2021},
+  organization={IEEE}
+}
+@article{li2023mert,
+  title={Mert: Acoustic music understanding model with large-scale self-supervised training},
+  author={Li, Yizhi and Yuan, Ruibin and Zhang, Ge and Ma, Yinghao and Chen, Xingran and Yin, Hanzhi and Lin, Chenghua and Ragni, Anton and Benetos, Emmanouil and Gyenge, Norbert and others},
+  journal={arXiv preprint arXiv:2306.00107},
+  year={2023}
+}
+
+@article{chen2022beats,
+  title={Beats: Audio pre-training with acoustic tokenizers},
+  author={Chen, Sanyuan and Wu, Yu and Wang, Chengyi and Liu, Shujie and Tompkins, Daniel and Chen, Zhuo and Wei, Furu},
+  journal={arXiv preprint arXiv:2212.09058},
+  year={2022}
+}
+@article{chen2024eat,
+  title={EAT: Self-Supervised Pre-Training with Efficient Audio Transformer},
+  author={Chen, Wenxi and Liang, Yuzhe and Ma, Ziyang and Zheng, Zhisheng and Chen, Xie},
+  journal={arXiv preprint arXiv:2401.03497},
+  year={2024}
+}
+@article{baade2022mae,
+  title={Mae-ast: Masked autoencoding audio spectrogram transformer},
+  author={Baade, Alan and Peng, Puyuan and Harwath, David},
+  journal={arXiv preprint arXiv:2203.16691},
+  year={2022}
+}
+
+@article{zhang2023speechtokenizer,
+  title={Speechtokenizer: Unified speech tokenizer for speech large language models},
+  author={Zhang, Xin and Zhang, Dong and Li, Shimin and Zhou, Yaqian and Qiu, Xipeng},
+  journal={arXiv preprint arXiv:2308.16692},
+  year={2023}
+}
+@article{defossez2022high,
+  title={High fidelity neural audio compression},
+  author={D{\'e}fossez, Alexandre and Copet, Jade and Synnaeve, Gabriel and Adi, Yossi},
+  journal={arXiv preprint arXiv:2210.13438},
+  year={2022}
+}
+@article{yang2023hifi,
+  title={Hifi-codec: Group-residual vector quantization for high fidelity audio codec},
+  author={Yang, Dongchao and Liu, Songxiang and Huang, Rongjie and Tian, Jinchuan and Weng, Chao and Zou, Yuexian},
+  journal={arXiv preprint arXiv:2305.02765},
+  year={2023}
+}
+@article{kumar2024high,
+  title={High-fidelity audio compression with improved rvqgan},
+  author={Kumar, Rithesh and Seetharaman, Prem and Luebs, Alejandro and Kumar, Ishaan and Kumar, Kundan},
+  journal={Advances in Neural Information Processing Systems},
+  volume={36},
+  year={2024}
+}
+@inproceedings{du2024funcodec,
+  title={Funcodec: A fundamental, reproducible and integrable open-source toolkit for neural speech codec},
+  author={Du, Zhihao and Zhang, Shiliang and Hu, Kai and Zheng, Siqi},
+  booktitle={ICASSP 2024-2024 IEEE International Conference on Acoustics, Speech and Signal Processing (ICASSP)},
+  pages={591--595},
+  year={2024},
+  organization={IEEE}
+}
+
+@article{liu2019roberta,
+  title={Roberta: A robustly optimized bert pretraining approach},
+  author={Liu, Yinhan and Ott, Myle and Goyal, Naman and Du, Jingfei and Joshi, Mandar and Chen, Danqi and Levy, Omer and Lewis, Mike and Zettlemoyer, Luke and Stoyanov, Veselin},
+  journal={arXiv preprint arXiv:1907.11692},
+  year={2019}
+}
+@article{lewis2019bart,
+  title={Bart: Denoising sequence-to-sequence pre-training for natural language generation, translation, and comprehension},
+  author={Lewis, Mike and Liu, Yinhan and Goyal, Naman and Ghazvininejad, Marjan and Mohamed, Abdelrahman and Levy, Omer and Stoyanov, Ves and Zettlemoyer, Luke},
+  journal={arXiv preprint arXiv:1910.13461},
+  year={2019}
+}
+
+@inproceedings{he2020momentum,
+  title={Momentum contrast for unsupervised visual representation learning},
+  author={He, Kaiming and Fan, Haoqi and Wu, Yuxin and Xie, Saining and Girshick, Ross},
+  booktitle={Proceedings of the IEEE/CVF conference on computer vision and pattern recognition},
+  pages={9729--9738},
+  year={2020}
+}
+
+@inproceedings{chen2020simple,
+  title={A simple framework for contrastive learning of visual representations},
+  author={Chen, Ting and Kornblith, Simon and Norouzi, Mohammad and Hinton, Geoffrey},
+  booktitle={International conference on machine learning},
+  pages={1597--1607},
+  year={2020},
+  organization={PMLR}
+}
+@inproceedings{caron2021emerging,
+  title={Emerging properties in self-supervised vision transformers},
+  author={Caron, Mathilde and Touvron, Hugo and Misra, Ishan and J{\'e}gou, Herv{\'e} and Mairal, Julien and Bojanowski, Piotr and Joulin, Armand},
+  booktitle={Proceedings of the IEEE/CVF international conference on computer vision},
+  pages={9650--9660},
+  year={2021}
+}
+@article{zhou2021ibot,
+  title={ibot: Image bert pre-training with online tokenizer},
+  author={Zhou, Jinghao and Wei, Chen and Wang, Huiyu and Shen, Wei and Xie, Cihang and Yuille, Alan and Kong, Tao},
+  journal={arXiv preprint arXiv:2111.07832},
+  year={2021}
+}
+
+@article{la2024benchmarking,
+  title={Benchmarking Representations for Speech, Music, and Acoustic Events},
+  author={La Quatra, Moreno and Koudounas, Alkis and Vaiani, Lorenzo and Baralis, Elena and Cagliero, Luca and Garza, Paolo and Siniscalchi, Sabato Marco},
+  journal={arXiv preprint arXiv:2405.00934},
+  year={2024}
+}
+
+@article{zeghidour2021soundstream,
+  title={Soundstream: An end-to-end neural audio codec},
+  author={Zeghidour, Neil and Luebs, Alejandro and Omran, Ahmed and Skoglund, Jan and Tagliasacchi, Marco},
+  journal=IEEE_TACM_TASLP,
+  volume={30},
+  pages={495--507},
+  year={2021},
+  publisher={IEEE}
+}
+
+@inproceedings{garbacea2019low,
+  title={Low bit-rate speech coding with VQ-VAE and a WaveNet decoder},
+  author={G{\^a}rbacea, Cristina and van den Oord, A{\"a}ron and Li, Yazhe and Lim, Felicia SC and Luebs, Alejandro and Vinyals, Oriol and Walters, Thomas C},
+  booktitle=ICASSP,
+  pages={735--739},
+  year={2019},
+  organization={IEEE}
+}
+
+@article{spijkervet2021contrastive,
+  title={Contrastive learning of musical representations},
+  author={Spijkervet, Janne and Burgoyne, John Ashley},
+  journal={arXiv preprint arXiv:2103.09410},
+  year={2021}
+}
+
+@article{mccallum2022supervised,
+  title={Supervised and unsupervised learning of audio representations for music understanding},
+  author={McCallum, Matthew C and Korzeniowski, Filip and Oramas, Sergio and Gouyon, Fabien and Ehmann, Andreas F},
+  journal={arXiv preprint arXiv:2210.03799},
+  year={2022}
+}
+
+# Wav2Vec2-BERT 
+@article{barrault2023seamless,
+  title={Seamless: Multilingual Expressive and Streaming Speech Translation},
+  author={Barrault, Lo{\"\i}c and Chung, Yu-An and Meglioli, Mariano Coria and Dale, David and Dong, Ning and Duppenthaler, Mark and Duquenne, Paul-Ambroise and Ellis, Brian and Elsahar, Hady and Haaheim, Justin and others},
+  journal={arXiv preprint arXiv:2312.05187},
+  year={2023}
+}
+
+@article{kharitonov2023speak,
+  title={Speak, read and prompt: High-fidelity text-to-speech with minimal supervision},
+  author={Kharitonov, Eugene and Vincent, Damien and Borsos, Zal{\'a}n and Marinier, Rapha{\"e}l and Girgin, Sertan and Pietquin, Olivier and Sharifi, Matt and Tagliasacchi, Marco and Zeghidour, Neil},
+  journal={Transactions of the Association for Computational Linguistics},
+  volume={11},
+  pages={1703--1718},
+  year={2023},
+  publisher={MIT Press One Broadway, 12th Floor, Cambridge, Massachusetts 02142, USA~…}
+}
+
+@article{agostinelli2023musiclm,
+  title={Musiclm: Generating music from text},
+  author={Agostinelli, Andrea and Denk, Timo I and Borsos, Zal{\'a}n and Engel, Jesse and Verzetti, Mauro and Caillon, Antoine and Huang, Qingqing and Jansen, Aren and Roberts, Adam and Tagliasacchi, Marco and others},
+  journal={arXiv preprint arXiv:2301.11325},
+  year={2023}
+}
+
+@article{kreuk2022audiogen,
+  title={Audiogen: Textually guided audio generation},
+  author={Kreuk, Felix and Synnaeve, Gabriel and Polyak, Adam and Singer, Uriel and D{\'e}fossez, Alexandre and Copet, Jade and Parikh, Devi and Taigman, Yaniv and Adi, Yossi},
+  journal={arXiv preprint arXiv:2209.15352},
+  year={2022}
+}
+
+@article{wang2023neural,
+  title={Neural codec language models are zero-shot text to speech synthesizers},
+  author={Wang, Chengyi and Chen, Sanyuan and Wu, Yu and Zhang, Ziqiang and Zhou, Long and Liu, Shujie and Chen, Zhuo and Liu, Yanqing and Wang, Huaming and Li, Jinyu and others},
+  journal={arXiv preprint arXiv:2301.02111},
+  year={2023}
+}
+
+% ---- Datasets ----
+
+@inproceedings{ESC50,
+    author = {Piczak, Karol J.},
+    title = {ESC: Dataset for Environmental Sound Classification},
+    year = {2015},
+    isbn = {9781450334594},
+    publisher = {ACM},
+    address = {New York, NY, USA},
+    url = {https://doi.org/10.1145/2733373.2806390},
+    doi = {10.1145/2733373.2806390},
+    booktitle = {ACM Multimedia},
+    numpages = {4},
+    location = {Brisbane, Australia},
+    series = {MM '15}
+}
+
+@inproceedings{US8K,
+    author = {Salamon, Justin and Jacoby, Christopher and Bello, Juan Pablo},
+    title = {A Dataset and Taxonomy for Urban Sound Research},
+    year = {2014},
+    isbn = {9781450330633},
+    publisher = {ACM},
+    address = {New York, NY, USA},
+    url = {https://doi.org/10.1145/2647868.2655045},
+    doi = {10.1145/2647868.2655045},
+    booktitle = {ACM Multimedia},
+    numpages = {4},
+    series = {MM '14}
+}
+
+@ARTICLE{FSD50K,
+  author={Fonseca, Eduardo and Favory, Xavier and Pons, Jordi and Font, Frederic and Serra, Xavier},
+  journal={IEEE/ACM Transactions on Audio, Speech, and Language Processing}, 
+  title={FSD50K: An Open Dataset of Human-Labeled Sound Events}, 
+  year={2022},
+  number={},
+  doi={10.1109/TASLP.2021.3133208}
+}
+
+@article{VIVAE,
+  title={The variably intense vocalizations of affect and emotion (VIVAE) corpus prompts new perspective on nonspeech perception.},
+  author={Holz, Natalie and Larrouy-Maestri, Pauline and Poeppel, David},
+  journal={Emotion},
+  year={2022},
+  publisher={American Psychological Association}
+}
+
+@inproceedings{FMA,
+  title={FMA: A Dataset For Music Analysis},
+  author={Defferrard, Micha{\"e}l and Benzi, Kirell and Vandergheynst, Pierre and Bresson, Xavier},
+  booktitle=ISMIR,
+  year={2017}
+}
+
+@inproceedings{MTT,
+  title={Evaluation of algorithms using games: The case of music tagging.},
+  author={Law, Edith and West, Kris and Mandel, Michael I and Bay, Mert and Downie, J Stephen},
+  booktitle=ISMIR,
+  year={2009},
+}
+
+@inproceedings{IRMAS,
+  title={A Comparison of Sound Segregation Techniques for Predominant Instrument Recognition in Musical Audio Signals.},
+  author={Bosch, Juan J and Janer, Jordi and Fuhrmann, Ferdinand and Herrera, Perfecto},
+  booktitle=ISMIR,
+  year={2012}
+}
+
+@inproceedings{medleydb,
+  title={Medleydb: A multitrack dataset for annotation-intensive mir research.},
+  author={Bittner, Rachel M and Salamon, Justin and Tierney, Mike and Mauch, Matthias and Cannam, Chris and Bello, Juan Pablo},
+  booktitle=ISMIR,
+  volume={14},
+  pages={155--160},
+  year={2014}
+}
+
+@article{solosdb,
+  title={Temporal integration for audio classification with application to musical instrument classification},
+  author={Joder, Cyril and Essid, Slim and Richard, Ga{\"e}l},
+  journal={IEEE Transactions on Audio, Speech, and Language Processing},
+  volume={17},
+  number={1},
+  pages={174--186},
+  year={2009},
+  publisher={IEEE}
+}
+
+@article{RAVDESS,
+  title={The Ryerson Audio-Visual Database of Emotional Speech and Song (RAVDESS): A dynamic, multimodal set of facial and vocal expressions in North American English},
+  author={Livingstone, Steven R. and Russo, Frank A.},
+  journal={PloS one},
+  volume={},
+  number={},
+  year={2018},
+  publisher={Public Library of Science}
+}
+
+@article{AudioMNIST,
+  title={{AudioMNIST}: Exploring Explainable Artificial Intelligence for audio analysis on a simple benchmark},
+  author={Becker, S{\"o}ren and Vielhaben, Johanna and Ackermann, Marcel and M{\"u}ller, Klaus-Robert and Lapuschkin, Sebastian and Samek, Wojciech},
+  journal={Journal of the Franklin Institute},
+  year={2024},
+  publisher={Elsevier}
+}
+
+@inproceedings{SLURP,
+    title = "{SLURP}: A Spoken Language Understanding Resource Package",
+    author = "Bastianelli, Emanuele  and
+      Vanzo, Andrea  and
+      Swietojanski, Pawel  and
+      Rieser, Verena",
+    booktitle = "EMNLP",
+    month = nov,
+    year = "2020",
+    publisher = "ACM",
+    url = "https://aclanthology.org/2020.emnlp-main.588",
+    doi = "10.18653/v1/2020.emnlp-main.588",
+}
+
+@inproceedings{EMOVO,
+    title = "{EMOVO} Corpus: an {I}talian Emotional Speech Database",
+    author = "Costantini, Giovanni  and
+      Iaderola, Iacopo  and
+      Paoloni, Andrea  and
+      Todisco, Massimiliano",
+    booktitle = "LREC",
+    year = "2014",
+    publisher = "European Language Resources Association (ELRA)",
+}
+
+@inproceedings{librispeech,
+  title={Librispeech: an asr corpus based on public domain audio books},
+  author={Panayotov, Vassil and Chen, Guoguo and Povey, Daniel and Khudanpur, Sanjeev},
+  booktitle={ICASSP},
+  year={2015},
+  organization={IEEE}
+}
+
+@inproceedings{librilight,
+  title={Libri-light: A benchmark for asr with limited or no supervision},
+  author={Kahn, Jacob and et al.},
+  booktitle={ICASSP},
+  year={2020},
+  organization={IEEE}
+}
+
+@inproceedings{gigaspeech,
+  author={Guoguo, Chen and et al.},
+  title={{GigaSpeech: An Evolving, Multi-Domain ASR Corpus with 10,000 Hours of Transcribed Audio}},
+  year=2021,
+  booktitle={Proc. Interspeech},
+  pages={3670--3674},
+  doi={10.21437/Interspeech.2021-1965}
+}
+
+@article{huang2023repcodec,
+  title={Repcodec: A speech representation codec for speech tokenization},
+  author={Huang, Zhichao and Meng, Chutong and Ko, Tom},
+  journal={arXiv preprint arXiv:2309.00169},
+  year={2023}
+}
+
+@article{liu2023audioldm,
+  title={Audioldm: Text-to-audio generation with latent diffusion models},
+  author={Liu, Haohe and Chen, Zehua and Yuan, Yi and Mei, Xinhao and Liu, Xubo and Mandic, Danilo and Wang, Wenwu and Plumbley, Mark D},
+  journal={arXiv preprint arXiv:2301.12503},
+  year={2023}
+}
+
+@article{borsos2023audiolm,
+  title={Audiolm: a language modeling approach to audio generation},
+  author={Borsos, Zal{\'a}n and Marinier, Rapha{\"e}l and Vincent, Damien and Kharitonov, Eugene and Pietquin, Olivier and Sharifi, Matt and Roblek, Dominik and Teboul, Olivier and Grangier, David and Tagliasacchi, Marco and others},
+  journal={IEEE/ACM Transactions on Audio, Speech, and Language Processing},
+  year={2023},
+  publisher={IEEE}
+}
+
+@article{zhao2023survey,
+  title={A survey of large language models},
+  author={Zhao, Wayne Xin and Zhou, Kun and Li, Junyi and Tang, Tianyi and Wang, Xiaolei and Hou, Yupeng and Min, Yingqian and Zhang, Beichen and Zhang, Junjie and Dong, Zican and others},
+  journal={arXiv preprint arXiv:2303.18223},
+  year={2023}
+}
+@article{brown2020language,
+  title={Language models are few-shot learners},
+  author={Brown, Tom and Mann, Benjamin and Ryder, Nick and Subbiah, Melanie and Kaplan, Jared D and Dhariwal, Prafulla and Neelakantan, Arvind and Shyam, Pranav and Sastry, Girish and Askell, Amanda and others},
+  journal={Advances in neural information processing systems},
+  volume={33},
+  pages={1877--1901},
+  year={2020}
+}
+@article{liu2024visual,
+  title={Visual instruction tuning},
+  author={Liu, Haotian and Li, Chunyuan and Wu, Qingyang and Lee, Yong Jae},
+  journal={Advances in neural information processing systems},
+  volume={36},
+  year={2024}
+}
+
+@article{lanzendorfer2024disco,
+  title={DISCO-10M: A Large-Scale Music Dataset},
+  author={Lanzend{\"o}rfer, Luca and Gr{\"o}tschla, Florian and Funke, Emil and Wattenhofer, Roger},
+  journal={Advances in Neural Information Processing Systems},
+  volume={36},
+  year={2024}
+}
+
+@inproceedings{li2023yodas,
+  title={Yodas: Youtube-Oriented Dataset for Audio and Speech},
+  author={Li, Xinjian and Takamichi, Shinnosuke and Saeki, Takaaki and Chen, William and Shiota, Sayaka and Watanabe, Shinji},
+  booktitle={2023 IEEE Automatic Speech Recognition and Understanding Workshop (ASRU)},
+  pages={1--8},
+  year={2023},
+  organization={IEEE}
+}
+
+
+@inproceedings{gemmeke2017audio,
+  title={Audio set: An ontology and human-labeled dataset for audio events},
+  author={Gemmeke, Jort F and Ellis, Daniel PW and Freedman, Dylan and Jansen, Aren and Lawrence, Wade and Moore, R Channing and Plakal, Manoj and Ritter, Marvin},
+  booktitle={2017 IEEE international conference on acoustics, speech and signal processing (ICASSP)},
+  pages={776--780},
+  year={2017},
+  organization={IEEE}
+}
+
+@article{rubenstein2023audiopalm,
+  title={Audiopalm: A large language model that can speak and listen},
+  author={Rubenstein, Paul K and Asawaroengchai, Chulayuth and Nguyen, Duc Dung and Bapna, Ankur and Borsos, Zal{\'a}n and Quitry, F{\'e}lix de Chaumont and Chen, Peter and Badawy, Dalia El and Han, Wei and Kharitonov, Eugene and others},
+  journal={arXiv preprint arXiv:2306.12925},
+  year={2023}
+}
+
+
+@article{zhang2024speechlm,
+  title={Speechlm: Enhanced speech pre-training with unpaired textual data},
+  author={Zhang, Ziqiang and Chen, Sanyuan and Zhou, Long and Wu, Yu and Ren, Shuo and Liu, Shujie and Yao, Zhuoyuan and Gong, Xun and Dai, Lirong and Li, Jinyu and others},
+  journal={IEEE/ACM Transactions on Audio, Speech, and Language Processing},
+  year={2024},
+  publisher={IEEE}
+}
+
+@article{wu2023speechgen,
+  title={Speechgen: Unlocking the generative power of speech language models with prompts},
+  author={Wu, Haibin and Chang, Kai-Wei and Wu, Yuan-Kuei and Lee, Hung-yi},
+  journal={arXiv preprint arXiv:2306.02207},
+  year={2023}
+}
+
+ 
+
+@article{chen2023lauragpt,
+  title={Lauragpt: Listen, attend, understand, and regenerate audio with gpt},
+  author={Chen, Qian and Chu, Yunfei and Gao, Zhifu and Li, Zerui and Hu, Kai and Zhou, Xiaohuan and Xu, Jin and Ma, Ziyang and Wang, Wen and Zheng, Siqi and others},
+  journal={arXiv preprint arXiv:2310.04673},
+  year={2023}
+}
+
+@article{liu2023audioldm2,
+  title={AudioLDM 2: Learning holistic audio generation with self-supervised pretraining},
+  author={Liu, Haohe and Tian, Qiao and Yuan, Yi and Liu, Xubo and Mei, Xinhao and Kong, Qiuqiang and Wang, Yuping and Wang, Wenwu and Wang, Yuxuan and Plumbley, Mark D},
+  journal={arXiv preprint arXiv:2308.05734},
+  year={2023}
+}
+
+@article{xin2024rall,
+  title={RALL-E: Robust Codec Language Modeling with Chain-of-Thought Prompting for Text-to-Speech Synthesis},
+  author={Xin, Detai and Tan, Xu and Shen, Kai and Ju, Zeqian and Yang, Dongchao and Wang, Yuancheng and Takamichi, Shinnosuke and Saruwatari, Hiroshi and Liu, Shujie and Li, Jinyu and others},
+  journal={arXiv preprint arXiv:2404.03204},
+  year={2024}
+}
+
+@inproceedings{wu2023decoder,
+  title={On decoder-only architecture for speech-to-text and large language model integration},
+  author={Wu, Jian and Gaur, Yashesh and Chen, Zhuo and Zhou, Long and Zhu, Yimeng and Wang, Tianrui and Li, Jinyu and Liu, Shujie and Ren, Bo and Liu, Linquan and others},
+  booktitle={2023 IEEE Automatic Speech Recognition and Understanding Workshop (ASRU)},
+  pages={1--8},
+  year={2023},
+  organization={IEEE}
+}
+
+@article{radford2019language,
+  title={Language models are unsupervised multitask learners},
+  author={Radford, Alec and Wu, Jeffrey and Child, Rewon and Luan, David and Amodei, Dario and Sutskever, Ilya and others},
+  journal={OpenAI blog},
+  volume={1},
+  number={8},
+  pages={9},
+  year={2019}
+}
+
+@article{achiam2023gpt,
+  title={Gpt-4 technical report},
+  author={Achiam, Josh and Adler, Steven and Agarwal, Sandhini and Ahmad, Lama and Akkaya, Ilge and Aleman, Florencia Leoni and Almeida, Diogo and Altenschmidt, Janko and Altman, Sam and Anadkat, Shyamal and others},
+  journal={arXiv preprint arXiv:2303.08774},
+  year={2023}
+}
+
+@article{touvron2023llama,
+  title={Llama: Open and efficient foundation language models},
+  author={Touvron, Hugo and Lavril, Thibaut and Izacard, Gautier and Martinet, Xavier and Lachaux, Marie-Anne and Lacroix, Timoth{\'e}e and Rozi{\`e}re, Baptiste and Goyal, Naman and Hambro, Eric and Azhar, Faisal and others},
+  journal={arXiv preprint arXiv:2302.13971},
+  year={2023}
+}
+
+@article{touvron2023llama2,
+  title={Llama 2: Open foundation and fine-tuned chat models},
+  author={Touvron, Hugo and Martin, Louis and Stone, Kevin and Albert, Peter and Almahairi, Amjad and Babaei, Yasmine and Bashlykov, Nikolay and Batra, Soumya and Bhargava, Prajjwal and Bhosale, Shruti and others},
+  journal={arXiv preprint arXiv:2307.09288},
+  year={2023}
+}
+@inproceedings{
+  hawthorne2018enabling,
+  title={Enabling Factorized Piano Music Modeling and Generation with the {MAESTRO} Dataset},
+  author={Curtis Hawthorne and Andriy Stasyuk and Adam Roberts and Ian Simon and Cheng-Zhi Anna Huang and Sander Dieleman and Erich Elsen and Jesse Engel and Douglas Eck},
+  booktitle=ICLR,
+  year={2019},
+  url={https://openreview.net/forum?id=r1lYRjC9F7},
+}
+@article{yang2023uniaudio,
+  title={Uniaudio: An audio foundation model toward universal audio generation},
+  author={Yang, Dongchao and Tian, Jinchuan and Tan, Xu and Huang, Rongjie and Liu, Songxiang and Chang, Xuankai and Shi, Jiatong and Zhao, Sheng and Bian, Jiang and Wu, Xixin and others},
+  journal={arXiv preprint arXiv:2310.00704},
+  year={2023}
+}
+
+@article{copet2024simple,
+  title={Simple and controllable music generation},
+  author={Copet, Jade and Kreuk, Felix and Gat, Itai and Remez, Tal and Kant, David and Synnaeve, Gabriel and Adi, Yossi and D{\'e}fossez, Alexandre},
+  journal={Advances in Neural Information Processing Systems},
+  volume={36},
+  year={2024}
+}
+@article{kim2024clam,
+  title={CLaM-TTS: Improving Neural Codec Language Model for Zero-Shot Text-to-Speech},
+  author={Kim, Jaehyeon and Lee, Keon and Chung, Seungjun and Cho, Jaewoong},
+  journal={arXiv preprint arXiv:2404.02781},
+  year={2024}
+}
+@article{peng2024voicecraft,
+  title={VoiceCraft: Zero-Shot Speech Editing and Text-to-Speech in the Wild},
+  author={Peng, Puyuan and Huang, Po-Yao and Li, Daniel and Mohamed, Abdelrahman and Harwath, David},
+  journal={arXiv preprint arXiv:2403.16973},
+  year={2024}
+}
+@article{van2017neural,
+  title={Neural discrete representation learning},
+  author={Van Den Oord, Aaron and Vinyals, Oriol and others},
+  journal={Advances in neural information processing systems},
+  volume={30},
+  year={2017}
+}
+@inproceedings{esser2021taming,
+  title={Taming transformers for high-resolution image synthesis},
+  author={Esser, Patrick and Rombach, Robin and Ommer, Bjorn},
+  booktitle={Proceedings of the IEEE/CVF conference on computer vision and pattern recognition},
+  pages={12873--12883},
+  year={2021}
+}
+@article{liu2024semanticodec,
+  title={SemantiCodec: An Ultra Low Bitrate Semantic Audio Codec for General Sound},
+  author={Liu, Haohe and Xu, Xuenan and Yuan, Yi and Wu, Mengyue and Wang, Wenwu and Plumbley, Mark D},
+  journal={arXiv preprint arXiv:2405.00233},
+  year={2024}
+}
+@article{huang2022masked,
+  title={Masked autoencoders that listen},
+  author={Huang, Po-Yao and Xu, Hu and Li, Juncheng and Baevski, Alexei and Auli, Michael and Galuba, Wojciech and Metze, Florian and Feichtenhofer, Christoph},
+  journal={Advances in Neural Information Processing Systems},
+  volume={35},
+  pages={28708--28720},
+  year={2022}
+}
+@article{saeki2022utmos,
+  title={Utmos: Utokyo-sarulab system for voicemos challenge 2022},
+  author={Saeki, Takaaki and Xin, Detai and Nakata, Wataru and Koriyama, Tomoki and Takamichi, Shinnosuke and Saruwatari, Hiroshi},
+  journal={arXiv preprint arXiv:2204.02152},
+  year={2022}
+}
+
+@inproceedings{wu2023large,
+  title={Large-scale contrastive language-audio pretraining with feature fusion and keyword-to-caption augmentation},
+  author={Wu, Yusong and Chen, Ke and Zhang, Tianyu and Hui, Yuchen and Berg-Kirkpatrick, Taylor and Dubnov, Shlomo},
+  booktitle={ICASSP 2023-2023 IEEE International Conference on Acoustics, Speech and Signal Processing (ICASSP)},
+  pages={1--5},
+  year={2023},
+  organization={IEEE}
+}
+
+@article{mei2024wavcaps,
+  title={Wavcaps: A chatgpt-assisted weakly-labelled audio captioning dataset for audio-language multimodal research},
+  author={Mei, Xinhao and Meng, Chutong and Liu, Haohe and Kong, Qiuqiang and Ko, Tom and Zhao, Chengqi and Plumbley, Mark D and Zou, Yuexian and Wang, Wenwu},
+  journal={IEEE/ACM Transactions on Audio, Speech, and Language Processing},
+  year={2024},
+  publisher={IEEE}
+}
+
+@article{huang2023make,
+  title={Make-an-audio: Text-to-audio generation with prompt-enhanced diffusion models},
+  author={Huang, Rongjie and Huang, Jiawei and Yang, Dongchao and Ren, Yi and Liu, Luping and Li, Mingze and Ye, Zhenhui and Liu, Jinglin and Yin, Xiang and Zhao, Zhou},
+  journal={arXiv preprint arXiv:2301.12661},
+  year={2023}
+}
+ 
+ 
+@article{kong2020panns,
+  title={Panns: Large-scale pretrained audio neural networks for audio pattern recognition},
+  author={Kong, Qiuqiang and Cao, Yin and Iqbal, Turab and Wang, Yuxuan and Wang, Wenwu and Plumbley, Mark D},
+  journal={IEEE/ACM Transactions on Audio, Speech, and Language Processing},
+  volume={28},
+  pages={2880--2894},
+  year={2020},
+  publisher={IEEE}
+}
+
+@inproceedings{schatz2013evaluating,
+  title={Evaluating speech features with the minimal-pair ABX task: Analysis of the classical MFC/PLP pipeline},
+  author={Schatz, Thomas and Peddinti, Vijayaditya and Bach, Francis and Jansen, Aren and Hermansky, Hynek and Dupoux, Emmanuel},
+  booktitle={INTERSPEECH 2013: 14th Annual Conference of the International Speech Communication Association},
+  pages={1--5},
+  year={2013}
+}
+@inproceedings{kim2019audiocaps,
+  title={Audiocaps: Generating captions for audios in the wild},
+  author={Kim, Chris Dongjoo and Kim, Byeongchang and Lee, Hyunmin and Kim, Gunhee},
+  booktitle={Proceedings of the 2019 Conference of the North American Chapter of the Association for Computational Linguistics: Human Language Technologies, Volume 1 (Long and Short Papers)},
+  pages={119--132},
+  year={2019}
+}
+@article{rafii2017musdb18,
+  title={The MUSDB18 corpus for music separation},
+  author={Rafii, Zafar and Liutkus, Antoine and St{\"o}ter, Fabian-Robert and Mimilakis, Stylianos Ioannis and Bittner, Rachel},
+  year={2017},
+  publisher={Dec}
+}
+@inproceedings{panayotov2015librispeech,
+  title={Librispeech: an asr corpus based on public domain audio books},
+  author={Panayotov, Vassil and Chen, Guoguo and Povey, Daniel and Khudanpur, Sanjeev},
+  booktitle={2015 IEEE international conference on acoustics, speech and signal processing (ICASSP)},
+  pages={5206--5210},
+  year={2015},
+  organization={IEEE}
+}

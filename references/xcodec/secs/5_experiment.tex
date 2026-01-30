@@ -1,0 +1,240 @@
+\section{Experiments}
+
+Given that established audio codecs such as Encodec, Speechtokenizer, and DAC are trained on diverse datasets with varying configurations, we meticulously design experiments to rigorously evaluate the efficacy of our proposed solution, X-Codec. To ensure a fair and unbiased comparison, each experiment employs a baseline acoustic codec that is precisely aligned with our X-Codec in terms of training data, training steps, and other hyperparameters. The primary distinction between the baseline codec and X-Codec lies in the exclusion of the auxiliary semantic module in the baseline configuration. This controlled experimental design enables us to isolate and evaluate the specific contributions of our semantic enhancements to the overall performance of the audio LLMs.
+
+
+ 
+\subsection{Text-to-Speech}
+
+In this subsection, we critically evaluate the performance of various audio codecs in training the VALL-E model for zero-shot Text-to-Speech (TTS) tasks. Our investigation is guided by two primary objectives:
+\begin{itemize}
+\item To determine whether the X-Codec can enhance the performance of audio LLMs in TTS applications.
+\item To evaluate the comparative advantages of X-Codec over the disentanglement strategy employed by SpeechTokenizer, specifically within the context of the VALL-E model.
+\end{itemize}
+
+\subsubsection{Baselines}
+
+For a comprehensive comparison, we employ several state-of-the-art neural audio codecs as baselines:
+
+\begin{itemize}
+\item \textbf{EnCodec} \footnote{\url{https://huggingface.co/facebook/encodec\_24khz}}: The open-source EnCodec model \cite{defossez2022high}, trained on a diverse range of 24kHz audio data, can compress audio to bitrates between 1.5 and 24.0 kbps while maintaining high fidelity.
+\item \textbf{DAC} \footnote{\url{https://github.com/descriptinc/descript-audio-codec}}: The open-source DAC model \cite{kumar2024high} utilizes enhanced VQ techniques. For our experiments, we employ the official 16kHz version.
+\item \textbf{SpeechTokenizer} \footnote{\url{https://github.com/ZhangXInFD/SpeechTokenizer}}: This model \cite{zhang2023speechtokenizer} is a unified speech tokenizer that leverages distinct VQ layers to separate speech into content and timbre components. We utilize their official checkpoints in our evaluations.
+\end{itemize}
+ 
+\subsubsection{Training Details of X-Codec}
+Given our objective to assess the efficacy of X-Codec in leveraging semantic information, we meticulously align our experimental setup with that used for SpeechTokenizer. Both models are trained on the same dataset, LibriSpeech, and utilize the same pre-trained self-supervised representations from HuBERT-base-ls960 \footnote{\url{https://huggingface.co/facebook/hubert-base-ls960}}. To ensure comparability, we also adopt the strategy of employing the average representation across various layers of HuBERT as our semantic training objective.
+
+\subsubsection{Training Details of VALL-E}
+For reproduction of the VALL-E, we utilize the resources specified in the provided repository \footnote{https://github.com/lifeiteng/vall-e}. The training data is the LibriTTS, retaining the default settings as specified in the repository, except for the learning rate during the AR stage, which is adjusted to 0.01 to enhance model stability. The training process span 100 epochs for the AR stage and 200 epochs for the non-autoregressive (NAR) stage, same for all audio codecs for a fair comparison.
+
+
+
+\subsubsection{Evaluation Metrics}
+To assess the performances of zero-shot TTS systems, we employ the following metrics:
+\begin{itemize}
+    \item \textbf{WER (Word Error Rate)}: We utilize an Automatic Speech Recognition (ASR) model to transcribe the generated audio \cite{wang2023neural}. The discrepancies between these transcriptions and the original texts are quantified using WER, providing a critical measure of audio intelligibility.
+    
+    \item \textbf{Sim-O (Similarity Objective)}: This metric assesses the objective similarity between synthesized speech and the original reference speech. Sim-O uses feature embeddings extracted from a pre-trained speaker verification model to measure this similarity \cite{hsu2021hubert,kim2024clam}\footnote{\url{https://github.com/microsoft/UniSpeech/tree/main/downstreams/speaker_verification}}, reflecting the codec's ability to preserve speaker characteristics.
+    
+    \item \textbf{UTMOS}: We evaluate the audio quality using UTMOS, a Speech MOS (Mean Opinion Score) predictor \cite{saeki2022utmos}\footnote{\url{https://github.com/tarepan/SpeechMOS}} that automatically measures the naturalness of speech. This metric provides insights into the overall auditory quality of the synthesized speech.
+\end{itemize}
+
+
+% \begin{table*}[h]
+%   \centering
+%     \caption{Objective performance comparison on \textit{continuation} zero-shot speech
+% synthesis tasks using VALL-E trained on LibriTTS  \textbf{with different audio codec}. Abbreviation: C (Common Voice), DNS (DNS Challenge 4 speech), AS (AudioSet), FSD (FSD50K), J (Jamendo), V (VCTK), M(MUSDB) }
+% \resizebox{0.9\textwidth}{!}{%
+%   \begin{tabular}{lccccccc}
+%     \toprule
+%     Codec   & Training Data of   &  \multicolumn{3}{c}{\textbf{VALL-E AR stage}} & \multicolumn{3}{c}{\textbf{VALL-E AR+NAR stages}}   \\
+%     & Audio Codec  &WER $\downarrow$  &SIM-O $\uparrow$  &UTMOS $\uparrow$      &WER $\downarrow$  &SIM-O $\uparrow$  &UTMOS $\uparrow$ \\
+%     \midrule
+%     GT & - & 2.23 &  0.67 &  4.10 &  2.23 &  0.67 &  4.10\\
+%     \midrule
+%    Encodec \cite{defossez2022high} & C+DNS+AS+FSD+J& 47.17  &  0.09 &  1.24 &  6.37 &  0.33 &  3.02\\
+%    DAC \cite{kumar2024high}  &  C+DNS+V+AS+J+M & 85.55 &  0.03 &  1.24 &  6.81 &  0.34 &  3.31 \\
+%    Speechtokenizer \cite{zhang2023speechtokenizer} & LibriSpeech & 7.53  &  0.10 &  1.26 &  5.24 &  0.36 & 3.84 \\
+%     \bottomrule
+%    Baseline Acoustic Codec & LibriSpeech & 22.32   & 0.16 & 3.15   & 7.70   & 0.41 & 3.89 \\
+%     X-Codec & LibriSpeech &  5.27 &  0.22 &  3.85 &  4.07 &  0.42 & 4.16   \\
+%     \bottomrule
+%   \end{tabular}
+%   }
+%   \label{valle_exp}
+% \end{table*}
+
+
+
+\begin{table*}[h]
+  \centering
+    \caption{Objective performance comparison on \textit{continuation} zero-shot speech
+synthesis tasks using VALL-E trained on LibriTTS  \textbf{with different audio codec}. Abbreviation: C (Common Voice), DNS (DNS Challenge 4 speech), AS (AudioSet), FSD (FSD50K), J (Jamendo), V (VCTK), M(MUSDB) }
+\resizebox{0.9\textwidth}{!}{%
+  \begin{tabular}{lccccccc}
+    \toprule
+    Codec   & Training Data of   &  \multicolumn{3}{c}{\textbf{VALL-E AR stage}} & \multicolumn{3}{c}{\textbf{VALL-E AR+NAR stages}}   \\
+    & Audio Codec  &WER $\downarrow$  &SIM-O $\uparrow$  &UTMOS $\uparrow$      &WER $\downarrow$  &SIM-O $\uparrow$  &UTMOS $\uparrow$ \\
+    \midrule
+    GT & - & 2.23 &  0.67 &  4.10 &  2.23 &  0.67 &  4.10\\
+    \midrule
+   Encodec \cite{defossez2022high} & C+DNS+AS+FSD+J& 47.17  &  0.09 &  1.24 &  6.37 &  0.33 &  3.02\\
+   DAC \cite{kumar2024high}  &  C+DNS+V+AS+J+M & 85.55 &  0.03 &  1.24 &  6.81 &  0.34 &  3.31 \\
+   Speechtokenizer \cite{zhang2023speechtokenizer} & LibriSpeech & 7.53  &  0.10 &  1.26 &  5.24 &  0.36 & 3.84 \\
+    \bottomrule
+   Baseline Acoustic Codec & LibriSpeech & 22.32   & 0.16 & 3.15   & 7.70   & 0.41 & 3.89 \\
+    X-Codec-hubert & LibriSpeech &  5.27 &  0.22 &  3.85 &  4.07 &  0.42 & 4.16   \\
+    X-Codec-wavlm-base-plus & MLS English &  4.83 &  0.24 &  4.02 &  3.26 &  0.41 & 4.22   \\
+    \bottomrule
+  \end{tabular}
+  }
+  \label{valle_exp}
+\end{table*}
+ 
+
+
+
+ 
+
+\subsubsection{Zero-shot TTS Results}
+We use librispeech-test-clean \cite{panayotov2015librispeech}for zero-shot TTS evaluation following VALL-E-continual-setting \cite{wang2023neural}. The results in Table \ref{valle_exp} demonstrate the following key findings:
+
+\begin{itemize}
+\item When comparing both X-Codec and SpeechTokenizer against the baseline and other acoustic codecs like DAC and Encodec, we observe improvements in WER. This supports our hypothesis that integrating semantic information helps audio LLMs better understand content.
+\item Comparing the baseline acoustic codec and SpeechTokenizer, SpeechTokenizer exhibited lower Sim-O scores. We attribute this reduction to its initial disentanglement phase, which exclusively focuses on content prediction. This specialization potentially hampers the NAR phase's ability to accurately reconstruct speaker timbre when conditioned solely on tokens derived from the primary content-focused stage, resulting in poor speaker similarity.
+\item  X-Codec not only shows better WER but also higher Sim-O and UTMOS scores compared to SpeechTokenizer. This confirms the effectiveness of our approach, indicating that our codec handles the integration of semantic and acoustic information more proficiently.
+\end{itemize}
+
+
+\begin{table}
+\centering
+\resizebox{0.4\textwidth}{!}{%
+\begin{tabular}{lccc}
+\hline
+\textbf{Model} & \textbf{$n_q$} & \textbf{ within $\downarrow$} & \textbf{ across $\downarrow$} \\
+\hline
+hubert-ls-960 \cite{hsu2021hubert} & - & 3.3 & 4.1 \\
+Encodec \cite{defossez2022high}& 1 & 21.5 & 28.3 \\
+Encodec \cite{defossez2022high} & 8 & 17.5 & 27.0 \\
+DAC \cite{kumar2024high} & 1 & 26.3 & 32.7 \\
+DAC \cite{kumar2024high}& 12 & 21.7 & 33.2 \\
+Speechtoknizer \cite{zhang2023speechtokenizer}& 1 & 3.5  & 4.3 \\
+Speechtoknizer\cite{zhang2023speechtokenizer}& 8 & 3.6  &  4.5 \\
+    \midrule
+Baseline Acoustic Codec & 1 & 26.4 & 31.2 \\
+Baseline Acoustic Codec & 8 & 20.1 & 28.3 \\
+X-Codec & 1 & 3.9 & 4.9 \\
+X-Codec & 8 & 3.3 & 4.3 \\
+\hline
+\end{tabular}
+}
+\caption{Comparison of Phonetic Discriminability within and across  ABX error rate for various models, with different $n_q$ values. Lower values indicate better performance.}
+\label{abx}
+\end{table}
+
+
+
+\subsubsection{Analysing the Effect of Codec}
+To further analyse the above results caused by different audio codecs, we evaluate phonetic discriminability using the ABX error rate \cite{schatz2013evaluating}. This metric assesses how well different codecs can distinguish between similar phonetic sounds within and across various contexts. We specifically examine the continuous representations for VQ as indicated by the results in the following table \ref{abx}. We compare the performance of various models in terms of within and across phonetic discriminability:
+
+Key insights include:
+\begin{itemize}
+\item Both SpeechTokenizer and X-Codec significantly outperform pure acoustic codecs like Encodec and DAC in phonetic discriminability, which supports our claim that enhancing semantic understanding in codecs helps modelling content such as phonetic details.
+\item The X-Codec demonstrates a notable trend of improved phonetic discriminability with an increase in the number of quantizations (nq). Specifically, as nq increases from 1 to 8, the ABX error rates consistently decrease, thereby highlighting effectiveness of the X-Codec's design in enhancing semantic integration across multiple quantization layers.
+
+\item In contrast, the SpeechTokenizer, while exhibiting commendable performance at a lower quantization level (nq = 1), fails to show significant improvement as nq is increased. This suggests a design limitation; the codec's reliance on the initial quantization to carry semantic information restricts its ability to process a broader spectrum of semantic information. Notably, the performance of X-Codec at nq = 8 significantly exceeds that of SpeechTokenizer.
+\end{itemize}
+
+These results underline the effectiveness of our method in facilitating enhanced semantic integration, leading to better phonetic discriminability and audio LLMs. In addition, these results also show that our simple concatenate methods surpass disentangle methods such as speechtokenizer.
+
+\subsection{Music and Sound Generation}
+
+
+
+To the best of our knowledge, this is the first exploration into the potential benefits of incorporating semantic information into audio codecs for enhancing music and general sound generation through audio LLMs. Conventional methods for general audio representation learning, aiming at capturing the semantic discriminability of audios, are generally based on 2D mel-spectrogram, such as AudioMAE \cite{huang2022masked} and Beats \cite{chen2022beats}. These methods are in stark contrast to traditional codecs that process audio sequentially, frame-by-frame. This difference poses challenges for direct integration into existing audio generation frameworks.
+
+To bridge this gap, we have developed a variant of HuBERT, specifically adapted for general audio, which we refer to as HuBERT-General-Audio. This HuBERT-General-Audio is trained on an expansive internal dataset of approximately 200,000 hours, with a similar distribution as AudioSet. Additionally, our proposed X-Codec is also trained using these data for 400,000 steps until convergence, incorporating the HuBERT-General-Audio model within its semantic module. For a fair comparison, we train a baseline acoustic codec under identical settings but excluding semantic information. 
+
+\subsubsection{Training Details of Self-Supervised General Audio Representation}
+HuBERT-General-Audio is trained using 8 NVIDIA H800 GPUs on 2.6 million tokens across 325,000 iterations. For training stability, we adopt an inverse square root learning schedule, a modification from the polynomial decay schedule originally utilized in \cite{hsu2021hubert}. The learning rate is set at 0.0003 with warmup steps of 32,000. Unlike the original HuBERT, which utilizes MFCCs as the training target unit designed specifically for speech, our model leverages the first VQ layer of Encodec as the training target for acoustic unit discovery in the general audio. This choice eliminates the need for the K-means discretization step, saving significant time and computational resources.
+ 
+\begin{table}[t!]
+\centering
+\resizebox{0.4\textwidth}{!}{%
+\begin{tabular}{lccc}
+\hline
+\textbf{Model} & \textbf{FD} $\downarrow$ & \textbf{FAD} $\downarrow$ & \textbf{FD-MERT-layer-9} $\downarrow$ \\
+\hline
+Acoustic codec   & 16.17 & 1.43  & 2.88 \\
+X-Codec & 12.66 & 1.37 & 2.62  \\
+\hline
+\end{tabular}
+}
+\caption{Comparison between baseline acoustic codec and our X-Codec on music continue.}
+\label{music}
+\end{table}
+
+\subsubsection{Music Continuation}
+
+{\emph{Training Details}}: 
+Acquiring high-quality text-music pair data is challenging; therefore, we gathered approximately 100,000 hours of music-only data, including about one million songs for the music continuation task. We deployed nanoGPT \footnote{https://github.com/karpathy/nanoGPT} to implement a GPT-2-medium (approximately 300M parameters) \cite{radford2019language} as our generative model. This model utilizes the first  VQ  from our codec to construct the training sequences, with additional experiments involving multiple VQs detailed in the appendix. We set the block size of sequence modelling to 4096, corresponding to roughly 82 seconds of audio, and adjust the vocabulary size from 50,257 to 1024, matching our codec's codebook size. Other training hyperparameters are consistent with previous GPT-2-medium configurations. We train 300,000 steps on 8 NVIDIA H800 GPUs. The batch size is set to 20, with a learning rate of 3e-4 and a warmup phase of 2000 steps.
+
+\emph{Experiments}:
+For music continuation, we randomly crop 600 samples with each 40 seconds in duration from the MUSDB18 dataset \cite{rafii2017musdb18}. The initial 10 seconds of each sample are used as prompts for the audio LLM, while the subsequent 30 seconds are generated by the model. These generated segments are then compared against the corresponding ground truth (GT) segments. To ensure that the assessment is independent of the codec's reconstruction fidelity, both the generated and GT audio are reconstructed using the first VQ layer of the codec, ensuring performance differences attributed solely to the generative models themselves.
+
+The evaluation metrics of the generated music include: Frechet Distance (FD) computed using features from Pretrained Audio Neural Networks (PANNs) \cite{kong2020panns}, Frechet Audio Distance (FAD), and FD-MERT Layer 9 \cite{li2023mert}. The results, as summarized in Table \ref{music}, reveal that the X-Codec significantly outperforms the baseline acoustic codec across all metrics. This superior performance indicates the X-Codec has a better understanding and enabling more effective reproduction of complex musical structures.
+
+\subsubsection{Text-to-Sound}
+\begin{table}[t]
+  \centering
+\resizebox{0.35\textwidth}{!}{%
+\begin{tabular}{lcccc}
+\hline
+\multicolumn{1}{c}{\textbf{Model}} & \textbf{FD}$\downarrow$ & \textbf{IS}$\uparrow$ & \textbf{FAD}$\downarrow$ & \textbf{CLAP}$\uparrow$ \\ \hline
+Acoustic codec                   & 59.03          & 3.89         & 6.19            & 0.417          \\
+X-Codec                       & 46.31          & 5.29         & 4.10            & 0.483          \\ \hline
+\end{tabular}
+}
+
+\caption{Comparison between baseline acoustic codec and X-Codec on text-to-sound tasks.}
+\label{t2s}
+\end{table}
+
+\begin{table*}[t]
+\centering
+\resizebox{\textwidth}{!}{%
+\begin{tabular}{lcccccccccccc}
+\hline
+Model/Datasets & ESC-50 & US8K & FSD50K & VIVAE & FMA & MTT & IRMAS & MS-DB & RAVDESS & A-MNIST & SLURP & EMOVO \\
+\hline
+DAC \cite{kumar2024high}  & 27.65 & 45.16 & 7.08 & 30.80 & 38.50 & 27.69 & 30.33 & 51.79 & 37.50 & 73.59 & 7.72 & 23.46 \\
+Encodec \cite{defossez2022high} & 30.60 & 64.47 & 8.63 & 31.59 & 39.5 & 26.57 & 28.16 & 64.47 & 31.60 & 78.71 & 8.44 & 25.51 \\
+\hline
+
+Baseline Acoustic Codec & 40.00 & 55.38 & 11.10 & 37.70 & 48.75 & 32.26 & 36.26 & 62.77 & 47.22 & 82.58 & 9.28 & 24.83 \\
+Hubert-general-audio & 69.95 & 74.87 & 34.27 & 48.35 & 64.50 & 43.35 & 49.80 & 74.09 & 69.10 & 99.43 & 21.27 & 35.03 \\
+X-Codec & 69.85 & 75.37 & 34.05 & 49.40 & 64.63 & 42.95 & 52.24 & 75.63 & 68.40 & 99.48 & 21.65 & 35.20 \\
+\hline
+\end{tabular}%
+}
+\caption{Performance of semantic representation on the ARCH benchmark. The table shows the performance of various models across different domains. ESC-50 \cite{ESC50}, US8K \cite{US8K}, FSD50K \cite{FSD50K}, and VIVAE \cite{VIVAE} represent performance on Acoustic Events. FMA \cite{FMA}, MTT \cite{MTT}, IRMAS \cite{IRMAS}, and MS-DB \cite{medleydb} indicate performance in the Music domain. RAVDESS \cite{RAVDESS}, AudioMNIST \cite{AudioMNIST}, SLURP \cite{SLURP}, and EMOVO \cite{EMOVO} reflect performance in the Speech domain. Higher values indicate better performance across these tasks.}
+\label{arch}
+\end{table*}
+
+
+{\emph{Training Details}}: 
+Still, GPT-2-medium (approximately 300M parameters) are adopted for conditional text-to-sound tasks, where the condition embedding is extracted from text captions using LAION-CLAP \cite{wu2023large} and linearly projected from 512 dimensions to 1024 dimensions for GPT input. The training data consists of approximately 400 hours of audio content sourced from the AudioCaps dataset \cite{kim2019audiocaps} and the AudioSet SL subset from the WavsCaps dataset \cite{mei2024wavcaps}. All audio samples are uniformly resampled to a 16kHz sampling rate. The first four tokens from the VQ layers are preprocessed and flattened to configure the GPT model's block size to 2000, corresponding to a processing rate of 50Hz. The training process spans 80,000 steps on four NVIDIA 4090 GPUs, with a batch size of 8 and a learning rate of 3e-4. A warmup phase of 2000 steps is employed to optimize the training process.
+
+{\emph{Evaluation Metrics}}:
+following \cite{huang2023make} and \cite{liu2023audioldm}, we calculate Frechet Distance (FD), Inception Score (IS), Frechet Audio Distance (FAD) for text-to-audio generation. In addition, CLAP score \cite{huang2023make} is used to evaluate the correspondence between the generated audio and the text prompt.
+
+{\emph{Experiment Results}}:
+As shown in Table \ref{t2s}, the proposed X-Codec significantly outperforms the baseline acoustic codec across all metrics. These results demonstrate that semantic information integration significantly enhances the codec's capability, underscoring the value of semantic enrichment in audio generation tasks.
+
+\subsubsection{Analysing the Effect of Codec}
+We hypothesize that the enhanced audio generation capabilities of the audio LLMs are attributed to the improved semantic understanding facilitated by the X-Codec. To validate this hypothesis, we employ the ARCH benchmark \cite{la2024benchmarking} to evaluate the audio semantic understanding, and the benchmark is a comprehensive framework specifically designed to evaluate automatic recognition learning methods across a diverse range of audio classification domains, including acoustic events, music, and speech. The results from this benchmark are shown in Table \ref{arch}.
+
+Our findings indicate that HuBERT-general-audio significantly outperforms traditional acoustic codecs such as DAC, Encodec, and the baseline acoustic codec across all metrics. This improvement highlights the enhanced semantic understanding of X-Codec for general audio, which appears to be lacking in conventional acoustic audio codecs.
+
+Moreover, X-Codec achieves performance that is comparable or even superior to HuBERT-general-audio, confirming the effectiveness of our approach to enhancing semantic processing within codecs. This equivalence or improvement indicates the capability of X-Codec to integrate semantic information robustly.

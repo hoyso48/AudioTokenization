@@ -137,10 +137,21 @@ class AverageDownsampler(nn.Module):
 
         sums = sum_flat.view(B, N, C)
         cnts = cnt_flat.view(B, N).clamp_min(1e-12).unsqueeze(-1)
-        means = sums / cnts
+        group_means = sums / cnts
 
-        # Extract pooled values at frontier positions and pack
-        y_packed = means[mask].view(-1, C)
+        # Extract pooled values at frontier positions and pack.
+        #
+        # IMPORTANT:
+        # `group_means` is indexed by (batch, group_id), not (batch, token_position).
+        # So we must select group means using the frontier's group_id (i.e., keep_rank),
+        # not by the frontier token's absolute position.
+        if int(mask.sum().item()) == 0:
+            y_packed = x.new_zeros((0, C))
+        else:
+            b_sel, _ = mask.nonzero(as_tuple=True)          # [total_kept]
+            keep_group = group_id[mask].to(torch.long)      # [total_kept]
+            flat_idx = (b_sel.to(torch.long) * N + keep_group).to(torch.long)
+            y_packed = group_means.view(B * N, C).index_select(0, flat_idx)
         counts = mask.sum(dim=1).to(torch.long)
         cu_kept = torch.zeros(B + 1, device=device, dtype=torch.long)
         cu_kept[1:] = torch.cumsum(counts, dim=0)
