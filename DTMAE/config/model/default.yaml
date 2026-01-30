@@ -1,36 +1,38 @@
 codec_encoder:
-  hop_length: 40 #256
-  n_fft: 160 #1024
-  window_size: 160 #1024
-  dim: 256
+  hop_length: 80 #256
+  n_fft: 320 #1024
+  window_size: 320 #1024
+  dim: 512
   n_layers_level1: 6
   n_layers_level2: 12
   r: 0.5
   n_head: 4
   ffn_mult: 4
-  dropout: 0.1
-  original_max_position_embeddings: 400
+  dropout: 0
   max_position_embeddings: 8192
   base: 10000
   causal: False
-  out_channels: 256
+  out_channels: 512
+  norm_eps: 1e-2
+  attn_window_size: [64, 64]
 
 codec_decoder:
-  in_channels: 256
-  hop_length: 40 #256
-  n_fft: 160 #1024
-  window_size: 160 #1024
-  dim: 256
+  in_channels: 512
+  hop_length: 80 #256
+  n_fft: 320 #1024
+  window_size: 320 #1024
+  dim: 512
   n_layers_level1: 6
   n_layers_level2: 12
   r: 0.5
   n_head: 4
   ffn_mult: 4
-  dropout: 0.1
-  original_max_position_embeddings: 400
+  dropout: 0
   max_position_embeddings: 8192
   base: 10000
   causal: False
+  norm_eps: 1e-2
+  attn_window_size: [64, 64]
   # Legacy quantizer params (kept for reference, use quantizer section instead):
   # vq_num_quantizers: 1
   # vq_commit_weight: 0.5
@@ -66,7 +68,7 @@ resampler:
   downsampler_params: {}
   upsampler_cls: MaskUpsampler
   upsampler_params:
-    dim: 256
+    dim: 512
   # Optional: add a learned embedding based on each token's span length derived from `mask`.
   # This behaves like learned absolute positional encodings, but the id is "segment length".
   length_embedding:
@@ -82,14 +84,11 @@ resampler:
 quantizer:
   cls: ResidualVQ
   params:
-    dim: 256
+    dim: 512
     codebook_size: 16384
     codebook_dim: 8
     num_quantizers: 1
     commitment: 0.5
-    weight_init: False
-    full_commit_loss: False
-    threshold_ema_dead_code: 2
 
 # =============================================================================
 # DitheredFSQ Config (from TAAE paper)
@@ -117,15 +116,6 @@ quantizer:
 #   700bps: inference_levels=[5,5,5,5,5,5], inference_num_residuals=2
 #   350bps: inference_levels=[5,5,5,5,5,5], inference_num_residuals=1
 # =============================================================================
-
-tome:
-  use_tome: True
-  masking_upsampler: True
-  class_name: PLEBatchTopK
-  tome_params:
-    r: 0.5
-    momentum: 0.99
-  conv_stride: 2
 
 mpd:
   periods: [2, 3, 5, 7, 11]
