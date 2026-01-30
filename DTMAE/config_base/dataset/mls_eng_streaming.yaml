@@ -20,25 +20,25 @@ hf_streaming_mls_eng:
 
 train:
   backend: hf_streaming_mls_eng
-  batch_size: 64
+  batch_size: 32
   shuffle: true
   min_audio_length: 64000
 
 val:
-  backend: hf_streaming_mls_eng
-  split: dev
+  backend: filelist
+  filelist: ./filelists/librispeech_test_clean.txt
   batch_size: 64
   shuffle: false
   min_audio_length: 64000
-  log_idxs: [0, 1, 2, 3]
+  log_idxs: [0,1,2,3]
 
 test:
-  backend: hf_streaming_mls_eng
-  split: test
+  backend: filelist
+  filelist: ./filelists/librispeech_test_clean.txt
   batch_size: 1
   shuffle: false
   min_audio_length: -1
-  log_idxs: [0, 1, 2, 3]
+  log_idxs: [0,1,2,3]
 
 sample_rate: 16000
 multiple_of: 320

@@ -13,12 +13,12 @@ if __name__ == "__main__":
     # 모든 서브셋 리스트
     subsets = [
         "dev-clean",
-        "dev-other",
+        # "dev-other",
         "test-clean",
-        "test-other",
-        "train-clean-100",
-        "train-clean-360",
-        "train-other-500"
+        # "test-other",
+        # "train-clean-100",
+        # "train-clean-360",
+        # "train-other-500"
     ]
 
     # 각 서브셋 별로 다운로드
