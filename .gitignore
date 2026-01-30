@@ -51,3 +51,5 @@ results*/
 *.ckpt
 *.wandb
 *.wav
+
+references/
