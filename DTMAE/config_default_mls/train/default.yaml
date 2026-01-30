@@ -1,6 +1,6 @@
 trainer:
   accelerator: 'gpu'
-  devices: 1
+  devices: 2
   min_steps: 1200000 
   max_steps: 1200000
   precision: 'bf16-mixed'
@@ -12,8 +12,8 @@ trainer:
   # - `val_check_interval` (int) runs validation every N *training steps* (batches).
   # - `check_val_every_n_epoch` gates which epochs run validation; set to 1 to enable step-based eval.
   # Example: run eval every 100k steps:
-  val_check_interval: null
-  check_val_every_n_epoch: 5
+  val_check_interval: 100000
+  check_val_every_n_epoch: null
 
 # loss
 lambdas:

@@ -27,7 +27,7 @@ train:
 val:
   backend: filelist
   filelist: ./filelists/librispeech_test_clean.txt
-  batch_size: 64
+  batch_size: 32
   shuffle: false
   min_audio_length: 64000
   log_idxs: [0,1,2,3]
