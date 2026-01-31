@@ -16,9 +16,9 @@ if __name__ == "__main__":
         # "dev-other",
         "test-clean",
         # "test-other",
-        # "train-clean-100",
-        # "train-clean-360",
-        # "train-other-500"
+        "train-clean-100",
+        "train-clean-360",
+        "train-other-500"
     ]
 
     # 각 서브셋 별로 다운로드

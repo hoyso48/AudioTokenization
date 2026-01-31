@@ -1,0 +1,51 @@
+dataset:
+  _target_: data_module.FSDataset
+
+# MLS is parquet-based with many shards, so DataLoader workers can scale.
+dataloader:
+  num_workers: 1
+  pin_memory: true
+  persistent_workers: true
+
+hf_streaming_mls_eng:
+  hf_repo_id: parler-tts/mls_eng
+  split: train
+  shuffle_buffer_size: 20000
+  seed: 1024
+  # Strongly recommended: put cache on fast local SSD to reduce reconnect pain.
+  # You can also set HF_DATASETS_CACHE env var instead.
+  cache_dir: /home/hoyso/projects/datasets/hf_datasets_cache
+  download_max_retries: 50
+  download_timeout: 60
+
+train:
+  backend: hf_streaming_mls_eng
+  batch_size: 32
+  shuffle: true
+  min_audio_length: 64000
+
+val:
+  backend: filelist
+  filelist: ./filelists/librispeech_test_clean.txt
+  batch_size: 32
+  shuffle: false
+  min_audio_length: 64000
+  log_idxs: [0,1,2,3]
+
+test:
+  backend: filelist
+  filelist: ./filelists/librispeech_test_clean.txt
+  batch_size: 1
+  shuffle: false
+  min_audio_length: -1
+  log_idxs: [0,1,2,3]
+
+sample_rate: 16000
+multiple_of: 320
+
+# Optional: enable if you want ASR probe losses on MLS transcripts.
+transcript:
+  enable: false
+  lowercase: true
+
+
