@@ -228,8 +228,21 @@ class CodecLightningModule(pl.LightningModule):
 
         # Optional: length embedding derived from frontier mask (span length).
         len_cfg = getattr(resamplercfg, "length_embedding", None)
-        enable_len_emb = bool(getattr(len_cfg, "enable", False)) if len_cfg is not None else False
-        if enable_len_emb:
+        self.lenemb_after_downsample = bool(getattr(len_cfg, "after_downsample", False)) if len_cfg is not None else False
+        self.lenemb_after_encoder_level2 = bool(getattr(len_cfg, "after_encoder_level2", False)) if len_cfg is not None else False
+        self.lenemb_after_quantizer = bool(getattr(len_cfg, "after_quantizer", False)) if len_cfg is not None else False
+        self.lenemb_before_upsampler = bool(getattr(len_cfg, "before_upsampler", False)) if len_cfg is not None else False
+
+        enable_any_len_emb = (
+            self.lenemb_after_downsample
+            or self.lenemb_after_encoder_level2
+            or self.lenemb_after_quantizer
+            or self.lenemb_before_upsampler
+        )
+        if enable_any_len_emb and (not self.use_dtp):
+            raise ValueError("length_embedding requires use_dtp=True (needs a frontier mask to derive lengths)")
+
+        if enable_any_len_emb:
             max_len = int(getattr(len_cfg, "max_len", 512))
             init_std = float(getattr(len_cfg, "init_std", 0.02))
             scale = float(getattr(len_cfg, "scale", 1.0))
@@ -338,30 +351,37 @@ class CodecLightningModule(pl.LightningModule):
             vq_emb = self.downsampler(vq_emb)
             mask = None
 
-        # Add length embedding to DTP tokens right after downsampling.
-        # - DTP path uses packed tokens [total_kept, C], and we add embeddings for kept positions.
-        # - We also keep full-length ids for later (decoder-side embedding).
-        length_ids_full = None
+        # Length ids for reduced (kept) tokens (packed varlen): [total_kept]
+        length_ids_kept = None
         if self.use_dtp and (self.length_embedding is not None):
-            length_ids_full = self._length_ids_from_frontier_mask(mask)  # [B, N]
-            length_ids_kept = length_ids_full[mask]  # [total_kept]
+            length_ids_kept = self._length_ids_from_frontier_mask(mask)[mask]
+
+        # (1) After downsample, before encoder level2
+        if self.lenemb_after_downsample and (self.length_embedding is not None):
             vq_emb = vq_emb + self.length_embedding(length_ids_kept).to(dtype=vq_emb.dtype)
 
         vq_emb = self.encoder(vq_emb, position_ids=position_ids, cu_seqlens=cu_seqlens, max_seqlen=max_seqlen, level=2)
+
+        # (2) After encoder level2, before VQ quantizer
+        if self.lenemb_after_encoder_level2 and (self.length_embedding is not None):
+            vq_emb = vq_emb + self.length_embedding(length_ids_kept).to(dtype=vq_emb.dtype)
+
         vq_post_emb, vq_code, vq_loss = self.decoder(vq_emb, vq=True)
+
+        # (3) After VQ quantizer
+        if self.lenemb_after_quantizer and (self.length_embedding is not None):
+            vq_post_emb = vq_post_emb + self.length_embedding(length_ids_kept).to(dtype=vq_post_emb.dtype)
+
         vq_post_emb = self.decoder(vq_post_emb, vq=False, position_ids=position_ids, cu_seqlens=cu_seqlens, max_seqlen=max_seqlen, level=2)
+
+        # (4) Before upsampler (i.e., right before entering upsampling)
+        if self.lenemb_before_upsampler and (self.length_embedding is not None):
+            vq_post_emb = vq_post_emb + self.length_embedding(length_ids_kept).to(dtype=vq_post_emb.dtype)
+
         if self.use_dtp:
             vq_post_emb = self.upsampler(vq_post_emb, mask)
         else:
             vq_post_emb = self.upsampler(vq_post_emb)
-
-        # Add length embedding to dense tokens after mask upsampling (duplicate by span length).
-        if self.use_dtp and (self.length_embedding is not None):
-            if length_ids_full is None:
-                length_ids_full = self._length_ids_from_frontier_mask(mask)
-            if vq_post_emb.shape[:2] != length_ids_full.shape:
-                raise ValueError("Length embedding: vq_post_emb length does not match mask length")
-            vq_post_emb = vq_post_emb + self.length_embedding(length_ids_full).to(dtype=vq_post_emb.dtype)
 
         y_ = self.decoder(vq_post_emb, vq=False, level=1) # [B, 1, T]
         y = wav.unsqueeze(1)

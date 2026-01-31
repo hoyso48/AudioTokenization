@@ -72,10 +72,18 @@ resampler:
   # Optional: add a learned embedding based on each token's span length derived from `mask`.
   # This behaves like learned absolute positional encodings, but the id is "segment length".
   length_embedding:
-    enable: false
     max_len: 512
     init_std: 0.02
     scale: 1.0
+    # Fixed insertion points (all default false):
+    # 1) After encoder level1 downsample, before encoder level2
+    after_downsample: false
+    # 2) After encoder level2, before VQ quantizer
+    after_encoder_level2: false
+    # 3) After VQ quantizer
+    after_quantizer: false
+    # 4) Before upsampler (decoder side, right before entering upsampling)
+    before_upsampler: false
     
 # =============================================================================
 # Quantizer config (extensible pattern like resampler)
