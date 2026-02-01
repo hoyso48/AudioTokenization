@@ -1,0 +1,59 @@
+dataset:
+  # Kept for consistency with existing configs (DataModule reads cfg.dataset.* directly)
+  _target_: data_module.FSDataset
+
+# Dataloader knobs (streaming works best with moderate worker counts; each worker is a shard)
+dataloader:
+  # IMPORTANT: Libri-Light streaming is backed by a *single* TAR stream.
+  # HF `datasets` will disable extra DataLoader workers when num_shards=1.
+  # Keep this at 0 or 1; scale throughput via bigger batch size / more GPUs.
+  num_workers: 1
+  pin_memory: true
+  persistent_workers: true
+
+# HF streaming settings (Libri-Light large)
+hf_streaming_librilight:
+  config_name: large
+  split: train
+  hf_repo_id: HugoLaurencon/libri_light
+  # Larger buffer => better shuffle quality but more RAM.
+  shuffle_buffer_size: 5000
+  seed: 1024
+  trust_remote_code: true
+  # Put this on a fast local disk to reduce re-downloads + improve stability
+  cache_dir: /home/hoyso/projects/datasets/hf_cache
+  # Network robustness for streaming from dl.fbaipublicfiles.com
+  download_max_retries: 100
+  download_timeout: 60
+
+train:
+  backend: hf_streaming_librilight
+  batch_size: 64
+  shuffle: true
+  min_audio_length: 64000
+
+# Keep val/test as local filelist by default (fast + deterministic),
+# but you can also switch them to streaming if you want.
+val:
+  backend: filelist
+  filelist: ./filelists/librispeech_test_clean.txt
+  batch_size: 64
+  shuffle: false
+  min_audio_length: 64000
+  log_idxs: [0, 1, 2, 3]
+
+test:
+  backend: filelist
+  filelist: ./filelists/librispeech_test_clean.txt
+  batch_size: 1
+  shuffle: false
+  min_audio_length: -1
+  log_idxs: [0, 1, 2, 3]
+
+sample_rate: 16000
+multiple_of: 320
+transcript:
+  enable: false
+  lowercase: true
+
+
