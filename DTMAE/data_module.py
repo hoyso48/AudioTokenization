@@ -36,7 +36,11 @@ class DataModule(pl.LightningDataModule):
         phase_cfg = self.cfg.dataset.get(phase)
         batch_size = phase_cfg.batch_size
         backend = str(getattr(phase_cfg, "backend", "filelist"))
+        # Dataloader config can live either under `dataset.dataloader` (preferred)
+        # or at the top-level `dataloader` (legacy / some configs in this repo).
         dataloader_cfg = getattr(self.cfg.dataset, "dataloader", None)
+        if dataloader_cfg is None:
+            dataloader_cfg = getattr(self.cfg, "dataloader", None)
 
         if backend == "hf_streaming_librilight":
             spec_cfg = getattr(self.cfg.dataset, "hf_streaming_librilight", None)
@@ -45,6 +49,9 @@ class DataModule(pl.LightningDataModule):
                     "dataset.train.backend is hf_streaming_librilight but "
                     "dataset.hf_streaming_librilight config is missing."
                 )
+            cache_dir = getattr(spec_cfg, "cache_dir", None)
+            if cache_dir is not None and not os.path.isabs(str(cache_dir)):
+                cache_dir = join(self.ocwd, str(cache_dir))
             spec = LibriLightStreamingSpec(
                 config_name=str(getattr(spec_cfg, "config_name", "large")),
                 split=str(getattr(spec_cfg, "split", "train")),
@@ -56,7 +63,7 @@ class DataModule(pl.LightningDataModule):
                 min_audio_length=int(getattr(phase_cfg, "min_audio_length", 64000)),
                 multiple_of=int(getattr(self.cfg.dataset, "multiple_of", 320)),
                 trust_remote_code=bool(getattr(spec_cfg, "trust_remote_code", True)),
-                cache_dir=getattr(spec_cfg, "cache_dir", None),
+                cache_dir=cache_dir,
                 download_max_retries=int(getattr(spec_cfg, "download_max_retries", 50)),
                 download_timeout=int(getattr(spec_cfg, "download_timeout", 60)),
             )
@@ -75,6 +82,9 @@ class DataModule(pl.LightningDataModule):
             include_transcript = bool(getattr(transcript_cfg, "enable", False)) if transcript_cfg else False
             lowercase = bool(getattr(transcript_cfg, "lowercase", True)) if transcript_cfg else True
 
+            cache_dir = getattr(spec_cfg, "cache_dir", None)
+            if cache_dir is not None and not os.path.isabs(str(cache_dir)):
+                cache_dir = join(self.ocwd, str(cache_dir))
             spec = MlsEngStreamingSpec(
                 hf_repo_id=str(getattr(spec_cfg, "hf_repo_id", "parler-tts/mls_eng")),
                 split=str(getattr(spec_cfg, "split", "train")),
@@ -86,7 +96,7 @@ class DataModule(pl.LightningDataModule):
                 multiple_of=int(getattr(self.cfg.dataset, "multiple_of", 320)),
                 lowercase_transcript=lowercase,
                 include_transcript=include_transcript,
-                cache_dir=getattr(spec_cfg, "cache_dir", None),
+                cache_dir=cache_dir,
                 download_max_retries=int(getattr(spec_cfg, "download_max_retries", 50)),
                 download_timeout=int(getattr(spec_cfg, "download_timeout", 60)),
             )
@@ -100,23 +110,50 @@ class DataModule(pl.LightningDataModule):
         else:
             raise ValueError(f"Unsupported dataset backend: {backend}")
 
-        num_workers = int(getattr(dataloader_cfg, "num_workers", 28)) if dataloader_cfg else 28
+        # Streaming datasets are IterableDatasets; using worker processes can:
+        # - dramatically delay the first batch (shuffle-buffer warmup per worker)
+        # - deadlock in some environments (fork + background threads in HF stack)
+        # So for streaming backends, default to single-process loading.
+        default_num_workers = 0 if backend.startswith("hf_streaming_") else 28
+        num_workers = int(getattr(dataloader_cfg, "num_workers", default_num_workers)) if dataloader_cfg else default_num_workers
         pin_memory = bool(getattr(dataloader_cfg, "pin_memory", True)) if dataloader_cfg else True
+        persistent_workers_default = num_workers > 0
         persistent_workers = (
-            bool(getattr(dataloader_cfg, "persistent_workers", True)) if dataloader_cfg else True
+            bool(getattr(dataloader_cfg, "persistent_workers", persistent_workers_default)) if dataloader_cfg else persistent_workers_default
         )
         if num_workers == 0:
             persistent_workers = False
+        prefetch_factor = None
+        if dataloader_cfg is not None and hasattr(dataloader_cfg, "prefetch_factor"):
+            prefetch_factor = int(getattr(dataloader_cfg, "prefetch_factor"))
+        timeout = None
+        if dataloader_cfg is not None and hasattr(dataloader_cfg, "timeout"):
+            timeout = float(getattr(dataloader_cfg, "timeout"))
+        # If a streaming dataloader hangs (e.g., worker deadlock or network stall),
+        # a non-zero timeout turns it into a debuggable exception instead of an infinite wait.
+        if timeout is None and backend.startswith("hf_streaming_") and num_workers > 0:
+            timeout = 60.0
 
-        dl = DataLoader(
-            ds,
+        multiprocessing_context = None
+        if dataloader_cfg is not None and hasattr(dataloader_cfg, "multiprocessing_context"):
+            multiprocessing_context = str(getattr(dataloader_cfg, "multiprocessing_context"))
+
+        dl_kwargs = dict(
+            dataset=ds,
             batch_size=batch_size,
             shuffle=shuffle,
             num_workers=num_workers,
             collate_fn=collate_fn,
             pin_memory=pin_memory,
             persistent_workers=persistent_workers,
+            timeout=timeout if (timeout is not None) else 0,
         )
+        if num_workers > 0 and prefetch_factor is not None:
+            dl_kwargs["prefetch_factor"] = prefetch_factor
+        if num_workers > 0 and multiprocessing_context:
+            dl_kwargs["multiprocessing_context"] = multiprocessing_context
+
+        dl = DataLoader(**dl_kwargs)
 
         return dl
 

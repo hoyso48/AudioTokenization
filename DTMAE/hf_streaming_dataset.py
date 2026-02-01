@@ -14,13 +14,17 @@ Notes:
 from __future__ import annotations
 
 import io
+import logging
 import os
+import time
 from dataclasses import dataclass
 from typing import Any, Dict, Iterator, Optional, Tuple
 
 import torch
 import torch.nn.functional as F
 from torch.utils.data import IterableDataset, get_worker_info
+
+logger = logging.getLogger(__name__)
 
 
 @dataclass(frozen=True)
@@ -54,7 +58,9 @@ class MlsEngStreamingSpec:
     hf_repo_id: str = "parler-tts/mls_eng"
     split: str = "train"
     shuffle: bool = True
-    shuffle_buffer_size: int = 20_000
+    # NOTE: In HF streaming mode, shuffle is implemented via a reservoir buffer that must warm up.
+    # Large buffers can delay the first yielded example significantly on slow networks.
+    shuffle_buffer_size: int = 2_000
     seed: int = 1024
     sample_rate: int = 16_000
     min_audio_length: int = 64_000
@@ -243,12 +249,26 @@ class LibriLightStreamingDataset(IterableDataset):
             if "trust_remote_code" in datasets.load_dataset.__code__.co_varnames:
                 kwargs["trust_remote_code"] = bool(self.spec.trust_remote_code)
 
+        t0 = time.monotonic()
         ds = datasets.load_dataset(self._script_path, **kwargs)
+        t1 = time.monotonic()
+        logger.info(
+            "Loaded LibriLight streaming dataset in %.2fs (config=%s split=%s cache_dir=%s).",
+            t1 - t0,
+            self.spec.config_name,
+            self.spec.split,
+            self.spec.cache_dir,
+        )
         if self.spec.shuffle:
+            logger.info(
+                "Enabling streaming shuffle for LibriLight (buffer_size=%d). Large buffers can delay the first batch.",
+                int(self.spec.shuffle_buffer_size),
+            )
             ds = ds.shuffle(buffer_size=int(self.spec.shuffle_buffer_size), seed=int(self.spec.seed))
         return ds
 
     def __iter__(self) -> Iterator[Dict[str, Any]]:
+        t_iter0 = time.monotonic()
         ds = self._load_hf_iterable()
 
         worker = get_worker_info()
@@ -258,7 +278,14 @@ class LibriLightStreamingDataset(IterableDataset):
         rank, world = _dist_rank_world()
         ds = _shard_iterable_dataset(ds, rank, world, worker_id, num_workers)
 
-        for ex in ds:
+        for i, ex in enumerate(ds):
+            if i == 0 and rank == 0 and worker_id == 0:
+                logger.info(
+                    "LibriLight first example fetched after %.2fs (world=%d num_workers=%d).",
+                    time.monotonic() - t_iter0,
+                    world,
+                    num_workers,
+                )
             audio = ex.get("audio")
             if not isinstance(audio, dict) or audio.get("bytes") is None:
                 raise ValueError("Expected streaming audio bytes in example['audio']['bytes']")
@@ -304,12 +331,26 @@ class MlsEngStreamingDataset(IterableDataset):
             datasets, kwargs, self.spec.download_max_retries, self.spec.download_timeout
         )
 
+        t0 = time.monotonic()
         ds = datasets.load_dataset(self.spec.hf_repo_id, **kwargs)
+        t1 = time.monotonic()
+        logger.info(
+            "Loaded MLS-Eng streaming dataset in %.2fs (repo=%s split=%s cache_dir=%s).",
+            t1 - t0,
+            self.spec.hf_repo_id,
+            self.spec.split,
+            self.spec.cache_dir,
+        )
         if self.spec.shuffle:
+            logger.info(
+                "Enabling streaming shuffle for MLS-Eng (buffer_size=%d). Large buffers can delay the first batch.",
+                int(self.spec.shuffle_buffer_size),
+            )
             ds = ds.shuffle(buffer_size=int(self.spec.shuffle_buffer_size), seed=int(self.spec.seed))
         return ds
 
     def __iter__(self) -> Iterator[Dict[str, Any]]:
+        t_iter0 = time.monotonic()
         ds = self._load_hf_iterable()
 
         worker = get_worker_info()
@@ -319,7 +360,14 @@ class MlsEngStreamingDataset(IterableDataset):
         rank, world = _dist_rank_world()
         ds = _shard_iterable_dataset(ds, rank, world, worker_id, num_workers)
 
-        for ex in ds:
+        for i, ex in enumerate(ds):
+            if i == 0 and rank == 0 and worker_id == 0:
+                logger.info(
+                    "MLS-Eng first example fetched after %.2fs (world=%d num_workers=%d).",
+                    time.monotonic() - t_iter0,
+                    world,
+                    num_workers,
+                )
             audio = ex.get("audio")
             if not isinstance(audio, dict):
                 raise ValueError("Expected example['audio'] to be a dict.")
