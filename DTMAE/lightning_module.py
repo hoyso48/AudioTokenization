@@ -164,6 +164,7 @@ class CodecLightningModule(pl.LightningModule):
             out_channels=enccfg.out_channels,
             norm_eps=enccfg.norm_eps,
             attn_window_size=enccfg.attn_window_size,
+            layerscale_gamma_init=float(getattr(enccfg, "layerscale_gamma_init", 1.0)),
         )
 
         deccfg = self.cfg.model.codec_decoder
@@ -197,6 +198,7 @@ class CodecLightningModule(pl.LightningModule):
                 # codebook_dim=deccfg.codebook_dim,
                 norm_eps=deccfg.norm_eps,
                 attn_window_size=deccfg.attn_window_size,
+                layerscale_gamma_init=float(getattr(deccfg, "layerscale_gamma_init", 1.0)),
         )
 
         mpdcfg = self.cfg.model.mpd

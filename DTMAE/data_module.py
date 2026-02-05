@@ -85,6 +85,17 @@ class DataModule(pl.LightningDataModule):
             cache_dir = getattr(spec_cfg, "cache_dir", None)
             if cache_dir is not None and not os.path.isabs(str(cache_dir)):
                 cache_dir = join(self.ocwd, str(cache_dir))
+
+            hf_home = getattr(spec_cfg, "hf_home", None)
+            if hf_home is not None and not os.path.isabs(str(hf_home)):
+                hf_home = join(self.ocwd, str(hf_home))
+            hf_hub_cache = getattr(spec_cfg, "hf_hub_cache", None)
+            if hf_hub_cache is not None and not os.path.isabs(str(hf_hub_cache)):
+                hf_hub_cache = join(self.ocwd, str(hf_hub_cache))
+            hf_datasets_cache = getattr(spec_cfg, "hf_datasets_cache", None)
+            if hf_datasets_cache is not None and not os.path.isabs(str(hf_datasets_cache)):
+                hf_datasets_cache = join(self.ocwd, str(hf_datasets_cache))
+
             spec = MlsEngStreamingSpec(
                 hf_repo_id=str(getattr(spec_cfg, "hf_repo_id", "parler-tts/mls_eng")),
                 split=str(getattr(spec_cfg, "split", "train")),
@@ -96,7 +107,13 @@ class DataModule(pl.LightningDataModule):
                 multiple_of=int(getattr(self.cfg.dataset, "multiple_of", 320)),
                 lowercase_transcript=lowercase,
                 include_transcript=include_transcript,
+                hf_home=hf_home,
+                hf_hub_cache=hf_hub_cache,
+                hf_datasets_cache=hf_datasets_cache,
+                use_local_snapshot=bool(getattr(spec_cfg, "use_local_snapshot", False)),
+                revision=getattr(spec_cfg, "revision", None),
                 cache_dir=cache_dir,
+                audio_decode=bool(getattr(spec_cfg, "audio_decode", True)),
                 download_max_retries=int(getattr(spec_cfg, "download_max_retries", 50)),
                 download_timeout=int(getattr(spec_cfg, "download_timeout", 60)),
             )

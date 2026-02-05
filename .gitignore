@@ -45,7 +45,6 @@ venv.bak/
 # Experiment logs
 wandb_offlines/
 results/
-results/
 results*/
 **/pl_log/
 *.ckpt

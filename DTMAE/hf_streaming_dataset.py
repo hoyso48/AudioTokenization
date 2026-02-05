@@ -67,7 +67,35 @@ class MlsEngStreamingSpec:
     multiple_of: int = 320
     lowercase_transcript: bool = True
     include_transcript: bool = False
+    # Optional: set HF cache locations explicitly from config.
+    # If provided, these will be exported to environment variables for this process.
+    hf_home: Optional[str] = None
+    hf_hub_cache: Optional[str] = None
+    hf_datasets_cache: Optional[str] = None
+
+    # If True, load parquet shards directly from the local HF hub snapshot directory:
+    #   $HF_HOME/hub/datasets--<org>--<name>/snapshots/<revision>/data/*.parquet
+    # This avoids any Hub access (useful for offline + avoids surprising re-downloads).
+    use_local_snapshot: bool = False
+    revision: Optional[str] = None  # commit hash; if None, resolve from refs/main
+
+    # Passed through to datasets.load_dataset when using the Hub path.
+    # NOTE: for parquet local snapshot mode, this is ignored.
     cache_dir: Optional[str] = None
+
+    # Audio feature decoding:
+    # - True: `datasets` decodes audio (opus->float array) and yields {"array", "sampling_rate", ...}
+    # - False: yields {"bytes", "path"} (faster, but DTMAE expects decoded waveforms).
+    audio_decode: bool = True
+
+    # Performance: optionally preload the HF streaming iterable in the parent process.
+    #
+    # Why this matters:
+    # - With DataLoader `multiprocessing_context=fork`, workers inherit the preloaded iterable,
+    #   avoiding expensive per-worker initialization (e.g. resolving 1416 parquet shards).
+    # - With `spawn`, the iterable is NOT picklable; we explicitly drop it during pickling so spawn
+    #   still works, but without the preload speedup.
+    preload_in_parent: bool = False
     download_max_retries: int = 50
     download_timeout: int = 60
 
@@ -183,6 +211,48 @@ def _maybe_apply_download_config(datasets_mod: Any, kwargs: Dict[str, Any], max_
             kwargs["download_config"] = datasets_mod.DownloadConfig(**dc_kwargs)
     except (TypeError, ValueError):
         return
+
+
+def _maybe_set_env_if_provided(key: str, value: Optional[str]) -> None:
+    if value is None:
+        return
+    value = str(value)
+    if not value:
+        return
+    os.environ[key] = value
+
+
+def _repo_id_to_hf_hub_dirname(repo_id: str, *, is_dataset: bool = True) -> str:
+    """
+    Hugging Face hub cache directory name convention.
+
+    For datasets, the hub cache uses:
+      datasets--org--name
+    e.g. parler-tts/mls_eng -> datasets--parler-tts--mls_eng
+    """
+    prefix = "datasets--" if is_dataset else "models--"
+    return prefix + repo_id.replace("/", "--")
+
+
+def _resolve_hf_snapshot_dir(*, repo_id: str, hf_home: str, revision: Optional[str]) -> str:
+    hub_root = os.path.join(hf_home, "hub")
+    repo_dir = os.path.join(hub_root, _repo_id_to_hf_hub_dirname(repo_id, is_dataset=True))
+    if revision is None:
+        ref_path = os.path.join(repo_dir, "refs", "main")
+        if not os.path.exists(ref_path):
+            raise FileNotFoundError(
+                f"Cannot resolve revision for {repo_id}: missing refs/main at {ref_path}. "
+                "Set `revision` explicitly or ensure the dataset is cached."
+            )
+        with open(ref_path, "r", encoding="utf-8") as f:
+            revision = f.read().strip()
+    snap_dir = os.path.join(repo_dir, "snapshots", str(revision))
+    if not os.path.isdir(snap_dir):
+        raise FileNotFoundError(
+            f"Local HF snapshot directory not found: {snap_dir}. "
+            "Set `hf_home` correctly or disable `use_local_snapshot`."
+        )
+    return snap_dir
 
 
 def _shard_iterable_dataset(ds: Any, rank: int, world: int, worker_id: int, num_workers: int) -> Any:
@@ -317,41 +387,88 @@ class MlsEngStreamingDataset(IterableDataset):
         super().__init__()
         self.phase = str(phase)
         self.spec = spec
+        self._preloaded_hf_iterable: Any = None
+
+        if bool(self.spec.preload_in_parent):
+            # Safe for fork-based workers; for spawn, we strip this in __getstate__.
+            t0 = time.monotonic()
+            self._preloaded_hf_iterable = self._load_hf_iterable()
+            t1 = time.monotonic()
+            logger.info("Preloaded MLS-Eng iterable in parent process in %.2fs.", t1 - t0)
+
+    def __getstate__(self) -> Dict[str, Any]:
+        """
+        Ensure this Dataset remains picklable (required by multiprocessing spawn).
+
+        HF streaming iterables are not reliably picklable; drop them when pickling.
+        """
+        state = dict(self.__dict__)
+        state["_preloaded_hf_iterable"] = None
+        return state
 
     def _load_hf_iterable(self) -> Any:
         import datasets
+        from datasets import Audio
 
-        kwargs: Dict[str, Any] = dict(
-            split=self.spec.split,
-            streaming=True,
-        )
-        if self.spec.cache_dir is not None:
-            kwargs["cache_dir"] = self.spec.cache_dir
-        _maybe_apply_download_config(
-            datasets, kwargs, self.spec.download_max_retries, self.spec.download_timeout
-        )
+        # Optional: set cache roots from config so the run is reproducible.
+        _maybe_set_env_if_provided("HF_HOME", self.spec.hf_home)
+        _maybe_set_env_if_provided("HF_HUB_CACHE", self.spec.hf_hub_cache)
+        _maybe_set_env_if_provided("HF_DATASETS_CACHE", self.spec.hf_datasets_cache)
 
         t0 = time.monotonic()
-        ds = datasets.load_dataset(self.spec.hf_repo_id, **kwargs)
+
+        if self.spec.use_local_snapshot:
+            hf_home = (
+                self.spec.hf_home
+                or os.environ.get("HF_HOME")
+                or os.path.join(os.path.expanduser("~"), ".cache", "huggingface")
+            )
+            snapshot_dir = _resolve_hf_snapshot_dir(
+                repo_id=str(self.spec.hf_repo_id),
+                hf_home=str(hf_home),
+                revision=self.spec.revision,
+            )
+            data_dir = os.path.join(snapshot_dir, "data")
+            data_files = {
+                "train": os.path.join(data_dir, "train-*.parquet"),
+                "dev": os.path.join(data_dir, "dev-*.parquet"),
+                "test": os.path.join(data_dir, "test-*.parquet"),
+            }
+            ds = datasets.load_dataset(
+                "parquet",
+                data_files=data_files,
+                split=str(self.spec.split),
+                streaming=True,
+            )
+            source = f"local_snapshot:{snapshot_dir}"
+        else:
+            kwargs: Dict[str, Any] = dict(
+                split=self.spec.split,
+                streaming=True,
+            )
+            if self.spec.cache_dir is not None:
+                kwargs["cache_dir"] = self.spec.cache_dir
+            _maybe_apply_download_config(
+                datasets, kwargs, self.spec.download_max_retries, self.spec.download_timeout
+            )
+            ds = datasets.load_dataset(self.spec.hf_repo_id, **kwargs)
+            source = f"hub:{self.spec.hf_repo_id}"
+
+        # Ensure audio is in the expected format (array vs bytes) based on config.
+        ds = ds.cast_column("audio", Audio(decode=bool(self.spec.audio_decode)))
+
         t1 = time.monotonic()
         logger.info(
-            "Loaded MLS-Eng streaming dataset in %.2fs (repo=%s split=%s cache_dir=%s).",
+            "Loaded MLS-Eng streaming dataset in %.2fs (source=%s split=%s).",
             t1 - t0,
-            self.spec.hf_repo_id,
+            source,
             self.spec.split,
-            self.spec.cache_dir,
         )
-        if self.spec.shuffle:
-            logger.info(
-                "Enabling streaming shuffle for MLS-Eng (buffer_size=%d). Large buffers can delay the first batch.",
-                int(self.spec.shuffle_buffer_size),
-            )
-            ds = ds.shuffle(buffer_size=int(self.spec.shuffle_buffer_size), seed=int(self.spec.seed))
         return ds
 
     def __iter__(self) -> Iterator[Dict[str, Any]]:
         t_iter0 = time.monotonic()
-        ds = self._load_hf_iterable()
+        ds = self._preloaded_hf_iterable if self._preloaded_hf_iterable is not None else self._load_hf_iterable()
 
         worker = get_worker_info()
         worker_id = 0 if worker is None else int(worker.id)
@@ -359,6 +476,19 @@ class MlsEngStreamingDataset(IterableDataset):
 
         rank, world = _dist_rank_world()
         ds = _shard_iterable_dataset(ds, rank, world, worker_id, num_workers)
+
+        # IMPORTANT: shard *before* shuffle.
+        # If we shuffle first and then shard, each worker/rank may need to warm up the shuffle buffer
+        # and then discard most samples due to sharding, leading to very slow "first batch" latency
+        # and even DataLoader timeouts in DDP runs.
+        if self.spec.shuffle:
+            logger.info(
+                "Enabling streaming shuffle for MLS-Eng (buffer_size=%d) after sharding (world=%d num_workers=%d).",
+                int(self.spec.shuffle_buffer_size),
+                world,
+                num_workers,
+            )
+            ds = ds.shuffle(buffer_size=int(self.spec.shuffle_buffer_size), seed=int(self.spec.seed))
 
         for i, ex in enumerate(ds):
             if i == 0 and rank == 0 and worker_id == 0:

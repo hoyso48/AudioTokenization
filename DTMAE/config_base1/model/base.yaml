@@ -1,5 +1,5 @@
 codec_encoder:
-  hop_length: 80 #256
+  hop_length: 160 #256
   n_fft: 320 #1024
   window_size: 320 #1024
   dim: 256
@@ -15,10 +15,11 @@ codec_encoder:
   out_channels: 256
   norm_eps: 1e-2
   attn_window_size: [64, 64]
+  layerscale_gamma_init: 1
 
 codec_decoder:
   in_channels: 256
-  hop_length: 80 #256
+  hop_length: 160 #256
   n_fft: 320 #1024
   window_size: 320 #1024
   dim: 256
@@ -33,6 +34,7 @@ codec_decoder:
   causal: False
   norm_eps: 1e-2
   attn_window_size: [64, 64]
+  layerscale_gamma_init: 1
   # Legacy quantizer params (reference only, use quantizer section instead):
   # vq_num_quantizers: 1    → quantizer.params.num_quantizers
   # vq_commit_weight: 0.5   → quantizer.params.commitment
@@ -109,6 +111,29 @@ resampler:
     max_mask_span: 1
     min_mask_prob: 0.5
     max_mask_prob: 0.5
+  # dtp_cls: PLEBatchTopKTrainPerSeq
+  # dtp_params:
+  #   # eval/infer에서 target global avg ratio
+  #   r: 0.5
+  #   # eval/infer global-tau controller
+  #   initial_tau: 1.0
+  #   ema_mu: 0.95
+  #   eta0: 0.1
+  #   decay_T: 1000.0
+  #   tau_min: 1e-6
+  #   tau_max: 1e6
+  #   update_every: 1
+  #   update_test_time: true   # eval/infer에서 tau를 계속 맞춰가려면 true
+  #   # train-time per-seq r sampling
+  #   train_r_min: 0.0
+  #   train_r_max: 1.0
+  #   # (옵션) train에서 per-seq random masking 섞기 (확률 sample_prob로 PLE 대신 랜덤 적용)
+  #   sample_prob: 0.0
+  #   min_mask_prob: 0.5
+  #   max_mask_prob: 0.5
+  #   min_mask_span: 1
+  #   max_mask_span: 1
+  #   max_s: null
   downsampler_cls: FrontierDownsampler
   downsampler_params: {}
   upsampler_cls: MaskUpsampler
@@ -128,7 +153,7 @@ resampler:
     # 3) After VQ quantizer
     after_quantizer: false
     # 4) Before upsampler (decoder side, right before entering upsampling)
-    before_upsampler: true
+    before_upsampler: false
 
 mpd:
   periods: [2, 3, 5, 7, 11]

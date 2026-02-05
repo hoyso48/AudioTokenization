@@ -151,10 +151,35 @@ def _build_dataloader_from_yaml(y: Dict[str, Any], phase: str, override_num_work
     multiple_of = int(y.get("multiple_of", 320))
     batch_size = int(phase_cfg.get("batch_size", 32))
 
+    # Resolve paths relative to the YAML file location (more predictable than cwd).
+    # NOTE: `y` is the parsed YAML content; we pass config path through meta below.
+    cfg_dir = os.path.dirname(os.path.abspath(y.get("__config_yaml_path__", ""))) if isinstance(y.get("__config_yaml_path__", ""), str) else os.getcwd()
+
     cache_dir = spec_cfg.get("cache_dir", None)
     if cache_dir is not None:
         cache_dir = str(cache_dir)
+        if not os.path.isabs(cache_dir):
+            cache_dir = os.path.join(cfg_dir, cache_dir)
         os.makedirs(cache_dir, exist_ok=True)
+
+    # Optional HF cache roots (these are passed into the spec and exported by the dataset code).
+    hf_home = spec_cfg.get("hf_home", None)
+    if hf_home is not None:
+        hf_home = str(hf_home)
+        if not os.path.isabs(hf_home):
+            hf_home = os.path.join(cfg_dir, hf_home)
+
+    hf_hub_cache = spec_cfg.get("hf_hub_cache", None)
+    if hf_hub_cache is not None:
+        hf_hub_cache = str(hf_hub_cache)
+        if not os.path.isabs(hf_hub_cache):
+            hf_hub_cache = os.path.join(cfg_dir, hf_hub_cache)
+
+    hf_datasets_cache = spec_cfg.get("hf_datasets_cache", None)
+    if hf_datasets_cache is not None:
+        hf_datasets_cache = str(hf_datasets_cache)
+        if not os.path.isabs(hf_datasets_cache):
+            hf_datasets_cache = os.path.join(cfg_dir, hf_datasets_cache)
 
     spec = MlsEngStreamingSpec(
         hf_repo_id=str(spec_cfg.get("hf_repo_id", "parler-tts/mls_eng")),
@@ -167,7 +192,13 @@ def _build_dataloader_from_yaml(y: Dict[str, Any], phase: str, override_num_work
         multiple_of=multiple_of,
         lowercase_transcript=lowercase_transcript,
         include_transcript=include_transcript,
+        hf_home=hf_home,
+        hf_hub_cache=hf_hub_cache,
+        hf_datasets_cache=hf_datasets_cache,
+        use_local_snapshot=bool(spec_cfg.get("use_local_snapshot", False)),
+        revision=spec_cfg.get("revision", None),
         cache_dir=cache_dir,
+        audio_decode=bool(spec_cfg.get("audio_decode", True)),
         download_max_retries=int(spec_cfg.get("download_max_retries", 50)),
         download_timeout=int(spec_cfg.get("download_timeout", 60)),
     )
@@ -223,6 +254,7 @@ def _build_dataloader_from_yaml(y: Dict[str, Any], phase: str, override_num_work
         "prefetch_factor": prefetch_factor_val,
         "multiprocessing_context": multiprocessing_context_val,
         "include_transcript": include_transcript,
+        "config_yaml_dir": cfg_dir,
         "spec": {
             "hf_repo_id": spec.hf_repo_id,
             "split": spec.split,
@@ -232,6 +264,12 @@ def _build_dataloader_from_yaml(y: Dict[str, Any], phase: str, override_num_work
             "sample_rate": spec.sample_rate,
             "min_audio_length": spec.min_audio_length,
             "multiple_of": spec.multiple_of,
+            "hf_home": spec.hf_home,
+            "hf_hub_cache": spec.hf_hub_cache,
+            "hf_datasets_cache": spec.hf_datasets_cache,
+            "use_local_snapshot": spec.use_local_snapshot,
+            "revision": spec.revision,
+            "audio_decode": spec.audio_decode,
             "cache_dir": spec.cache_dir,
             "download_max_retries": spec.download_max_retries,
             "download_timeout": spec.download_timeout,
@@ -244,6 +282,8 @@ def main() -> None:
     args = _parse_args()
     cfg_path = os.path.abspath(args.config_yaml)
     y = _read_yaml(cfg_path)
+    # Smuggle config path in so we can resolve relative paths deterministically.
+    y["__config_yaml_path__"] = cfg_path
 
     if args.warmup_batches < 0:
         raise SystemExit("--warmup-batches must be >= 0")
@@ -275,6 +315,10 @@ def main() -> None:
     print(f"split               : {meta['spec']['split']}")
     print(f"shuffle             : {meta['spec']['shuffle']}")
     print(f"shuffle_buffer_size : {meta['spec']['shuffle_buffer_size']}")
+    print(f"use_local_snapshot  : {meta['spec']['use_local_snapshot']}")
+    print(f"hf_home             : {meta['spec']['hf_home']}")
+    print(f"revision            : {meta['spec']['revision']}")
+    print(f"audio_decode        : {meta['spec']['audio_decode']}")
     print(f"cache_dir           : {meta['spec']['cache_dir']}")
     print(f"sample_rate         : {meta['spec']['sample_rate']}")
     print(f"min_audio_length    : {meta['spec']['min_audio_length']}")

@@ -72,19 +72,183 @@ def WNConvTranspose1d(*args, causal=False, **kwargs):
         return conv
     return weight_norm(nn.ConvTranspose1d(*args, **kwargs))
 
+class WNConv1dVarlen(nn.Module):
+    """
+    Weight-normalized Conv1d wrapper for variable-length (packed) sequences.
+
+    Input:
+      - x: packed tokens of shape (total_tokens, in_channels)
+      - cu_seqlens: int tensor of shape (B + 1,), cumulative sequence lengths (cu_seqlens[0] = 0)
+      - max_seqlen: int, max sequence length in the batch
+
+    Behavior:
+      1) Pack -> padded: (total_tokens, C) -> (B, max_seqlen, C) with zero-padding
+      2) Apply Conv1d over the time axis
+      3) Unpad -> packed: (B, T_out, C_out) -> (total_tokens, C_out) by discarding padded positions
+
+    Notes:
+      - This assumes the Conv1d preserves the time length (T_out == max_seqlen).
+        If your convolution changes the time dimension (e.g., stride != 1), this module
+        will raise an error. Extend the mapping logic if you need strided/downsampled outputs.
+    """
+
+    def __init__(
+        self,
+        in_channels: int,
+        out_channels: int,
+        kernel_size: int,
+        stride: int = 1,
+        padding=0,
+        dilation: int = 1,
+        groups: int = 1,
+        bias: bool = True,
+        causal: bool = False,
+        padding_mode: str = "zeros",
+        device=None,
+        dtype=None,
+    ):
+        super().__init__()
+        self.in_channels = int(in_channels)
+        self.out_channels = int(out_channels)
+
+        self.conv = WNConv1d(
+            self.in_channels,
+            self.out_channels,
+            kernel_size=kernel_size,
+            stride=stride,
+            padding=padding,
+            dilation=dilation,
+            groups=groups,
+            bias=bias,
+            causal=causal,
+            padding_mode=padding_mode,
+            device=device,
+            dtype=dtype,
+        )
+
+    @staticmethod
+    def _validate_varlen_inputs(x: torch.Tensor, cu_seqlens: torch.Tensor, max_seqlen: int) -> Tuple[int, int, int]:
+        if x.dim() != 2:
+            raise ValueError(f"WNConv1dVarlen.forward expects x of shape (total_tokens, C), got {tuple(x.shape)}")
+        total_tokens, C = x.shape
+
+        if cu_seqlens is None:
+            raise ValueError("WNConv1dVarlen.forward requires cu_seqlens (shape: (B+1,))")
+        if cu_seqlens.dim() != 1:
+            raise ValueError(f"cu_seqlens must be 1D (shape: (B+1,)), got {tuple(cu_seqlens.shape)}")
+        if cu_seqlens.numel() < 1:
+            raise ValueError("cu_seqlens must have at least one element")
+        if cu_seqlens.numel() == 1:
+            # B == 0 is not meaningful; treat as empty batch.
+            B = 0
+        else:
+            B = int(cu_seqlens.numel() - 1)
+
+        if not isinstance(max_seqlen, int):
+            raise TypeError(f"max_seqlen must be int, got {type(max_seqlen)}")
+        if max_seqlen < 0:
+            raise ValueError(f"max_seqlen must be >= 0, got {max_seqlen}")
+
+        if cu_seqlens.numel() >= 1:
+            if cu_seqlens[0].item() != 0:
+                raise ValueError(f"cu_seqlens[0] must be 0, got {cu_seqlens[0].item()}")
+            if cu_seqlens[-1].item() != total_tokens:
+                raise ValueError(
+                    "cu_seqlens[-1] must equal total_tokens. "
+                    f"Got cu_seqlens[-1]={cu_seqlens[-1].item()} but total_tokens={total_tokens}."
+                )
+            if cu_seqlens.numel() > 1:
+                diffs = cu_seqlens[1:] - cu_seqlens[:-1]
+                if torch.any(diffs < 0):
+                    raise ValueError("cu_seqlens must be non-decreasing")
+                if torch.any(diffs > max_seqlen):
+                    raise ValueError("Found a sequence length > max_seqlen; max_seqlen is inconsistent with cu_seqlens")
+
+        return B, total_tokens, C
+
+    def forward(self, x: torch.Tensor, cu_seqlens: torch.Tensor, max_seqlen: int) -> torch.Tensor:
+        B, total_tokens, C = self._validate_varlen_inputs(x, cu_seqlens, max_seqlen)
+
+        if C != self.in_channels:
+            raise ValueError(
+                f"WNConv1dVarlen: channel mismatch. x has C={C}, but conv expects in_channels={self.in_channels}."
+            )
+
+        # Empty (no tokens) fast-path
+        if total_tokens == 0:
+            return x.new_zeros((0, self.out_channels))
+
+        # Ensure cu_seqlens is on the right device and integer type for indexing
+        cu_seqlens = cu_seqlens.to(device=x.device, dtype=torch.long)
+
+        lengths = (cu_seqlens[1:] - cu_seqlens[:-1]).to(torch.long)  # (B,)
+        if lengths.numel() != B:
+            raise RuntimeError("Internal error: lengths shape mismatch with batch size")
+
+        # Build packed -> padded index mapping (vectorized, no Python loops)
+        # batch_idx: (total_tokens,), token positions within each sequence: (total_tokens,)
+        batch_idx = torch.repeat_interleave(torch.arange(B, device=x.device, dtype=torch.long), lengths)
+        start_offsets = torch.repeat_interleave(cu_seqlens[:-1], lengths)
+        token_idx = torch.arange(total_tokens, device=x.device, dtype=torch.long)
+        pos_idx = token_idx - start_offsets
+
+        if batch_idx.numel() != total_tokens or pos_idx.numel() != total_tokens:
+            raise RuntimeError("Internal error: packed index mapping has incorrect size")
+        if torch.any(pos_idx < 0) or torch.any(pos_idx >= max_seqlen):
+            raise ValueError("Found token positions out of [0, max_seqlen); check cu_seqlens/max_seqlen consistency")
+
+        # Padded tensor: (B, max_seqlen, C)
+        padded = x.new_zeros((B, max_seqlen, C))
+        padded[batch_idx, pos_idx] = x
+
+        # Conv over time: (B, C, T)
+        y = self.conv(padded.transpose(1, 2)).transpose(1, 2)  # (B, T_out, C_out)
+
+        if y.shape[0] != B:
+            raise RuntimeError("Internal error: batch dimension changed by convolution")
+        if y.shape[1] != max_seqlen:
+            raise ValueError(
+                "WNConv1dVarlen expects the convolution to preserve time length (T_out == max_seqlen), "
+                f"but got T_out={y.shape[1]} and max_seqlen={max_seqlen}. "
+                "Use stride=1 and appropriate padding (e.g., padding='same' or padding=(kernel_size-1)//2)."
+            )
+
+        # Unpad back to packed: (total_tokens, C_out)
+        out = y[batch_idx, pos_idx]
+        return out
+
 class RMSNorm(torch.nn.Module):
     def __init__(self, dim: int, eps: float = 1e-2):
         super().__init__()
         self.eps = eps
-        self.weight = nn.Parameter(torch.ones(dim))
+        self.norm = nn.LayerNorm(dim, eps=eps)
+        # self.weight = nn.Parameter(torch.ones(dim))
 
-    def _norm(self, x):
-        return x * torch.rsqrt(x.pow(2).mean(-1, keepdim=True) + self.eps)
+    # def _norm(self, x):
+    #     return x * torch.rsqrt(x.pow(2).mean(-1, keepdim=True) + self.eps)
 
+    # def forward(self, x):
+    #     x, dtype = x.float(), x.dtype
+    #     output = self._norm(x)
+    #     return (output * self.weight).to(dtype)
     def forward(self, x):
         x, dtype = x.float(), x.dtype
-        output = self._norm(x)
-        return (output * self.weight).to(dtype)
+        output = self.norm(x)
+        return (output).to(dtype)
+
+# class RMSNorm(torch.nn.Module):
+#     def __init__(self, dim: int, eps: float = 1e-2):
+#         super().__init__()
+#         self.eps = eps
+#         self.weight = nn.Parameter(torch.ones(dim))
+
+#     def _norm(self, x):
+#         return x * torch.rsqrt(x.pow(2).mean(-1, keepdim=True) + self.eps)
+
+#     def forward(self, x):
+#         x, dtype = x.float(), x.dtype
+#         output = self._norm(x)
+#         return (output * self.weight).to(dtype)
 
 
 def _yarn_find_correction_dim(num_rotations, dim, base=10000, max_position_embeddings=2048):
@@ -410,12 +574,24 @@ class ConformerConvModule(nn.Module):
         return out
 
 class TransformerLayer(nn.Module):
-    def __init__(self, dim, n_head=8, ffn_mult=4, dropout=0.1, max_position_embeddings=2048, base=10000, causal: bool = False, attn_window_size=(64, 64), norm_eps: float = 1e-2):
+    def __init__(
+        self,
+        dim,
+        n_head=8,
+        ffn_mult=4,
+        dropout=0.1,
+        max_position_embeddings=2048,
+        base=10000,
+        causal: bool = False,
+        attn_window_size=(64, 64),
+        norm_eps: float = 1e-2,
+        layerscale_gamma_init: float = 1.0,
+    ):
         super().__init__()
         self.ffn1 = FeedForward(dim, mult=ffn_mult, dropout=dropout)
         self.self_attn = SelfAttention(dim, window_size=attn_window_size, n_head=n_head, dropout=dropout, max_position_embeddings=max_position_embeddings, base=base, causal=causal, norm_eps=norm_eps)
-        self.attn_scale = LayerScale(dim, gamma_init=1)
-        self.ffn_scale = LayerScale(dim, gamma_init=1)
+        self.attn_scale = LayerScale(dim, gamma_init=layerscale_gamma_init)
+        self.ffn_scale = LayerScale(dim, gamma_init=layerscale_gamma_init)
         self.ffn1_norm_in = RMSNorm(dim, eps=norm_eps)
         self.attn_norm_in = RMSNorm(dim, eps=norm_eps)
         # self.dropout = nn.Dropout(dropout)
@@ -428,10 +604,34 @@ class TransformerLayer(nn.Module):
         return x
 
 class Transformer(nn.Module):
-    def __init__(self, dim, n_layers, n_head=8, ffn_mult=4, dropout=0.1, max_position_embeddings=2048, base=10000.0, causal: bool = False, attn_window_size=(64, 64), norm_eps: float = 1e-2):
+    def __init__(
+        self,
+        dim,
+        n_layers,
+        n_head=8,
+        ffn_mult=4,
+        dropout=0.1,
+        max_position_embeddings=2048,
+        base=10000.0,
+        causal: bool = False,
+        attn_window_size=(64, 64),
+        norm_eps: float = 1e-2,
+        layerscale_gamma_init: float = 1.0,
+    ):
         super().__init__()
         self.layers = nn.ModuleList([
-            TransformerLayer(dim, n_head, ffn_mult, dropout, max_position_embeddings=max_position_embeddings, base=base, causal=causal, attn_window_size=attn_window_size, norm_eps=norm_eps)
+            TransformerLayer(
+                dim,
+                n_head,
+                ffn_mult,
+                dropout,
+                max_position_embeddings=max_position_embeddings,
+                base=base,
+                causal=causal,
+                attn_window_size=attn_window_size,
+                norm_eps=norm_eps,
+                layerscale_gamma_init=layerscale_gamma_init,
+            )
             for _ in range(n_layers)
         ])
         self.norm = RMSNorm(dim, eps=norm_eps)
@@ -467,28 +667,129 @@ class UnPatchify2D(nn.Module):
         x = x.permute(0, 2, 3, 1) #(B, H*patch_size, W*patch_size, C)
         return x
     
+# ---------------------------------------------------------------------------
+# Legacy patchify/unpatchify (kept for reference)
+#   - Patchify: Conv1d(stride=patch_size) tokenization
+#   - UnPatchify: ConvTranspose1d(stride=patch_size) waveform expansion
+# ---------------------------------------------------------------------------
+# class Patchify1D(nn.Module):
+#     def __init__(self, in_channels, out_channels, patch_size):
+#         super().__init__()
+#         self.patch_size = patch_size
+#         self.conv = nn.Conv1d(in_channels, out_channels, kernel_size=patch_size, stride=patch_size, bias=False)
+#
+#     def forward(self, x):
+#         x = x.permute(0, 2, 1)  # (B, N, C) -> (B, C, N)
+#         x = self.conv(x)        # (B, C', N//patch_size)
+#         x = x.permute(0, 2, 1)  # (B, N//patch_size, C')
+#         return x
+#
+# class UnPatchify1D(nn.Module):
+#     def __init__(self, in_channels, out_channels, patch_size):
+#         super().__init__()
+#         self.patch_size = patch_size
+#         self.conv = nn.ConvTranspose1d(in_channels, out_channels, kernel_size=patch_size, stride=patch_size, bias=False)
+#
+#     def forward(self, x):
+#         x = x.permute(0, 2, 1)  # (B, N, C) -> (B, C, N)
+#         x = self.conv(x)        # (B, C', N*patch_size)
+#         x = x.permute(0, 2, 1)  # (B, N*patch_size, C')
+#         return x
+
+# ---------------------------------------------------------------------------
+# New patchify/unpatchify: rearrange -> Conv1d(k=7,p=3) / Conv1d(k=7,p=3) -> rearrange
+# - Patchify uses a local-context conv projection across patch indices (N).
+# - UnPatchify predicts per-token waveform patches (patch_size samples) using Conv1d.
+# ---------------------------------------------------------------------------
 class Patchify1D(nn.Module):
-    def __init__(self, in_channels, out_channels, patch_size):
+    def __init__(self, in_channels: int, out_channels: int, patch_size: int):
         super().__init__()
-        self.patch_size = patch_size
-        self.conv = nn.Conv1d(in_channels, out_channels, kernel_size=patch_size, stride=patch_size, bias=False)
-    
-    def forward(self, x):
-        x = x.permute(0, 2, 1)  # (B, N, C) -> (B, C, N)
-        x = self.conv(x)        # (B, C', N//patch_size)
-        x = x.permute(0, 2, 1)  # (B, N//patch_size, C')
+        self.patch_size = int(patch_size)
+        if self.patch_size <= 0:
+            raise ValueError("Patchify1D: patch_size must be > 0")
+        in_channels = int(in_channels)
+        out_channels = int(out_channels)
+        if in_channels <= 0:
+            raise ValueError("Patchify1D: in_channels must be > 0")
+        if out_channels <= 0:
+            raise ValueError("Patchify1D: out_channels must be > 0")
+
+        # Patchify: [B, T, C] -> [B, N, patch_size*C] -> [B, patch_size*C, N] -> conv -> [B, out, N]
+        self.conv = WNConv1d(
+            in_channels * self.patch_size,
+            out_channels,
+            kernel_size=7,
+            padding=3,
+            bias=True,
+            causal=False,
+        )
+
+    def forward(self, x: torch.Tensor) -> torch.Tensor:
+        # x: (B, T, C)
+        if x.dim() != 3:
+            raise ValueError("Patchify1D.forward expects x of shape (B, T, C)")
+        B, T, C = x.shape
+        if C * self.patch_size != int(self.conv.in_channels):
+            raise ValueError(
+                "Patchify1D: input channel mismatch. "
+                f"Got C={C}, patch_size={self.patch_size} => {C * self.patch_size} channels, "
+                f"but conv expects {int(self.conv.in_channels)}."
+            )
+
+        # Keep the same effective rate as stride=patch_size: drop remainder.
+        N = T // self.patch_size
+        if N <= 0:
+            raise ValueError(f"Patchify1D: input too short (T={T}) for patch_size={self.patch_size}")
+        T_trim = N * self.patch_size
+        if T_trim != T:
+            x = x[:, :T_trim, :]
+
+        # [B, T, C] -> [B, N, patch_size*C] -> [B, patch_size*C, N]
+        x = x.reshape(B, N, self.patch_size * C).transpose(1, 2)
+        x = self.conv(x)              # [B, out_channels, N]
+        x = x.transpose(1, 2)         # [B, N, out_channels]
         return x
 
+
 class UnPatchify1D(nn.Module):
-    def __init__(self, in_channels, out_channels, patch_size):
+    def __init__(self, in_channels: int, out_channels: int, patch_size: int):
         super().__init__()
-        self.patch_size = patch_size
-        self.conv = nn.ConvTranspose1d(in_channels, out_channels, kernel_size=patch_size, stride=patch_size, bias=False)
-    
-    def forward(self, x):
-        x = x.permute(0, 2, 1)  # (B, N, C) -> (B, C, N)
-        x = self.conv(x)        # (B, C', N*patch_size)
-        x = x.permute(0, 2, 1)  # (B, N*patch_size, C')
+        self.patch_size = int(patch_size)
+        if self.patch_size <= 0:
+            raise ValueError("UnPatchify1D: patch_size must be > 0")
+        in_channels = int(in_channels)
+        out_channels = int(out_channels)
+        if in_channels <= 0:
+            raise ValueError("UnPatchify1D: in_channels must be > 0")
+        if out_channels <= 0:
+            raise ValueError("UnPatchify1D: out_channels must be > 0")
+
+        # UnPatchify: [B, N, C] -> [B, C, N] -> conv -> [B, out_channels*patch_size, N]
+        #            -> [B, N*patch_size, out_channels]
+        self.conv = WNConv1d(
+            in_channels,
+            out_channels * self.patch_size,
+            kernel_size=7,
+            padding=3,
+            bias=False,
+            causal=False,
+        )
+
+    def forward(self, x: torch.Tensor) -> torch.Tensor:
+        # x: (B, N, C)
+        if x.dim() != 3:
+            raise ValueError("UnPatchify1D.forward expects x of shape (B, N, C)")
+        B, N, C = x.shape
+        if C != int(self.conv.in_channels):
+            raise ValueError(
+                "UnPatchify1D: input channel mismatch. "
+                f"Got C={C}, but conv expects in_channels={int(self.conv.in_channels)}."
+            )
+
+        x = x.transpose(1, 2)         # [B, C, N]
+        x = self.conv(x)              # [B, out_channels*patch_size, N]
+        x = x.transpose(1, 2)         # [B, N, out_channels*patch_size]
+        x = x.reshape(B, N * self.patch_size, -1)  # [B, N*patch_size, out_channels]
         return x
 
 class Downsample(nn.Module):

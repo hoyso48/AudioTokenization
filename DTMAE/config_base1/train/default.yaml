@@ -6,7 +6,7 @@ trainer:
   precision: 'bf16-mixed'
   limit_val_batches: 1.0
   limit_test_batches: 1.0
-  num_sanity_val_steps: 4
+  num_sanity_val_steps: 0
   accumulate_grad_batches: 1
   # Validation scheduling:
   # - `val_check_interval` (int) runs validation every N *training steps* (batches).
@@ -51,9 +51,9 @@ gen_schedule_params:
   warmup_step: 1000
   down_step: 500000
   min_lr: 1.0e-5 # this should be the final lr
-  max_lr: 1.0e-4 
+  max_lr: 5.0e-5 
 disc_schedule_params:
   warmup_step: 1000
   down_step: 500000
   min_lr: 1.0e-5 # this should be the final lr
-  max_lr: 1.0e-4 
+  max_lr: 5.0e-5 
