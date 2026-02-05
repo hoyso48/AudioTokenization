@@ -814,6 +814,143 @@ class PLEBatchTopK(_BatchSelectorBase):
         return mask, avg_r, tau_used
 
 
+class PLEBatchTopKJitter(_BatchSelectorBase):
+    """
+    PLEBatchTopK with train-time per-sample tau jittering for robustness.
+
+    Motivation:
+      - Keep a single global tau controlled by Robbins–Monro (same as PLEBatchTopK),
+        but during training, apply a small per-sample multiplicative jitter:
+
+            tau_b = clamp(tau * exp(u_b), tau_min, tau_max),  u_b ~ Uniform(-a, a)
+
+      - This makes masking patterns (and thus the reconstruction/SSL signal) robust to tau.
+
+    Notes:
+      - Jitter is applied only when self.training is True.
+      - Controller update uses the jittered outcome (avg_r), so tau converges in expectation.
+      - Return signature matches PLEBatchTopK: (mask, avg_r, tau_used) where tau_used is the
+        base (non-jittered) tau tensor on the current device/dtype.
+    """
+
+    def __init__(
+        self,
+        r: float,
+        initial_tau: float = 1.0,
+        ema_mu: float = 0.95,
+        eta0: float = 0.1,
+        decay_T: float = 1000.0,
+        tau_min: float = 1e-6,
+        tau_max: float = 1e6,
+        update_every: int = 1,
+        sample_prob: float = 0.0,
+        min_mask_prob: float = 0.0,
+        max_mask_prob: float = 0.0,
+        min_mask_span: int = 1,
+        max_mask_span: int = 1,
+        max_s: Optional[int] = None,
+        fixed_tau: Optional[float] = None,
+        update_test_time: bool = False,
+        jitter_a: float = 0.4,
+    ):
+        super().__init__(
+            r=r,
+            initial_tau=initial_tau,
+            ema_mu=ema_mu,
+            eta0=eta0,
+            decay_T=decay_T,
+            tau_min=tau_min,
+            tau_max=tau_max,
+            update_every=update_every,
+            sample_prob=sample_prob,
+            min_mask_prob=min_mask_prob,
+            max_mask_prob=max_mask_prob,
+            min_mask_span=min_mask_span,
+            max_mask_span=max_mask_span,
+            max_s=max_s,
+            fixed_tau=fixed_tau,
+            update_test_time=update_test_time,
+            invert_update=False,
+        )
+        if jitter_a < 0.0:
+            raise ValueError("PLEBatchTopKJitter: jitter_a must be >= 0")
+        self.jitter_a = float(jitter_a)
+
+    @torch.no_grad()
+    def forward(self, x: torch.Tensor) -> Tuple[torch.Tensor, torch.Tensor, torch.Tensor]:
+        device = x.device
+        dtype = x.dtype
+        B, N, C = x.shape if x.ndim == 3 else (0, 0, 0)
+        total = B * N
+
+        # Base tau (scalar) on the current device/dtype
+        tau_used = self._get_tau_tensor(device, dtype)
+
+        # Early exit on empty input
+        if total == 0:
+            mask = torch.zeros(B, N, device=device, dtype=torch.bool)
+            avg_r = torch.zeros((), device=device, dtype=dtype)
+            return mask, avg_r, tau_used
+
+        # Build per-sample tau (train-time jitter; eval-time uses base tau for all)
+        if self.training and (self.jitter_a > 0.0) and (self.fixed_tau is None):
+            u = torch.empty(B, device=device, dtype=dtype).uniform_(-self.jitter_a, self.jitter_a)
+            tau_b = tau_used * torch.exp(u)  # [B]
+            tau_b = tau_b.clamp(min=self.tau_min, max=self.tau_max)
+        else:
+            tau_b = tau_used.expand(B)  # [B]
+
+        # Adjacent dissimilarities
+        if N > 1:
+            sim = F.cosine_similarity(x[:, 1:, :], x[:, :-1, :], dim=-1)
+            d = torch.zeros(B, N, device=device, dtype=dtype)
+            d[:, 1:] = (1.0 - sim).to(dtype)
+        else:
+            d = torch.zeros(B, N, device=device, dtype=dtype)
+
+        D = torch.zeros(B, N, device=device, dtype=dtype)
+        if N > 1:
+            D[:, 1:] = torch.cumsum(d[:, 1:], dim=1)
+        L = D[:, -1] if N > 0 else torch.zeros(B, device=device, dtype=dtype)
+
+        # Build frontier mask (per-sample tau)
+        mask = torch.zeros(B, N, device=device, dtype=torch.bool)
+        if N > 0:
+            mask[:, 0] = True
+
+        if N > 1:
+            finite = torch.isfinite(tau_b) & (tau_b > 0.0)
+            if bool(finite.any().item()):
+                # m_b = floor(L_b / tau_b), clamped
+                m_b = torch.floor(L / tau_b).to(torch.long)
+                m_b = torch.clamp(m_b, min=0, max=N - 1)
+                max_m = int(m_b.max().item())
+
+                if max_m > 0:
+                    k = torch.arange(1, max_m + 1, device=device, dtype=dtype).view(1, -1)  # [1, M]
+                    targets = k * tau_b.view(B, 1)  # [B, M]
+                    ge = D.unsqueeze(2) >= targets.unsqueeze(1)  # [B, N, M]
+                    j = ge.float().argmax(dim=1).clamp_(min=1, max=N - 1)  # [B, M]
+
+                    k_idx = torch.arange(1, max_m + 1, device=device).view(1, -1).expand(B, -1)  # [B, M]
+                    valid = k_idx <= m_b.view(B, 1)
+                    valid = valid & finite.view(B, 1)
+                    if valid.any():
+                        sel = valid.nonzero(as_tuple=False)
+                        b_sel = sel[:, 0]
+                        k_sel = sel[:, 1]
+                        pos = j[b_sel, k_sel]
+                        mask[b_sel, pos] = True
+
+        mask = self._apply_max_span_constraint(mask)
+
+        avg_r = self._compute_avg_r(mask, total, dtype)
+        self._controller_step(avg_r)
+        mask = self._maybe_apply_random_mask(mask, dtype)
+
+        return mask, avg_r, tau_used
+
+
 class BatchTopK(_BatchSelectorBase):
     """
     One-shot masking: drop every trailing token whose adjacent cosine similarity exceeds tau.
@@ -975,3 +1112,387 @@ class BatchGreedy(_BatchSelectorBase):
         self._controller_step(avg_r)
         mask = self._maybe_apply_random_mask(mask, dtype)
         return mask, avg_r, tau_used
+
+
+class PLEBatchTopKTrainPerSeq(PLEBatchTopK):
+    """Hybrid selector with train/eval split.
+
+    - Training: per-sequence PLE masking with per-sample `r_b ~ Uniform(train_r_min, train_r_max)`.
+      This mirrors the per-sequence PLE idea in `AudioTokenization/BigCodec_SSL/dtp/tome_ops.py::PLETopK`,
+      but returns DTMAE-style outputs (frontier mask).
+
+    - Eval/Inference: uses the original batch-level global-tau controller from `PLEBatchTopK`.
+
+    Return: (mask, avg_r, tau_used)
+      - mask: [B, N] bool, always keeps token 0.
+      - avg_r: scalar masked ratio computed from the final mask.
+      - tau_used:
+          * train(): mean of per-sequence tau values used to generate the PLE mask
+          * eval():  scalar tau returned by `PLEBatchTopK`
+    """
+
+    def __init__(
+        self,
+        r: float,
+        initial_tau: float = 1.0,
+        ema_mu: float = 0.95,
+        eta0: float = 0.1,
+        decay_T: float = 1000.0,
+        tau_min: float = 1e-6,
+        tau_max: float = 1e6,
+        update_every: int = 1,
+        sample_prob: float = 0.0,
+        min_mask_prob: float = 0.0,
+        max_mask_prob: float = 0.0,
+        min_mask_span: int = 1,
+        max_mask_span: int = 1,
+        max_s: Optional[int] = None,
+        fixed_tau: Optional[float] = None,
+        update_test_time: bool = False,
+        *,
+        train_r_min: Optional[float] = None,
+        train_r_max: Optional[float] = None,
+        update_tau_train_from_train: bool = True,
+    ):
+        super().__init__(
+            r=r,
+            initial_tau=initial_tau,
+            ema_mu=ema_mu,
+            eta0=eta0,
+            decay_T=decay_T,
+            tau_min=tau_min,
+            tau_max=tau_max,
+            update_every=update_every,
+            sample_prob=sample_prob,
+            min_mask_prob=min_mask_prob,
+            max_mask_prob=max_mask_prob,
+            min_mask_span=min_mask_span,
+            max_mask_span=max_mask_span,
+            max_s=max_s,
+            fixed_tau=fixed_tau,
+            update_test_time=update_test_time,
+        )
+
+        if train_r_min is None:
+            train_r_min = float(r)
+        if train_r_max is None:
+            train_r_max = float(r)
+        train_r_min = float(train_r_min)
+        train_r_max = float(train_r_max)
+        if not (0.0 <= train_r_min < 1.0):
+            raise ValueError("PLEBatchTopKTrainPerSeq: train_r_min must be in [0, 1)")
+        if not (0.0 <= train_r_max < 1.0):
+            raise ValueError("PLEBatchTopKTrainPerSeq: train_r_max must be in [0, 1)")
+        if train_r_max < train_r_min:
+            raise ValueError("PLEBatchTopKTrainPerSeq: train_r_max must be >= train_r_min")
+        self.train_r_min = train_r_min
+        self.train_r_max = train_r_max
+        self.update_tau_train_from_train = bool(update_tau_train_from_train)
+
+    @torch.no_grad()
+    def forward(self, x: torch.Tensor) -> Tuple[torch.Tensor, torch.Tensor, torch.Tensor]:
+        if not self.training:
+            return super().forward(x)
+
+        device = x.device
+        dtype = x.dtype
+        B, N, _C = x.shape if x.ndim == 3 else (0, 0, 0)
+        total = B * N
+
+        if total == 0:
+            mask = torch.zeros(B, N, device=device, dtype=torch.bool)
+            avg_r = torch.zeros((), device=device, dtype=dtype)
+            tau_used = self._get_tau_tensor(device, dtype)
+            return mask, avg_r, tau_used
+
+        # Adjacent dissimilarities
+        if N > 1:
+            sim = F.cosine_similarity(x[:, 1:, :], x[:, :-1, :], dim=-1)
+            d = torch.zeros(B, N, device=device, dtype=dtype)
+            d[:, 1:] = (1.0 - sim).to(dtype)
+        else:
+            d = torch.zeros(B, N, device=device, dtype=dtype)
+
+        # Cumulative path length
+        D = torch.zeros(B, N, device=device, dtype=dtype)
+        if N > 1:
+            D[:, 1:] = torch.cumsum(d[:, 1:], dim=1)
+        L = D[:, -1] if N > 0 else torch.zeros(B, device=device, dtype=dtype)
+
+        # Sample per-sequence target r
+        if self.train_r_max > self.train_r_min:
+            r_b = torch.empty(B, device=device, dtype=dtype).uniform_(self.train_r_min, self.train_r_max)
+        else:
+            r_b = torch.full((B,), self.train_r_min, device=device, dtype=dtype)
+        r_b = r_b.clamp(min=0.0, max=1.0 - (1.0 / float(max(1, N))))
+
+        # Convert r_b -> desired kept count (not enforced strictly; duplicates may reduce actual kept)
+        keep_ratio = (1.0 - r_b).clamp(min=0.0, max=1.0)
+        desired_keep = torch.round(keep_ratio * float(N)).to(torch.long)
+        desired_keep = desired_keep.clamp(min=1, max=N)
+        m_target = (desired_keep - 1).clamp(min=0, max=max(0, N - 1))  # number of boundaries
+
+        # Per-sequence tau from target boundary count
+        tau_b = torch.full((B,), float(self.tau_max), device=device, dtype=dtype)
+        valid_tau = (m_target > 0) & torch.isfinite(L) & (L > 0)
+        if bool(valid_tau.any().item()):
+            denom = m_target.to(dtype).clamp_min(1.0)
+            tau_vals = (L / denom).clamp(min=self.tau_min, max=self.tau_max)
+            tau_b = torch.where(valid_tau, tau_vals, tau_b)
+
+        # Build frontier mask
+        mask = torch.zeros(B, N, device=device, dtype=torch.bool)
+        mask[:, 0] = True
+
+        if N > 1:
+            max_m = int(m_target.max().item())
+            if max_m > 0 and bool(valid_tau.any().item()):
+                k = torch.arange(1, max_m + 1, device=device, dtype=dtype).view(1, -1)  # [1, M]
+                targets = k * tau_b.view(B, 1)  # [B, M]
+                ge = D.unsqueeze(2) >= targets.unsqueeze(1)  # [B, N, M]
+                j = ge.float().argmax(dim=1).clamp_(min=1, max=N - 1)  # [B, M]
+
+                k_idx = torch.arange(1, max_m + 1, device=device).view(1, -1).expand(B, -1)
+                valid_k = k_idx <= m_target.view(B, 1)
+                valid_k = valid_k & valid_tau.view(B, 1)
+                if valid_k.any():
+                    sel = valid_k.nonzero(as_tuple=False)
+                    b_sel = sel[:, 0]
+                    k_sel = sel[:, 1]
+                    pos = j[b_sel, k_sel]
+                    mask[b_sel, pos] = True
+
+        # Fallback for degenerate sequences (e.g., L==0): keep the first desired_keep tokens.
+        fallback = (m_target > 0) & (~valid_tau)
+        if bool(fallback.any().item()):
+            b_sel = fallback.nonzero(as_tuple=False).squeeze(1)
+            pos = torch.arange(N, device=device, dtype=torch.long).view(1, N)
+            fb_mask = pos < desired_keep.index_select(0, b_sel).view(-1, 1)
+            mask.index_copy_(0, b_sel, fb_mask)
+            mask[b_sel, 0] = True
+
+        # Enforce max-span constraint before optional random masking
+        mask = self._apply_max_span_constraint(mask)
+
+        # Optional: random masking override/mix (per-sequence prob ~ Uniform(min_mask_prob, max_mask_prob))
+        mask = self._maybe_apply_random_mask(mask, dtype)
+        if N > 0:
+            mask[:, 0] = True
+        mask = self._apply_max_span_constraint(mask)
+
+        avg_r = self._compute_avg_r(mask, total, dtype)
+        tau_used = tau_b.mean()
+        if self.update_tau_train_from_train and (self.fixed_tau is None):
+            self.tau_train.fill_(float(tau_used.item()))
+        return mask, avg_r, tau_used
+
+
+class BatchTopKTrainPerSeq(BatchTopK):
+    """Hybrid selector with train/eval split.
+
+    - Training: per-sequence Top-K masking with per-sample `r_b ~ Uniform(train_r_min, train_r_max)`.
+      Implementation removes the right token of the top-K adjacent similarities per sequence.
+    - Eval/Inference: uses the original batch-level global-tau controller from `BatchTopK`.
+    """
+
+    def __init__(
+        self,
+        r: float,
+        initial_tau: float = 0.6,
+        ema_mu: float = 0.95,
+        eta0: float = 0.1,
+        decay_T: float = 1000.0,
+        tau_min: float = 1e-3,
+        tau_max: float = 0.999,
+        update_every: int = 1,
+        sample_prob: float = 0.0,
+        min_mask_prob: float = 0.0,
+        max_mask_prob: float = 0.0,
+        min_mask_span: int = 1,
+        max_mask_span: int = 1,
+        max_s: Optional[int] = None,
+        fixed_tau: Optional[float] = None,
+        update_test_time: bool = False,
+        *,
+        train_r_min: Optional[float] = None,
+        train_r_max: Optional[float] = None,
+        update_tau_train_from_train: bool = True,
+    ):
+        super().__init__(
+            r=r,
+            initial_tau=initial_tau,
+            ema_mu=ema_mu,
+            eta0=eta0,
+            decay_T=decay_T,
+            tau_min=tau_min,
+            tau_max=tau_max,
+            update_every=update_every,
+            sample_prob=sample_prob,
+            min_mask_prob=min_mask_prob,
+            max_mask_prob=max_mask_prob,
+            min_mask_span=min_mask_span,
+            max_mask_span=max_mask_span,
+            max_s=max_s,
+            fixed_tau=fixed_tau,
+            update_test_time=update_test_time,
+        )
+
+        if train_r_min is None:
+            train_r_min = float(r)
+        if train_r_max is None:
+            train_r_max = float(r)
+        train_r_min = float(train_r_min)
+        train_r_max = float(train_r_max)
+        if not (0.0 <= train_r_min < 1.0):
+            raise ValueError("BatchTopKTrainPerSeq: train_r_min must be in [0, 1)")
+        if not (0.0 <= train_r_max < 1.0):
+            raise ValueError("BatchTopKTrainPerSeq: train_r_max must be in [0, 1)")
+        if train_r_max < train_r_min:
+            raise ValueError("BatchTopKTrainPerSeq: train_r_max must be >= train_r_min")
+        self.train_r_min = train_r_min
+        self.train_r_max = train_r_max
+        self.update_tau_train_from_train = bool(update_tau_train_from_train)
+
+    @torch.no_grad()
+    def forward(self, x: torch.Tensor) -> Tuple[torch.Tensor, torch.Tensor, torch.Tensor]:
+        if not self.training:
+            return super().forward(x)
+
+        device = x.device
+        dtype = x.dtype
+        B, N, _C = x.shape if x.ndim == 3 else (0, 0, 0)
+        total = B * N
+
+        if total == 0:
+            mask = torch.zeros(B, N, device=device, dtype=torch.bool)
+            avg_r = torch.zeros((), device=device, dtype=dtype)
+            tau_used = self._get_tau_tensor(device, dtype)
+            return mask, avg_r, tau_used
+
+        # Sample per-sequence target r and convert to number of tokens to drop.
+        if self.train_r_max > self.train_r_min:
+            r_b = torch.empty(B, device=device, dtype=dtype).uniform_(self.train_r_min, self.train_r_max)
+        else:
+            r_b = torch.full((B,), self.train_r_min, device=device, dtype=dtype)
+        r_b = r_b.clamp(min=0.0, max=1.0 - (1.0 / float(max(1, N))))
+        K_b = torch.floor(r_b * float(N)).to(torch.long)
+        K_b = K_b.clamp(min=0, max=max(0, N - 1))
+
+        mask = torch.ones(B, N, device=device, dtype=torch.bool)
+        mask[:, 0] = True
+
+        # Implied per-seq tau (for logging/backward-compat): K-th largest similarity cut.
+        tau_b = torch.full((B,), float(self.tau_max), device=device, dtype=dtype)
+
+        if N > 1:
+            sim = F.cosine_similarity(x[:, 1:, :], x[:, :-1, :], dim=-1)  # [B, N-1]
+            Kmax = int(K_b.max().item())
+            if Kmax > 0:
+                vals, idx = torch.topk(sim, k=Kmax, dim=1)  # vals desc, idx in [0..N-2]
+
+                # Remove the right token of the selected pairs.
+                k_idx = torch.arange(Kmax, device=device).view(1, -1).expand(B, -1)
+                valid = k_idx < K_b.view(B, 1)
+                if valid.any():
+                    sel = valid.nonzero(as_tuple=False)
+                    b_sel = sel[:, 0]
+                    j_sel = sel[:, 1]
+                    pos = (idx[b_sel, j_sel] + 1).clamp(min=1, max=N - 1)
+                    mask[b_sel, pos] = False
+
+                # tau_b per sequence (only meaningful when K_b>0)
+                k_sel = (K_b.clamp(min=1) - 1).view(B, 1)
+                tau_pick = vals.gather(1, k_sel).squeeze(1)
+                tau_b = torch.where(K_b > 0, tau_pick, tau_b)
+                tau_b = tau_b.clamp(min=self.tau_min, max=self.tau_max)
+
+        mask = self._apply_max_span_constraint(mask)
+
+        # Optional random masking override/mix
+        mask = self._maybe_apply_random_mask(mask, dtype)
+        if N > 0:
+            mask[:, 0] = True
+        mask = self._apply_max_span_constraint(mask)
+
+        avg_r = self._compute_avg_r(mask, total, dtype)
+        tau_used = tau_b.mean()
+        if self.update_tau_train_from_train and (self.fixed_tau is None):
+            self.tau_train.fill_(float(tau_used.item()))
+        return mask, avg_r, tau_used
+
+
+class BatchGreedyTrainPerSeq(BatchGreedy):
+    """Hybrid selector with train/eval split.
+
+    - Training: per-sequence greedy masking with per-sample `r_b ~ Uniform(train_r_min, train_r_max)`.
+      The intended behavior is to iteratively remove K_b tokens per sequence (true greedy),
+      which can be expensive.
+
+    - Eval/Inference: uses the original `BatchGreedy` (global tau controller).
+
+    TODO: Implement train-time true greedy K_b removals (per-seq loops).
+    """
+
+    def __init__(
+        self,
+        r: float,
+        initial_tau: float = 0.85,
+        ema_mu: float = 0.95,
+        eta0: float = 0.1,
+        decay_T: float = 1000.0,
+        tau_min: float = 1e-3,
+        tau_max: float = 0.999,
+        update_every: int = 1,
+        sample_prob: float = 0.0,
+        min_mask_prob: float = 0.0,
+        max_mask_prob: float = 0.0,
+        min_mask_span: int = 1,
+        max_mask_span: int = 1,
+        max_s: Optional[int] = None,
+        fixed_tau: Optional[float] = None,
+        update_test_time: bool = False,
+        *,
+        train_r_min: Optional[float] = None,
+        train_r_max: Optional[float] = None,
+    ):
+        super().__init__(
+            r=r,
+            initial_tau=initial_tau,
+            ema_mu=ema_mu,
+            eta0=eta0,
+            decay_T=decay_T,
+            tau_min=tau_min,
+            tau_max=tau_max,
+            update_every=update_every,
+            sample_prob=sample_prob,
+            min_mask_prob=min_mask_prob,
+            max_mask_prob=max_mask_prob,
+            min_mask_span=min_mask_span,
+            max_mask_span=max_mask_span,
+            max_s=max_s,
+            fixed_tau=fixed_tau,
+            update_test_time=update_test_time,
+        )
+
+        if train_r_min is None:
+            train_r_min = float(r)
+        if train_r_max is None:
+            train_r_max = float(r)
+        train_r_min = float(train_r_min)
+        train_r_max = float(train_r_max)
+        if not (0.0 <= train_r_min < 1.0):
+            raise ValueError("BatchGreedyTrainPerSeq: train_r_min must be in [0, 1)")
+        if not (0.0 <= train_r_max < 1.0):
+            raise ValueError("BatchGreedyTrainPerSeq: train_r_max must be in [0, 1)")
+        if train_r_max < train_r_min:
+            raise ValueError("BatchGreedyTrainPerSeq: train_r_max must be >= train_r_min")
+        self.train_r_min = train_r_min
+        self.train_r_max = train_r_max
+
+    @torch.no_grad()
+    def forward(self, x: torch.Tensor) -> Tuple[torch.Tensor, torch.Tensor, torch.Tensor]:
+        if self.training:
+            raise NotImplementedError(
+                "BatchGreedyTrainPerSeq.train(): TODO implement per-sequence true greedy masking (iteratively remove K_b tokens)."
+            )
+        return super().forward(x)

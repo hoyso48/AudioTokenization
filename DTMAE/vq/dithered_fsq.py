@@ -101,10 +101,10 @@ class DitheredFSQ(nn.Module):
         dim: int,
         codebook_dim: int = 6,
         # Training settings
-        train_levels: List[int] = None,
+        train_levels: List[int] | None = None,
         train_num_residuals: int = 1,
         # Inference settings
-        inference_levels: Union[int, List[int]] = None,
+        inference_levels: int | List[int] | None = None,
         inference_num_residuals: int = 1,
         # Common settings
         num_codebooks: int = 1,
@@ -117,6 +117,12 @@ class DitheredFSQ(nn.Module):
         # Default train_levels if not provided
         if train_levels is None:
             train_levels = [17, 9, 5]
+
+        if train_num_residuals != 1:
+            raise ValueError(
+                "Post-hoc residual FSQ per TAAE requires train_num_residuals=1. "
+                "Use residual stages only at inference."
+            )
         
         # Process inference_levels: convert to list of per-dimension levels
         if inference_levels is None:
@@ -127,6 +133,20 @@ class DitheredFSQ(nn.Module):
             inference_levels_list = list(inference_levels)
             assert len(inference_levels_list) == codebook_dim, \
                 f"inference_levels list length ({len(inference_levels_list)}) must match codebook_dim ({codebook_dim})"
+
+        if inference_num_residuals > 1:
+            if len(set(inference_levels_list)) != 1:
+                raise ValueError(
+                    "Residual FSQ requires uniform inference_levels when using post-hoc decomposition."
+                )
+            level = inference_levels_list[0]
+            if level < 3:
+                raise ValueError("Residual FSQ requires levels >= 3.")
+            intervals = level - 1
+            if intervals & (intervals - 1) != 0:
+                raise ValueError(
+                    "Residual FSQ requires levels of the form L=2^n+1 (so L-1 is a power of two)."
+                )
         
         self.dim = dim
         self.codebook_dim = codebook_dim
@@ -236,51 +256,20 @@ class DitheredFSQ(nn.Module):
         L = random.choice(self.train_levels)
         half_l = self._get_half_l_uniform(L, z.device)
         
-        # Hybrid dithering approach (TAAE style)
-        quantized = z
-        
-        # First pass: decide between keeping z or quantizing with STE
-        mask = torch.bernoulli(
-            torch.full([batch_size, 1, 1, 1], self.noise_dropout, device=z.device)
-        ).bool().expand_as(z)
-        
+        # Hybrid dithering approach (TAAE style): 50/50 noise vs STE when noise_dropout=0.5
         ste_quantized = self._scale_and_shift_inverse(
             round_ste(self._scale_and_shift(z, half_l)),
             half_l
         )
-        quantized = torch.where(mask, quantized, ste_quantized)
-        
-        # Second pass: decide between keeping current or adding noise
-        mask = torch.bernoulli(
+
+        noisy = z + (torch.rand_like(z) - 0.5) * half_l
+
+        noise_mask = torch.bernoulli(
             torch.full([batch_size, 1, 1, 1], self.noise_dropout, device=z.device)
         ).bool().expand_as(z)
-        
-        noisy = z + (torch.rand_like(z) - 0.5) * half_l
-        quantized = torch.where(mask, quantized, noisy)
-        
-        # Apply residual decomposition if train_num_residuals > 1
-        if self.train_num_residuals > 1:
-            # Re-quantize with residual stages using uniform level
-            quantized_residual = torch.zeros_like(z)
-            residual = z
-            
-            for k in range(self.train_num_residuals):
-                stage_scale = self.scale / (2 ** k)
-                stage_half_l = self._get_half_l_uniform(L, z.device) * (stage_scale / self.scale)
-                
-                level_indices = (residual + stage_scale) / stage_half_l
-                level_indices = round_ste(level_indices)
-                stage_quantized = level_indices * stage_half_l - stage_scale
-                
-                quantized_residual = quantized_residual + stage_quantized
-                residual = residual - stage_quantized
-            
-            # Mix dithered with residual based on noise_dropout
-            mix_mask = torch.bernoulli(
-                torch.full([batch_size, 1, 1, 1], self.noise_dropout, device=z.device)
-            ).bool().expand_as(z)
-            quantized = torch.where(mix_mask, quantized, quantized_residual)
-        
+
+        quantized = torch.where(noise_mask, noisy, ste_quantized)
+
         return quantized
     
     def quantize(self, z: Tensor) -> Tensor:

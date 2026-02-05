@@ -59,6 +59,21 @@ PLE efficiently solves this problem. It operates as follows:
 
 PLE achieves state-of-the-art performance with negligible computational overhead.
 
+### 2.3. Practical DTP Design: Train-time vs Eval/Inference
+
+In practice, we explicitly separate the behavior of DTP between training and evaluation/inference.
+
+**(A) Train-time (per-sequence target rate):**
+- Sample a per-sequence masking ratio: `r_b ~ Uniform(a, b)`.
+- Apply a per-sequence selection algorithm (e.g., per-seq PLE or per-seq Top-K) to generate a frontier mask.
+- This encourages robustness to a *distribution* of frame rates instead of only a single global target.
+
+**(B) Eval/Inference (global tau + test-time adaptation):**
+- Use a single global threshold/temperature-like parameter (`tau`) and control it with a Robbins--Monro style feedback controller so that the *global average* masked ratio matches the configured target `r`.
+- When `update_test_time=True`, `tau` is adapted online during evaluation (separate eval-state buffers), mitigating train/test shifts in the feature-distance distribution.
+
+**DTMAE implementation note:** the DTP module returns a boolean frontier mask `[B, N]` (token 0 always kept). The downsampler packs kept tokens (varlen), and the upsampler fills the masked positions (e.g., with a learned `<MASK>` embedding).
+
 ---
 
 ## 3. Experimental Setup
@@ -174,7 +189,7 @@ Repeat upsampling & 0.8 & 2.618 & 3.305 & 0.932 & 3.684 & \textbf{0.794} & 3.133
 
 ## 5. Critical Questions & Future Work
 
-### 5.1. MUST DO
+### 5.1. optional
 *   **Connecting DTM to Semantic Learning:** The most critical question is: *Can we establish a strong link between DTM and semantic learning?*
     *   **Problem:** The large receptive field of `Encoder(L1)` might prevent the masked reconstruction from being a consistent SSL signal (i.e., it's too easy for the model).
     *   **Challenge:** However, removing or replacing `Encoder(L1)` with a simple CNN encoder significantly degrades reconstruction performance, which is our primary goal.
@@ -184,9 +199,10 @@ Repeat upsampling & 0.8 & 2.618 & 3.305 & 0.932 & 3.684 & \textbf{0.794} & 3.133
 *   **Implement Semantic Evaluation Pipeline.**
 
 ### 5.2. OPTIONAL
-*   **Variable Frame Rate:** The current DTP implementation selects a fixed number of tokens.
-    *   **Needed:** Implement a threshold-based PLE and add variable-length support to the level 2 Transformer (e.g., via Flash Attention).
-*   **2D Patch Tokens:** Explore 2D patch tokens from spectrograms, similar to how RVQ can be viewed as 2D.
+*   **Variable Frame Rate:** DTP can be treated as VFR tokenization.
+    *   **Current:** global-tau controller targets a global average `r`, yielding per-sequence variable kept counts.
+    *   **Needed:** add more explicit controllability (e.g., per-seq targets at inference or true threshold-only policies) and validate downstream semantic benefits at very low frame rates (<10Hz).
+<!-- *   **2D Patch Tokens:** Explore 2D patch tokens from spectrograms, similar to how RVQ can be viewed as 2D. -->
 *   **General Audio Domain:** Extend training and evaluation to general audio datasets (e.g., AudioSet) since PLE does not rely on speech-specific priors.
 *   **Causal/Streaming Support:** Investigate adapting the model for streaming.
     *   **Concern:** PLE can be implemented causally, but the MAE-style decoder is inherently non-causal.
@@ -201,8 +217,8 @@ Repeat upsampling & 0.8 & 2.618 & 3.305 & 0.932 & 3.684 & \textbf{0.794} & 3.133
     *   Path Length Equalization (PLE)?
 
 ### ONGOING work
-*   5.2.1: VFR implementation - currently supported via tau estimation in batch-topk manner, and the training efficiency remains by utilizing varlen kernel of flash attention-v2.
-    **problem** current way of estimating tau to get desired global reduction ratio(r) is not stable. ex. if we target r=0.5, estimate the tau based on training data, and using estimated tau gives r=0.6(over-reduction) on the test data. It seems quite random.
-    **update** almost done. we use robbins-monro algorithm to estimate tau during training for every algorithm, and just adjust a bit on test-time to match the target r. everything seems alright now.
-
-*   5.1: This part is the most important to-do. we haven't done anything yet.
+*   5.2.1: VFR implementation
+    - **Current:** supported via a global-tau controller (Robbins--Monro) that targets the desired *global average* reduction ratio `r` while allowing per-sequence kept counts to vary.
+    - **Train/Eval split:** training can sample per-sequence `r_b ~ Uniform(a,b)` and apply per-seq selection; evaluation uses global tau and optionally adapts it online with `update_test_time=True`.
+    - **Problem:** feature-distance distribution shift can still cause a mismatch between the intended `r` and the realized masked ratio if tau is frozen.
+    - **Update:** online test-time adaptation of tau (eval-state buffers) stabilizes the realized `r` without requiring per-eval re-initialization (unless explicitly reset).
