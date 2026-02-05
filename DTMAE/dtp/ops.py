@@ -1179,10 +1179,10 @@ class PLEBatchTopKTrainPerSeq(PLEBatchTopK):
             train_r_max = float(r)
         train_r_min = float(train_r_min)
         train_r_max = float(train_r_max)
-        if not (0.0 <= train_r_min < 1.0):
-            raise ValueError("PLEBatchTopKTrainPerSeq: train_r_min must be in [0, 1)")
-        if not (0.0 <= train_r_max < 1.0):
-            raise ValueError("PLEBatchTopKTrainPerSeq: train_r_max must be in [0, 1)")
+        if not (0.0 <= train_r_min <= 1.0):
+            raise ValueError("PLEBatchTopKTrainPerSeq: train_r_min must be in [0, 1]")
+        if not (0.0 <= train_r_max <= 1.0):
+            raise ValueError("PLEBatchTopKTrainPerSeq: train_r_max must be in [0, 1]")
         if train_r_max < train_r_min:
             raise ValueError("PLEBatchTopKTrainPerSeq: train_r_max must be >= train_r_min")
         self.train_r_min = train_r_min
@@ -1224,7 +1224,8 @@ class PLEBatchTopKTrainPerSeq(PLEBatchTopK):
             r_b = torch.empty(B, device=device, dtype=dtype).uniform_(self.train_r_min, self.train_r_max)
         else:
             r_b = torch.full((B,), self.train_r_min, device=device, dtype=dtype)
-        r_b = r_b.clamp(min=0.0, max=1.0 - (1.0 / float(max(1, N))))
+        r_upper = 1.0 if N <= 1 else (1.0 - (1.0 / float(N)))
+        r_b = r_b.clamp(min=0.0, max=r_upper)
 
         # Convert r_b -> desired kept count (not enforced strictly; duplicates may reduce actual kept)
         keep_ratio = (1.0 - r_b).clamp(min=0.0, max=1.0)
@@ -1343,10 +1344,10 @@ class BatchTopKTrainPerSeq(BatchTopK):
             train_r_max = float(r)
         train_r_min = float(train_r_min)
         train_r_max = float(train_r_max)
-        if not (0.0 <= train_r_min < 1.0):
-            raise ValueError("BatchTopKTrainPerSeq: train_r_min must be in [0, 1)")
-        if not (0.0 <= train_r_max < 1.0):
-            raise ValueError("BatchTopKTrainPerSeq: train_r_max must be in [0, 1)")
+        if not (0.0 <= train_r_min <= 1.0):
+            raise ValueError("BatchTopKTrainPerSeq: train_r_min must be in [0, 1]")
+        if not (0.0 <= train_r_max <= 1.0):
+            raise ValueError("BatchTopKTrainPerSeq: train_r_max must be in [0, 1]")
         if train_r_max < train_r_min:
             raise ValueError("BatchTopKTrainPerSeq: train_r_max must be >= train_r_min")
         self.train_r_min = train_r_min
@@ -1374,7 +1375,8 @@ class BatchTopKTrainPerSeq(BatchTopK):
             r_b = torch.empty(B, device=device, dtype=dtype).uniform_(self.train_r_min, self.train_r_max)
         else:
             r_b = torch.full((B,), self.train_r_min, device=device, dtype=dtype)
-        r_b = r_b.clamp(min=0.0, max=1.0 - (1.0 / float(max(1, N))))
+        r_upper = 1.0 if N <= 1 else (1.0 - (1.0 / float(N)))
+        r_b = r_b.clamp(min=0.0, max=r_upper)
         K_b = torch.floor(r_b * float(N)).to(torch.long)
         K_b = K_b.clamp(min=0, max=max(0, N - 1))
 
@@ -1480,10 +1482,10 @@ class BatchGreedyTrainPerSeq(BatchGreedy):
             train_r_max = float(r)
         train_r_min = float(train_r_min)
         train_r_max = float(train_r_max)
-        if not (0.0 <= train_r_min < 1.0):
-            raise ValueError("BatchGreedyTrainPerSeq: train_r_min must be in [0, 1)")
-        if not (0.0 <= train_r_max < 1.0):
-            raise ValueError("BatchGreedyTrainPerSeq: train_r_max must be in [0, 1)")
+        if not (0.0 <= train_r_min <= 1.0):
+            raise ValueError("BatchGreedyTrainPerSeq: train_r_min must be in [0, 1]")
+        if not (0.0 <= train_r_max <= 1.0):
+            raise ValueError("BatchGreedyTrainPerSeq: train_r_max must be in [0, 1]")
         if train_r_max < train_r_min:
             raise ValueError("BatchGreedyTrainPerSeq: train_r_max must be >= train_r_min")
         self.train_r_min = train_r_min

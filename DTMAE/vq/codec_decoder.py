@@ -1,7 +1,7 @@
 import numpy as np
 import torch
 import torch.nn as nn
-from .module import Transformer, ConvUpsample, UnPatchify1D
+from .module import Transformer, ConvUpsample, UnPatchify1D, WNConv1d#, WNConv1dVarlen
 from .alias_free_torch import *
 
 # Quantizer imports - for dynamic instantiation
@@ -184,6 +184,7 @@ class TransformerDecoderISTFT(nn.Module):
                  # codebook_dim=8,
                  norm_eps: float = 1e-2,
                  attn_window_size=(64, 64),
+                 layerscale_gamma_init: float = 1.0,
                 ):
         super().__init__()
         self.hop_length = hop_length
@@ -222,6 +223,7 @@ class TransformerDecoderISTFT(nn.Module):
                 causal=causal,
                 attn_window_size=attn_window_size,
                 norm_eps=norm_eps,
+                layerscale_gamma_init=layerscale_gamma_init,
                 )
         else:
             self.transformer_backbone_level2 = nn.Identity()
@@ -238,6 +240,7 @@ class TransformerDecoderISTFT(nn.Module):
                 causal=causal,
                 attn_window_size=attn_window_size,
                 norm_eps=norm_eps,
+                layerscale_gamma_init=layerscale_gamma_init,
                 )
         else:
             self.transformer_backbone_level1 = nn.Identity()
@@ -245,6 +248,7 @@ class TransformerDecoderISTFT(nn.Module):
         # Use existing ISTFTHead
         self.head = ISTFTHead(dim=n_fft+2, n_fft=n_fft, hop_length=hop_length, padding="same")
         # self.head = UnPatchify1D(dim, 1, hop_length)
+        # self.conv = WNConv1dVarlen(dim, dim, kernel_size=3, stride=1, padding=1, causal=causal, bias=False)
 
         self.conv = ConvUpsample(dim, n_fft+2, norm_eps=norm_eps)
         
@@ -274,7 +278,7 @@ class TransformerDecoderISTFT(nn.Module):
         if level == 2:
             # Input projection
             x = self.input_proj(x)  # (B, T, dim)
-
+            # x = self.conv(x, cu_seqlens=cu_seqlens, max_seqlen=max_seqlen)
             x = self.transformer_backbone_level2(x, position_ids=position_ids, cu_seqlens=cu_seqlens, max_seqlen=max_seqlen)  # (B, T, dim)
             return x
         elif level == 1:

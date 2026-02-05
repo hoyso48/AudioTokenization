@@ -95,27 +95,9 @@ quantizer:
 
 resampler:
   use_dtp: True
-  dtp_cls: PLEBatchTopK
-  dtp_params:
-    r: 0.5
-    initial_tau: 1.0
-    ema_mu: 0.95
-    eta0: 0.1
-    decay_T: 1000.0
-    tau_min: 1e-6
-    tau_max: 1e6
-    update_every: 1
-    max_s: null
-    sample_prob: 0
-    min_mask_span: 1
-    max_mask_span: 1
-    min_mask_prob: 0.5
-    max_mask_prob: 0.5
-  # dtp_cls: PLEBatchTopKTrainPerSeq
+  # dtp_cls: PLEBatchTopK
   # dtp_params:
-  #   # eval/infer에서 target global avg ratio
   #   r: 0.5
-  #   # eval/infer global-tau controller
   #   initial_tau: 1.0
   #   ema_mu: 0.95
   #   eta0: 0.1
@@ -123,17 +105,35 @@ resampler:
   #   tau_min: 1e-6
   #   tau_max: 1e6
   #   update_every: 1
-  #   update_test_time: true   # eval/infer에서 tau를 계속 맞춰가려면 true
-  #   # train-time per-seq r sampling
-  #   train_r_min: 0.0
-  #   train_r_max: 1.0
-  #   # (옵션) train에서 per-seq random masking 섞기 (확률 sample_prob로 PLE 대신 랜덤 적용)
-  #   sample_prob: 0.0
-  #   min_mask_prob: 0.5
-  #   max_mask_prob: 0.5
+  #   max_s: null
+  #   sample_prob: 0
   #   min_mask_span: 1
   #   max_mask_span: 1
-  #   max_s: null
+  #   min_mask_prob: 0.5
+  #   max_mask_prob: 0.5
+  dtp_cls: PLEBatchTopKTrainPerSeq
+  dtp_params:
+    # eval/infer에서 target global avg ratio
+    r: 0.5
+    # eval/infer global-tau controller
+    initial_tau: 1.0
+    ema_mu: 0.95
+    eta0: 0.1
+    decay_T: 1000.0
+    tau_min: 1e-6
+    tau_max: 1e6
+    update_every: 1
+    update_test_time: true   # eval/infer에서 tau를 계속 맞춰가려면 true
+    # train-time per-seq r sampling
+    train_r_min: 0.0
+    train_r_max: 1.0
+    # (옵션) train에서 per-seq random masking 섞기 (확률 sample_prob로 PLE 대신 랜덤 적용)
+    sample_prob: 0.0
+    min_mask_prob: 0.5
+    max_mask_prob: 0.5
+    min_mask_span: 1
+    max_mask_span: 1
+    max_s: null
   downsampler_cls: FrontierDownsampler
   downsampler_params: {}
   upsampler_cls: MaskUpsampler

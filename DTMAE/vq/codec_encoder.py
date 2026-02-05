@@ -1,7 +1,7 @@
 import torch
 from torch import nn
 import torch.nn.functional as F
-from .module import  Transformer, ConvDownsample, Patchify1D, RMSNorm
+from .module import  Transformer, ConvDownsample, Patchify1D, RMSNorm, WNConv1d#, WNConv1dVarlen
 from .alias_free_torch import *
 
 def init_weights(m):
@@ -63,7 +63,8 @@ class TransformerEncoderSTFT(nn.Module):
                  causal=False,
                  out_channels=1024,
                  norm_eps: float = 1e-2,
-                 attn_window_size=(64, 64)):
+                 attn_window_size=(64, 64),
+                 layerscale_gamma_init: float = 1.0):
         super().__init__()
         self.hop_length = hop_length
         self.n_fft = n_fft
@@ -76,9 +77,11 @@ class TransformerEncoderSTFT(nn.Module):
         )
 
         stft_dim = n_fft // 2 + 1
-        # self.patchify = Patchify1D(1, dim, hop_length)
-        # self.norm = RMSNorm(dim)
         self.conv = ConvDownsample(2 * stft_dim, dim, norm_eps=norm_eps)
+        # self.norm = RMSNorm(dim)
+
+        # self.patchify = Patchify1D(1, dim, hop_length)
+        # self.conv = WNConv1dVarlen(dim, dim, kernel_size=3, stride=1, padding=1, causal=causal, bias=False)
 
         if n_layers_level1 > 0:
             self.transformer_backbone_level1 = Transformer(
@@ -92,6 +95,7 @@ class TransformerEncoderSTFT(nn.Module):
                     causal=causal,
                     attn_window_size=attn_window_size,
                     norm_eps=norm_eps,
+                    layerscale_gamma_init=layerscale_gamma_init,
                 )
         else:
             self.transformer_backbone_level1 = nn.Identity()
@@ -107,6 +111,7 @@ class TransformerEncoderSTFT(nn.Module):
                 causal=causal,
                 attn_window_size=attn_window_size,
                 norm_eps=norm_eps,
+                layerscale_gamma_init=layerscale_gamma_init,
             )
         else:
             self.transformer_backbone_level2 = nn.Identity()
