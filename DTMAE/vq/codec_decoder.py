@@ -1,7 +1,7 @@
 import numpy as np
 import torch
 import torch.nn as nn
-from .module import Transformer, ConvUpsample, UnPatchify1D, WNConv1d#, WNConv1dVarlen
+from .module import Transformer, ConvUpsample, UnPatchify1D
 from .alias_free_torch import *
 
 # Quantizer imports - for dynamic instantiation
@@ -204,6 +204,14 @@ class TransformerDecoderISTFT(nn.Module):
         # Dynamic quantizer instantiation (like resampler pattern)
         quantizer_class = getattr(quantizers, quantizer_cls)
         self.quantizer = quantizer_class(**quantizer_params)
+
+        self.quantizer_in_proj = nn.Identity()
+        self.quantizer_out_proj = nn.Identity()
+        if quantizer_cls == 'TAAEDitheredFSQ':
+            quantizer_dim = getattr(self.quantizer, 'dim', in_channels)
+            if quantizer_dim != in_channels:
+                self.quantizer_in_proj = nn.Linear(in_channels, quantizer_dim)
+                self.quantizer_out_proj = nn.Linear(quantizer_dim, in_channels)
         
         # Input projection from quantized features to conformer dimension
         if in_channels != dim:
@@ -246,10 +254,8 @@ class TransformerDecoderISTFT(nn.Module):
             self.transformer_backbone_level1 = nn.Identity()
         
         # Use existing ISTFTHead
+        # self.proj = nn.Linear(dim, n_fft+2)
         self.head = ISTFTHead(dim=n_fft+2, n_fft=n_fft, hop_length=hop_length, padding="same")
-        # self.head = UnPatchify1D(dim, 1, hop_length)
-        # self.conv = WNConv1dVarlen(dim, dim, kernel_size=3, stride=1, padding=1, causal=causal, bias=False)
-
         self.conv = ConvUpsample(dim, n_fft+2, norm_eps=norm_eps)
         
         self.reset_parameters()
@@ -258,7 +264,12 @@ class TransformerDecoderISTFT(nn.Module):
         if vq is True:
             # Unified quantizer interface
             # All quantizers return: (quantized, indices, commit_loss_or_none)
-            result = self.quantizer(x)
+            q_in = self.quantizer_in_proj(x)
+            taae_varlen = (self.quantizer_cls == 'TAAEDitheredFSQ' and q_in.dim() == 2)
+            if taae_varlen:
+                q_in = q_in.unsqueeze(0)
+
+            result = self.quantizer(q_in)
             
             # Handle different return formats
             if len(result) == 2:
@@ -272,18 +283,22 @@ class TransformerDecoderISTFT(nn.Module):
                 if commit_loss is not None and not isinstance(commit_loss, list):
                     if isinstance(commit_loss, torch.Tensor) and commit_loss.dim() == 0:
                         commit_loss = [commit_loss]
+
+            if taae_varlen:
+                x = x.squeeze(0)
+                q = q.squeeze(0)
+
+            x = self.quantizer_out_proj(x)
             
             return x, q, commit_loss
         
         if level == 2:
             # Input projection
             x = self.input_proj(x)  # (B, T, dim)
-            # x = self.conv(x, cu_seqlens=cu_seqlens, max_seqlen=max_seqlen)
             x = self.transformer_backbone_level2(x, position_ids=position_ids, cu_seqlens=cu_seqlens, max_seqlen=max_seqlen)  # (B, T, dim)
             return x
         elif level == 1:
             x = self.transformer_backbone_level1(x)  # (B, T, dim)
-
             x = self.conv(x)
             
             audio, x_pred = self.head(x)
@@ -296,13 +311,30 @@ class TransformerDecoderISTFT(nn.Module):
             raise ValueError(f"Unsupported level: {level}")
 
     def vq2emb(self, vq):
-        self.quantizer = self.quantizer.eval()
-        x = self.quantizer.vq2emb(vq)
+        self.quantizer.eval()
+        if hasattr(self.quantizer, 'vq2emb'):
+            x = self.quantizer.vq2emb(vq)
+        elif hasattr(self.quantizer, 'indices_to_codes'):
+            x = self.quantizer.indices_to_codes(vq)
+        else:
+            raise AttributeError(f"{type(self.quantizer).__name__} does not support vq2emb")
+        x = self.quantizer_out_proj(x)
         return x
 
     def get_emb(self):
-        self.quantizer = self.quantizer.eval()
-        embs = self.quantizer.get_emb()
+        self.quantizer.eval()
+        if hasattr(self.quantizer, 'get_emb'):
+            embs = self.quantizer.get_emb()
+        elif hasattr(self.quantizer, 'indices_to_codes') and hasattr(self.quantizer, 'codebook_size'):
+            if hasattr(self.quantizer, '_levels'):
+                device = self.quantizer._levels.device
+            else:
+                device = next(self.quantizer.parameters()).device
+            indices = torch.arange(self.quantizer.codebook_size, device=device).view(-1, 1)
+            embs = self.quantizer.indices_to_codes(indices)
+        else:
+            raise AttributeError(f"{type(self.quantizer).__name__} does not support get_emb")
+        embs = self.quantizer_out_proj(embs)
         return embs
 
     def inference_vq(self, vq):

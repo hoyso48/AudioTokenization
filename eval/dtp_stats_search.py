@@ -49,6 +49,7 @@ from dtp_stats import (  # noqa: E402
     AudioDataset,
     apply_cfg_overrides,
     get_tau_state,
+    patch_legacy_norm_state_dict,
     parse_input_paths,
     patch_legacy_dtp_state_dict,
     pick_tau_value,
@@ -834,9 +835,22 @@ def main() -> None:
     state = torch.load(str(ckpt_path), map_location="cpu", weights_only=False)
     state_dict = state.get("state_dict", state)
     patch_legacy_dtp_state_dict(state_dict)
-    missing, unexpected = model.load_state_dict(state_dict, strict=True)
+    compat_stats = patch_legacy_norm_state_dict(state_dict, model.state_dict())
+    if any(compat_stats.values()):
+        print(
+            "[Compat] Applied legacy checkpoint patch: "
+            f"remapped_norm_weights={compat_stats['remapped_norm_weights']}, "
+            f"added_norm_biases={compat_stats['added_norm_biases']}, "
+            f"added_optional_defaults={compat_stats['added_optional_defaults']}"
+        )
+
+    missing, unexpected = model.load_state_dict(state_dict, strict=False)
     if missing or unexpected:
         print(f"[Warning] Missing keys: {len(missing)}, Unexpected keys: {len(unexpected)}")
+        if missing:
+            print(f"[Warning] Missing examples: {missing[:8]}")
+        if unexpected:
+            print(f"[Warning] Unexpected examples: {unexpected[:8]}")
     if not getattr(model, "use_dtp", False):
         raise RuntimeError("The loaded model does not enable DTP (use_dtp=False).")
     model.eval()
@@ -890,5 +904,4 @@ def main() -> None:
 
 if __name__ == "__main__":
     main()
-
 

@@ -4,9 +4,8 @@ Entry points
 - AudioTokenization/DTMAE/train.py:19 `train` (Hydra) builds `DataModule` and `CodecLightningModule`, launches Lightning training/validation/test.
 
 Model architecture (DTMAE)
-- AudioTokenization/DTMAE/lightning_module.py:101 `CodecLightningModule` constructs encoder/decoder, discriminators, DTP, and optional length embeddings.
+- AudioTokenization/DTMAE/lightning_module.py:101 `CodecLightningModule` constructs encoder/decoder, discriminators, DTP, and resamplers.
 - AudioTokenization/DTMAE/lightning_module.py:325 `forward` defines the DTM pipeline: level-1 encoder -> DTP mask -> downsample -> level-2 encoder -> quantizer -> level-2 decoder -> upsample -> level-1 decoder (ISTFT).
-- AudioTokenization/DTMAE/lightning_module.py:114 `_length_ids_from_frontier_mask` derives span-length ids from frontier masks for length embeddings.
 
 Encoder / decoder definitions
 - AudioTokenization/DTMAE/vq/codec_encoder.py:17 `STFT` and :49 `TransformerEncoderSTFT` (STFT + conv + transformer levels).
@@ -15,9 +14,9 @@ Encoder / decoder definitions
 - AudioTokenization/DTMAE/vq/module.py:552 `ConvDownsample` + :574 `ConvUpsample` used in encoder/decoder conv paths.
 
 Dynamic token masking (DTP) + resampling
-- AudioTokenization/DTMAE/dtp/ops.py:384 `SigmoidSTE`, :451 `FixedPatternMasking`, :705 `PLEBatchTopK`, :817 `PLEBatchTopKJitter`, :954 `BatchTopK`, :1028 `BatchGreedy`.
+- AudioTokenization/DTMAE/dtp/ops.py:384 `SigmoidSTE`, :705 `PLEBatchTopK`, :817 `PLEBatchTopKJitter`, :954 `BatchTopK`, :1028 `BatchGreedy`.
 - AudioTokenization/DTMAE/dtp/ops.py:1117 `PLEBatchTopKTrainPerSeq`, :1290 `BatchTopKTrainPerSeq`, :1424 `BatchGreedyTrainPerSeq` (train-time greedy TODO).
-- AudioTokenization/DTMAE/dtp/resampler.py:67 `FrontierDownsampler` (pack kept tokens + position ids), :98 `AverageDownsampler`, :38 `MaskUpsampler`, :5 `RepeatUpsampler`.
+- AudioTokenization/DTMAE/dtp/resampler.py:58 `FixedPatternMasking` (returns fixed interval mask), :187 `FrontierDownsampler`, :210 `AverageDownsampler`, :286 `FixedPatternMaskingDownsampler`, :304 `FixedPatternMaskingUpsampler`, :129 `MaskUpsampler`, :77 `RepeatUpsampler`.
 
 Quantizers
 - AudioTokenization/DTMAE/vq/quantizers.py:26 registry for `ResidualVQ`, `DitheredFSQ`, `FSQ`, `SimVQ` (used by `TransformerDecoderISTFT`).

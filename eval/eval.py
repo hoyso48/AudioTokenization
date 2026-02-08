@@ -193,6 +193,49 @@ def patch_legacy_dtp_state_dict(state_dict: Dict[str, torch.Tensor]) -> None:
     state_dict["dtp.steps_eval"] = steps.clone()
 
 
+def patch_legacy_norm_state_dict(
+    state_dict: Dict[str, torch.Tensor],
+    model_state_dict: Dict[str, torch.Tensor],
+) -> Dict[str, int]:
+    """
+    Compat patch for older checkpoints where RMSNorm parameters were saved as
+    `<module>.weight` (no bias), while current code expects
+    `<module>.norm.weight` / `<module>.norm.bias`.
+    """
+    remapped_norm_weights = 0
+    added_norm_biases = 0
+    added_optional_defaults = 0
+
+    for old_key in list(state_dict.keys()):
+        if not old_key.endswith(".weight"):
+            continue
+
+        stem = old_key[: -len(".weight")]
+        new_weight_key = f"{stem}.norm.weight"
+        if new_weight_key not in model_state_dict or new_weight_key in state_dict:
+            continue
+
+        state_dict[new_weight_key] = state_dict.pop(old_key)
+        remapped_norm_weights += 1
+
+        new_bias_key = f"{stem}.norm.bias"
+        if new_bias_key in model_state_dict and new_bias_key not in state_dict:
+            state_dict[new_bias_key] = torch.zeros_like(model_state_dict[new_bias_key])
+            added_norm_biases += 1
+
+    # Older checkpoints may not contain this currently-unused projection.
+    for key in ("encoder.proj.weight", "encoder.proj.bias"):
+        if key in model_state_dict and key not in state_dict:
+            state_dict[key] = model_state_dict[key].clone()
+            added_optional_defaults += 1
+
+    return {
+        "remapped_norm_weights": remapped_norm_weights,
+        "added_norm_biases": added_norm_biases,
+        "added_optional_defaults": added_optional_defaults,
+    }
+
+
 def resolve_with_dataset_roots(paths: List[str], cfg) -> List[str]:
     roots: List[Path] = []
     datasets_cfg = cfg.preprocess.datasets
@@ -702,9 +745,22 @@ def main():
         state = torch.load(str(ckpt_path), map_location="cpu", weights_only=False)
         state_dict = state.get("state_dict", state)
         patch_legacy_dtp_state_dict(state_dict)
-        missing, unexpected = model.load_state_dict(state_dict, strict=True)
+        compat_stats = patch_legacy_norm_state_dict(state_dict, model.state_dict())
+        if any(compat_stats.values()):
+            print(
+                "[Compat] Applied legacy checkpoint patch: "
+                f"remapped_norm_weights={compat_stats['remapped_norm_weights']}, "
+                f"added_norm_biases={compat_stats['added_norm_biases']}, "
+                f"added_optional_defaults={compat_stats['added_optional_defaults']}"
+            )
+
+        missing, unexpected = model.load_state_dict(state_dict, strict=False)
         if len(missing) or len(unexpected):
             print(f"[Warning] Missing keys: {len(missing)}, Unexpected keys: {len(unexpected)}")
+            if missing:
+                print(f"[Warning] Missing examples: {missing[:8]}")
+            if unexpected:
+                print(f"[Warning] Unexpected examples: {unexpected[:8]}")
 
         save_stats = run_save_stage(args, cfg, model, input_paths, eval_dir, gt_out_dir, pred_out_dir, manifest_path)
         save_stats_source = "computed"

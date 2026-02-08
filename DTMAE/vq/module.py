@@ -221,34 +221,15 @@ class RMSNorm(torch.nn.Module):
     def __init__(self, dim: int, eps: float = 1e-2):
         super().__init__()
         self.eps = eps
-        self.norm = nn.LayerNorm(dim, eps=eps)
-        # self.weight = nn.Parameter(torch.ones(dim))
+        self.weight = nn.Parameter(torch.ones(dim))
 
-    # def _norm(self, x):
-    #     return x * torch.rsqrt(x.pow(2).mean(-1, keepdim=True) + self.eps)
+    def _norm(self, x):
+        return x * torch.rsqrt(x.pow(2).mean(-1, keepdim=True) + self.eps)
 
-    # def forward(self, x):
-    #     x, dtype = x.float(), x.dtype
-    #     output = self._norm(x)
-    #     return (output * self.weight).to(dtype)
     def forward(self, x):
         x, dtype = x.float(), x.dtype
-        output = self.norm(x)
-        return (output).to(dtype)
-
-# class RMSNorm(torch.nn.Module):
-#     def __init__(self, dim: int, eps: float = 1e-2):
-#         super().__init__()
-#         self.eps = eps
-#         self.weight = nn.Parameter(torch.ones(dim))
-
-#     def _norm(self, x):
-#         return x * torch.rsqrt(x.pow(2).mean(-1, keepdim=True) + self.eps)
-
-#     def forward(self, x):
-#         x, dtype = x.float(), x.dtype
-#         output = self._norm(x)
-#         return (output * self.weight).to(dtype)
+        output = self._norm(x)
+        return (output * self.weight).to(dtype)
 
 
 def _yarn_find_correction_dim(num_rotations, dim, base=10000, max_position_embeddings=2048):

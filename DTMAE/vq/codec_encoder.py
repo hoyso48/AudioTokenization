@@ -1,7 +1,7 @@
 import torch
 from torch import nn
 import torch.nn.functional as F
-from .module import  Transformer, ConvDownsample, Patchify1D, RMSNorm, WNConv1d#, WNConv1dVarlen
+from .module import  Transformer, ConvDownsample, Patchify1D, RMSNorm
 from .alias_free_torch import *
 
 def init_weights(m):
@@ -77,11 +77,8 @@ class TransformerEncoderSTFT(nn.Module):
         )
 
         stft_dim = n_fft // 2 + 1
+        self.proj = nn.Linear(2 * stft_dim, dim)
         self.conv = ConvDownsample(2 * stft_dim, dim, norm_eps=norm_eps)
-        # self.norm = RMSNorm(dim)
-
-        # self.patchify = Patchify1D(1, dim, hop_length)
-        # self.conv = WNConv1dVarlen(dim, dim, kernel_size=3, stride=1, padding=1, causal=causal, bias=False)
 
         if n_layers_level1 > 0:
             self.transformer_backbone_level1 = Transformer(
@@ -133,8 +130,6 @@ class TransformerEncoderSTFT(nn.Module):
         if level == 1:
             stft_result = self.stft(x)  # (B, n_fft//2+1, n_frames)
             x = torch.view_as_real(stft_result).permute(0, 2, 1, 3).flatten(2)
-            # x = self.patchify(x.permute(0, 2, 1))    
-            # x = self.norm(x)
             x = self.conv(x)
 
             x = self.transformer_backbone_level1(x)  # (B, n_frames, dim)

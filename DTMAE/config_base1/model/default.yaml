@@ -15,7 +15,7 @@ codec_encoder:
   out_channels: 512
   norm_eps: 1e-2
   attn_window_size: [64, 64]
-  layerscale_gamma_init: 1.0
+  layerscale_gamma_init: 1
 
 codec_decoder:
   in_channels: 512
@@ -34,7 +34,7 @@ codec_decoder:
   causal: False
   norm_eps: 1e-2
   attn_window_size: [64, 64]
-  layerscale_gamma_init: 1.0
+  layerscale_gamma_init: 1
   # Legacy quantizer params (kept for reference, use quantizer section instead):
   # vq_num_quantizers: 1
   # vq_commit_weight: 0.5
@@ -66,30 +66,65 @@ resampler:
     max_mask_span: 1
     min_mask_prob: 0.5
     max_mask_prob: 0.5
+
+  # ---------------------------------------------------------------------------
+  # Example A) PLE per-sequence training + eval-time update_test_time tuning
+  # - Train: per-sequence r sampling (Uniform(train_r_min, train_r_max))
+  # - Train tau bootstrap: tau_train ~ EMA(L/N)/(1-r)
+  # - Eval: starts from tau_train, then optional update_test_time adaptation
+  # ---------------------------------------------------------------------------
+  # dtp_cls: PLEBatchTopKTrainPerSeq
+  # dtp_params:
+  #   r: 0.5
+  #   initial_tau: 1.0
+  #   ema_mu: 0.95
+  #   eta0: 0.1
+  #   decay_T: 1000.0
+  #   tau_min: 1e-6
+  #   tau_max: 1e6
+  #   update_every: 1
+  #   update_test_time: true
+  #   train_r_min: 0.3
+  #   train_r_max: 0.7
+  #   max_s: null
+  #   sample_prob: 0
+  #   min_mask_span: 1
+  #   max_mask_span: 1
+  #   min_mask_prob: 0.5
+  #   max_mask_prob: 0.5
+
+  # ---------------------------------------------------------------------------
+  # Example B) PLE jitter training around a global tau
+  # - Train: tau_b = tau * exp(u), u~Uniform(-jitter_a, jitter_a)
+  # - Eval: fixed tau_train or optional update_test_time tuning
+  # ---------------------------------------------------------------------------
+  # dtp_cls: PLEBatchTopKJitter
+  # dtp_params:
+  #   r: 0.5
+  #   initial_tau: 1.0
+  #   ema_mu: 0.95
+  #   eta0: 0.1
+  #   decay_T: 1000.0
+  #   tau_min: 1e-6
+  #   tau_max: 1e6
+  #   update_every: 1
+  #   update_test_time: true
+  #   jitter_a: 0.2
+  #   max_s: null
+  #   sample_prob: 0
+  #   min_mask_span: 1
+  #   max_mask_span: 1
+  #   min_mask_prob: 0.5
+  #   max_mask_prob: 0.5
   downsampler_cls: FrontierDownsampler
   downsampler_params: {}
   upsampler_cls: MaskUpsampler
   upsampler_params:
     dim: 512
-  # Optional: add a learned embedding based on each token's span length derived from `mask`.
-  # This behaves like learned absolute positional encodings, but the id is "segment length".
-  length_embedding:
-    max_len: 512
-    init_std: 0.02
-    scale: 1.0
-    # Fixed insertion points (all default false):
-    # 1) After encoder level1 downsample, before encoder level2
-    after_downsample: false
-    # 2) After encoder level2, before VQ quantizer
-    after_encoder_level2: false
-    # 3) After VQ quantizer
-    after_quantizer: false
-    # 4) Before upsampler (decoder side, right before entering upsampling)
-    before_upsampler: false
-    
+
 # =============================================================================
 # Quantizer config (extensible pattern like resampler)
-# Available quantizers: ResidualVQ, DitheredFSQ, FSQ, SimVQ
+# Available quantizers: ResidualVQ, DitheredFSQ, TAAEDitheredFSQ, FSQ, SimVQ
 # =============================================================================
 quantizer:
   cls: ResidualVQ
@@ -127,6 +162,21 @@ quantizer:
 #   350bps: inference_levels=[5,5,5,5,5,5], inference_num_residuals=1
 # =============================================================================
 
+# =============================================================================
+# TAAEDitheredFSQ Config (official TAAE repo class, copied as-is)
+# NOTE: This class expects input dim == len(levels) * num_codebooks.
+#       In DTMAE decoder, input dim is usually 256/512, so use with care.
+# =============================================================================
+# quantizer:
+#   cls: TAAEDitheredFSQ
+#   params:
+#     levels: [17, 17, 17, 17, 17, 17]
+#     dither_inference: false
+#     num_codebooks: 1
+#     noise_dropout: 0.5
+#     scale: 1.0
+# =============================================================================
+
 mpd:
   periods: [2, 3, 5, 7, 11]
   max_downsample_channels: 256
@@ -147,5 +197,3 @@ mstft:
   max_downsample_channels: 256
   downsample_scales: [2, 2, 2]
   use_weight_norm: False
-
-

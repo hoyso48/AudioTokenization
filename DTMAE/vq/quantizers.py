@@ -8,6 +8,7 @@ Available quantizers:
 - ResidualVQ: Residual Vector Quantization
 - DitheredFSQ: Dithered Finite Scalar Quantization (from TAAE)
                 Supports multi-level training and post-hoc residual decomposition
+- TAAEDitheredFSQ: Exact dithered FSQ class copied from official TAAE repo
 - FSQ: Finite Scalar Quantization (from vector_quantize_pytorch)
 - SimVQ: Simple Vector Quantization (from vector_quantize_pytorch)
 
@@ -25,7 +26,7 @@ Usage in config:
 
 # Internal implementations
 from .residual_vq import ResidualVQ
-from .dithered_fsq import DitheredFSQ
+from .dithered_fsq import DitheredFSQ, TAAEDitheredFSQ
 
 # External implementations (vector_quantize_pytorch)
 from vector_quantize_pytorch import FSQ, SimVQ
@@ -33,7 +34,7 @@ from vector_quantize_pytorch import FSQ, SimVQ
 __all__ = [
     'ResidualVQ',
     'DitheredFSQ',
+    'TAAEDitheredFSQ',
     'FSQ',
     'SimVQ',
 ]
-

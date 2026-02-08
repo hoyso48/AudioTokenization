@@ -202,290 +202,6 @@ import math
 
 #         return mask, avg_r, tau_used
 
-class RMSNorm(torch.nn.Module):
-    def __init__(self, dim: int, eps: float = 1e-2):
-        super().__init__()
-        self.eps = eps
-        self.weight = nn.Parameter(torch.ones(dim))
-
-    def _norm(self, x):
-        return x * torch.rsqrt(x.pow(2).mean(-1, keepdim=True) + self.eps)
-
-    def forward(self, x):
-        x, dtype = x.float(), x.dtype
-        output = self._norm(x)
-        return (output * self.weight).to(dtype)
-
-class RotaryEmbedding(nn.Module):
-    def __init__(self, dim, max_position_embeddings=2048, base=10000, device=None):
-        super().__init__()
-
-        self.dim = dim
-        self.max_position_embeddings = max_position_embeddings
-        self.base = base
-
-        inv_freq = 1.0 / (self.base ** (torch.arange(0, self.dim, 2).float().to(device) / self.dim))
-        self.register_buffer("inv_freq", inv_freq, persistent=False)
-
-        # Precompute caches for initial max seq len
-        self.max_seq_len_cached = max_position_embeddings
-        t = torch.arange(self.max_seq_len_cached, device=self.inv_freq.device, dtype=self.inv_freq.dtype)
-        freqs = torch.einsum("i,j->ij", t, self.inv_freq)
-        emb = torch.cat((freqs, freqs), dim=-1)
-        dtype = torch.get_default_dtype()
-        self.register_buffer("cos_cached", emb.cos().to(dtype), persistent=False)
-        self.register_buffer("sin_cached", emb.sin().to(dtype), persistent=False)
-
-    def _set_cos_sin_cache(self, seq_len: int, device: torch.device, dtype: torch.dtype) -> None:
-        self.max_seq_len_cached = seq_len
-        t = torch.arange(self.max_seq_len_cached, device=device, dtype=self.inv_freq.dtype)
-        freqs = torch.einsum("i,j->ij", t, self.inv_freq)
-        emb = torch.cat((freqs, freqs), dim=-1)
-        self.register_buffer("cos_cached", emb.cos().to(dtype), persistent=False)
-        self.register_buffer("sin_cached", emb.sin().to(dtype), persistent=False)
-
-    def forward(self, x, seq_len: int = None):
-        # x is only used for device/dtype; seq_len must be provided explicitly
-        if seq_len is None:
-            raise ValueError("RotaryEmbedding.forward requires seq_len to be provided")
-
-        if seq_len > self.max_seq_len_cached:
-            self._set_cos_sin_cache(seq_len=seq_len, device=x.device, dtype=x.dtype)
-
-        return (
-            self.cos_cached[:seq_len].to(dtype=x.dtype),
-            self.sin_cached[:seq_len].to(dtype=x.dtype),
-        )
-
-def rotate_half(x):
-    """Rotates half the hidden dims of the input."""
-    x1 = x[..., : x.shape[-1] // 2]
-    x2 = x[..., x.shape[-1] // 2 :]
-    return torch.cat((-x2, x1), dim=-1)
-
-def apply_rotary_pos_emb(q, k, cos, sin, position_ids, unsqueeze_dim=1):
-    """Applies Rotary Position Embedding to the query and key tensors."""
-    cos = cos[position_ids].unsqueeze(unsqueeze_dim)
-    sin = sin[position_ids].unsqueeze(unsqueeze_dim)
-    q_embed = (q * cos) + (rotate_half(q) * sin)
-    k_embed = (k * cos) + (rotate_half(k) * sin)
-    return q_embed, k_embed
-
-class SelfAttention(nn.Module):
-    def __init__(self, dim, window_size=(64, 64), n_head=8, dropout=0.1, max_position_embeddings=2048, base=10000, causal: bool = False, norm_eps: float = 1e-2):
-        super().__init__()
-        self.n_head = n_head
-        self.head_dim = dim // n_head
-        self.causal = causal
-        
-        self.qkv_proj = nn.Linear(dim, 3 * dim, bias=False)
-        self.out_proj = nn.Linear(dim, dim, bias=False)
-        self.q_norm = RMSNorm(self.head_dim, eps=norm_eps)
-        self.k_norm = RMSNorm(self.head_dim, eps=norm_eps)
-        self.dropout = dropout
-        self.window_size = window_size
-        
-        self.rotary_emb = RotaryEmbedding(self.head_dim, 
-                                        max_position_embeddings=max_position_embeddings, 
-                                        base=base, 
-                                        device=None)
-        # Require FlashAttention (dense and varlen kernels). Raise immediately if unavailable.
-        try:
-            from flash_attn import flash_attn_qkvpacked_func as _fa_dense_qkv
-        except Exception as e:
-            # Fallback for development environments without flash_attn
-            _fa_dense_qkv = None
-            # raise ImportError("FlashAttention is required but not installed: missing flash_attn_qkvpacked_func") from e
-        try:
-            from flash_attn.flash_attn_interface import flash_attn_varlen_qkvpacked_func as _fa_varlen_qkv
-        except Exception as e:
-            _fa_varlen_qkv = None
-            # raise ImportError("FlashAttention is required but not installed: missing flash_attn_varlen_qkvpacked_func") from e
-
-        self.flash_attn_qkvpacked_func = _fa_dense_qkv
-        self.flash_attn_varlen_qkvpacked_func = _fa_varlen_qkv
-
-    def forward(self, x, position_ids=None, cu_seqlens: torch.Tensor = None, max_seqlen: int = None):
-        # Packed varlen path: expect x = [total_tokens, C], cu_seqlens int32 [B+1], max_seqlen int
-        if cu_seqlens is not None and max_seqlen is not None:
-            total, C = x.shape
-            # Ensure cu_seqlens is int32 on the same device
-            cu_seqlens = cu_seqlens.to(device=x.device, dtype=torch.int32)
-
-            # QKV projection then pack for FA varlen qkvpacked: [total, 3C] -> [total, 3, n_head, head_dim]
-            qkv = self.qkv_proj(x)
-            qkv = qkv.view(total, 3, self.n_head, self.head_dim)
-
-            # RoPE for varlen packed: build position ids and rotate q/k
-            if total > 0 and max_seqlen > 0:
-                cos, sin = self.rotary_emb(qkv, seq_len=max_seqlen)
-                lengths = (cu_seqlens[1:] - cu_seqlens[:-1]).to(torch.long)
-                if lengths.numel() > 0:
-                    if position_ids is None:
-                        start_offsets = torch.repeat_interleave(cu_seqlens[:-1].to(torch.long), lengths)
-                        token_idx = torch.arange(total, device=qkv.device, dtype=torch.long)
-                        position_ids = token_idx - start_offsets  # [total]
-                    q, k = self.q_norm(qkv[:, 0]), self.k_norm(qkv[:, 1])
-                    q, k = apply_rotary_pos_emb(q, k, cos, sin, position_ids=position_ids, unsqueeze_dim=1)
-                    qkv = torch.stack((q, k, qkv[:, 2]), dim=1)
-
-            # FlashAttention varlen qkvpacked
-            if self.flash_attn_varlen_qkvpacked_func is not None:
-                out = self.flash_attn_varlen_qkvpacked_func(
-                    qkv,
-                    cu_seqlens,
-                    max_seqlen,
-                    dropout_p=self.dropout if self.training else 0.0,
-                    softmax_scale=self.head_dim ** -0.5,
-                    causal=self.causal,
-                    window_size=self.window_size,
-                )  # [total, n_head, head_dim]
-            else:
-                # Fallback? Or assume dense if FA missing
-                raise ImportError("FlashAttention required")
-
-            # Merge heads, out proj on packed
-            out = out.reshape(total, -1)  # [total, C]
-            out = self.out_proj(out)      # [total, C]
-            return out
-
-        # Dense path: use FlashAttention dense kernel with (B, T, C)
-        B, T, C = x.shape
-
-        qkv = self.qkv_proj(x)
-        qkv = qkv.view(B, T, 3, self.n_head, self.head_dim)
-
-        # Apply RoPE on qkv packed (dense)
-        cos, sin = self.rotary_emb(qkv, seq_len=T)
-        q, k = self.q_norm(qkv[:, :, 0]), self.k_norm(qkv[:, :, 1])
-
-        if position_ids is None:
-            position_ids = torch.arange(T, device=x.device, dtype=torch.long).unsqueeze(0).expand(B, T)
-        q, k = apply_rotary_pos_emb(q, k, cos, sin, position_ids=position_ids, unsqueeze_dim=2)
-        qkv = torch.stack((q, k, qkv[:, :, 2]), dim=2)
-
-        # FlashAttention qkvpacked (dense)
-        if self.flash_attn_qkvpacked_func is not None:
-            out = self.flash_attn_qkvpacked_func(
-                qkv,
-                dropout_p=self.dropout if self.training else 0.0,
-                softmax_scale=self.head_dim ** -0.5,
-                causal=self.causal,
-                window_size=self.window_size,
-            )  # [B, T, n_head, head_dim]
-        else:
-             raise ImportError("FlashAttention required")
-
-        out = out.reshape(B, T, C)
-        out = self.out_proj(out)
-
-        return out
-
-class SigmoidSTE(nn.Module):
-    """
-    Differentiable Mask Predictor using Self-Attention and Sigmoid + STE.
-    Predicts an importance score for each token and selects based on prob.
-    
-    Args:
-        input_dim (int): Input feature dimension.
-        r (float): Target masking ratio.
-        n_head (int): Number of heads for SelfAttention.
-        ste (bool): Whether to use Straight-Through Estimator.
-    """
-    def __init__(self, input_dim: int, r: float, n_head: int = 8, dropout: float = 0.0, ste: bool = True):
-        super().__init__()
-        self.r = float(r)
-        self.ste = ste
-        
-        # Lightweight Predictor: SelfAttn -> Linear -> Sigmoid
-        self.attn = SelfAttention(
-            dim=input_dim,
-            n_head=n_head,
-            dropout=dropout,
-            max_position_embeddings=2048,
-            causal=False
-        )
-        # Final projection to 1 scalar per token
-        self.proj = nn.Linear(input_dim, 1)
-        self.sigmoid = nn.Sigmoid()
-        
-    def forward(self, x: torch.Tensor) -> Tuple[torch.Tensor, torch.Tensor, torch.Tensor, torch.Tensor]:
-        # x: [B, T, C]
-        B, T, C = x.shape
-        
-        # 1. Self-Attention for context
-        # Residual connection is often good
-        h = x + self.attn(x)
-        
-        # 2. Predict Probability
-        logits = self.proj(h) # [B, T, 1]
-        prob = self.sigmoid(logits).squeeze(-1) # [B, T]
-        
-        # 3. Straight-Through Estimator
-        if self.ste:
-            # Forward: Binary
-            mask_binary = (prob > 0.5).float()
-            # Backward: Gradient passes through prob
-            mask = prob + (mask_binary - prob).detach()
-        else:
-            mask = prob
-            
-        # 4. Compute Aux Loss (Regularize mean(mask) to target ratio)
-        # target kept ratio = 1 - r
-        # avg_r = 1 - mean(mask)
-        kept_count = mask.sum(dim=1) # [B]
-        current_kept_ratio = kept_count / T
-        avg_r = 1.0 - current_kept_ratio.mean()
-        
-        # We want current_kept_ratio approx (1 - self.r)
-        # Or avg_r approx self.r
-        aux_loss = (avg_r - self.r) ** 2
-        
-        # Dummy tau (not used)
-        tau = torch.tensor(1.0, device=x.device, dtype=x.dtype)
-        
-        bool_mask = mask > 0.5
-        
-        return bool_mask, avg_r, tau, aux_loss
-
-class FixedPatternMasking(nn.Module):
-    """
-    Fixed deterministic masking pattern based on target ratio r.
-    Selects tokens at regular intervals (stride = 1 / (1-r)).
-    Useful for baselines or debugging.
-    """
-    def __init__(self, r: float, **kwargs):
-        super().__init__()
-        self.r = float(r)
-        # Calculate stride: if r=0.5 (keep 0.5), stride=2. If r=0.75 (keep 0.25), stride=4.
-        self.keep_ratio = 1.0 - self.r
-        if self.keep_ratio <= 0:
-            raise ValueError("r must be < 1.0")
-        self.stride = max(1, int(round(1.0 / self.keep_ratio)))
-
-    def forward(self, x: torch.Tensor) -> Tuple[torch.Tensor, torch.Tensor, torch.Tensor]:
-        # x: [B, N, C]
-        device = x.device
-        B, N, C = x.shape
-        
-        mask = torch.zeros(B, N, device=device, dtype=torch.bool)
-        
-        # Set mask=True every 'stride' steps
-        # Always keep the first token (index 0)
-        mask[:, ::self.stride] = True
-        
-        # Compute actual masked ratio
-        kept_total = int(mask.sum().item())
-        total = B * N
-        zeros_total = int(total - kept_total)
-        
-        avg_r = torch.tensor(float(zeros_total) / float(max(1, total)), device=device, dtype=x.dtype)
-        
-        # Dummy tau
-        tau_used = torch.tensor(float(self.stride), device=device, dtype=x.dtype)
-        
-        return mask, avg_r, tau_used
-
 class _BatchSelectorBase(nn.Module):
     """
     Shared Robbins–Monro controller and utilities for batch selectors.
@@ -787,13 +503,27 @@ class PLEBatchTopK(_BatchSelectorBase):
             mask[:, 0] = True
 
         if N > 1 and torch.isfinite(tau_used) and (tau_used.item() > 0.0):
-            m_b = torch.floor(L / tau_used).to(torch.long)
+            m_raw = torch.floor(L / tau_used).to(torch.long)
+            m_b = m_raw
             m_b = torch.clamp(m_b, min=0, max=N - 1)
+            saturated = m_raw > (N - 1)
             max_m = int(m_b.max().item())
 
             if max_m > 0:
-                targets = (torch.arange(1, max_m + 1, device=device, dtype=dtype) * tau_used).view(1, -1)
-                ge = D.unsqueeze(2) >= targets.view(1, 1, -1)
+                k = torch.arange(1, max_m + 1, device=device, dtype=dtype).view(1, -1)
+
+                # Degenerate small-tau guard:
+                # If m_raw is clipped by N-1, k*tau no longer reaches L and many
+                # thresholds collapse to early positions. For clipped rows, switch to
+                # an evenly-spaced effective tau so the last target reaches L.
+                tau_eff = tau_used.expand(B)
+                if bool(saturated.any().item()):
+                    denom = m_b.to(dtype).clamp_min(1.0)
+                    tau_sat = (L / denom).clamp(min=self.tau_min, max=self.tau_max)
+                    tau_eff = torch.where(saturated, tau_sat, tau_eff)
+
+                targets = k * tau_eff.view(B, 1)
+                ge = D.unsqueeze(2) >= targets.unsqueeze(1)
                 j = ge.float().argmax(dim=1).clamp_(min=1, max=N - 1)
 
                 k_idx = torch.arange(1, max_m + 1, device=device).view(1, -1).expand(B, -1)
@@ -804,6 +534,12 @@ class PLEBatchTopK(_BatchSelectorBase):
                     k_sel = sel[:, 1]
                     pos = j[b_sel, k_sel]
                     mask[b_sel, pos] = True
+
+            # Clamp consistency policy:
+            # if m_raw exceeds the available boundary slots (N-1), keep all boundaries.
+            # This avoids pathological duplicate-boundary collapse in the tiny-tau regime.
+            if bool(saturated.any().item()):
+                mask[saturated, 1:] = True
 
         mask = self._apply_max_span_constraint(mask)
 
@@ -922,13 +658,23 @@ class PLEBatchTopKJitter(_BatchSelectorBase):
             finite = torch.isfinite(tau_b) & (tau_b > 0.0)
             if bool(finite.any().item()):
                 # m_b = floor(L_b / tau_b), clamped
-                m_b = torch.floor(L / tau_b).to(torch.long)
+                m_raw = torch.floor(L / tau_b).to(torch.long)
+                m_b = m_raw
                 m_b = torch.clamp(m_b, min=0, max=N - 1)
+                saturated = m_raw > (N - 1)
                 max_m = int(m_b.max().item())
 
                 if max_m > 0:
                     k = torch.arange(1, max_m + 1, device=device, dtype=dtype).view(1, -1)  # [1, M]
-                    targets = k * tau_b.view(B, 1)  # [B, M]
+
+                    # Degenerate small-tau guard for per-sample tau_b.
+                    tau_eff = tau_b
+                    if bool(saturated.any().item()):
+                        denom = m_b.to(dtype).clamp_min(1.0)
+                        tau_sat = (L / denom).clamp(min=self.tau_min, max=self.tau_max)
+                        tau_eff = torch.where(saturated, tau_sat, tau_eff)
+
+                    targets = k * tau_eff.view(B, 1)  # [B, M]
                     ge = D.unsqueeze(2) >= targets.unsqueeze(1)  # [B, N, M]
                     j = ge.float().argmax(dim=1).clamp_(min=1, max=N - 1)  # [B, M]
 
@@ -941,6 +687,11 @@ class PLEBatchTopKJitter(_BatchSelectorBase):
                         k_sel = sel[:, 1]
                         pos = j[b_sel, k_sel]
                         mask[b_sel, pos] = True
+
+                # Clamp consistency policy for tiny tau:
+                # if requested boundaries exceed N-1, keep all boundaries.
+                if bool(saturated.any().item()):
+                    mask[saturated, 1:] = True
 
         mask = self._apply_max_span_constraint(mask)
 
@@ -1123,6 +874,15 @@ class PLEBatchTopKTrainPerSeq(PLEBatchTopK):
 
     - Eval/Inference: uses the original batch-level global-tau controller from `PLEBatchTopK`.
 
+    Train-time tau initialization policy:
+      - Maintain an EMA of normalized path length, `E[L/N]` (valid finite L only).
+      - Estimate train tau from statistics (no extra correction term):
+
+          tau_train_hat = clamp( EMA(L/N) / (1 - r_target), tau_min, tau_max )
+
+      - This tau_train is used as the eval start point; if update_test_time=True,
+        eval-time Robbins-Monro tuning remains available as in `PLEBatchTopK`.
+
     Return: (mask, avg_r, tau_used)
       - mask: [B, N] bool, always keeps token 0.
       - avg_r: scalar masked ratio computed from the final mask.
@@ -1152,7 +912,6 @@ class PLEBatchTopKTrainPerSeq(PLEBatchTopK):
         *,
         train_r_min: Optional[float] = None,
         train_r_max: Optional[float] = None,
-        update_tau_train_from_train: bool = True,
     ):
         super().__init__(
             r=r,
@@ -1187,7 +946,10 @@ class PLEBatchTopKTrainPerSeq(PLEBatchTopK):
             raise ValueError("PLEBatchTopKTrainPerSeq: train_r_max must be >= train_r_min")
         self.train_r_min = train_r_min
         self.train_r_max = train_r_max
-        self.update_tau_train_from_train = bool(update_tau_train_from_train)
+
+        # Train-time statistics for tau estimation.
+        self.register_buffer("l_over_n_ema", torch.tensor(0.0))
+        self.register_buffer("l_over_n_updates", torch.tensor(0, dtype=torch.long))
 
     @torch.no_grad()
     def forward(self, x: torch.Tensor) -> Tuple[torch.Tensor, torch.Tensor, torch.Tensor]:
@@ -1283,8 +1045,24 @@ class PLEBatchTopKTrainPerSeq(PLEBatchTopK):
 
         avg_r = self._compute_avg_r(mask, total, dtype)
         tau_used = tau_b.mean()
-        if self.update_tau_train_from_train and (self.fixed_tau is None):
-            self.tau_train.fill_(float(tau_used.item()))
+
+        # Estimate tau_train from train-time L statistics (no extra correction).
+        # Keep update_test_time behavior from base PLE for eval-time optional tuning.
+        if self.fixed_tau is None and N > 0:
+            valid_l = torch.isfinite(L) & (L > 0)
+            if bool(valid_l.any().item()):
+                l_over_n_batch = (L[valid_l] / float(max(1, N))).mean()
+                if int(self.l_over_n_updates.item()) == 0:
+                    self.l_over_n_ema.fill_(float(l_over_n_batch.item()))
+                else:
+                    self.l_over_n_ema.mul_(self.ema_mu).add_((1.0 - self.ema_mu) * float(l_over_n_batch.item()))
+                self.l_over_n_updates.add_(1)
+
+            if int(self.l_over_n_updates.item()) > 0:
+                denom = max(1e-8, 1.0 - float(self.r))
+                tau_hat = float(self.l_over_n_ema.item()) / denom
+                tau_hat = min(max(tau_hat, self.tau_min), self.tau_max)
+                self.tau_train.fill_(tau_hat)
         return mask, avg_r, tau_used
 
 
@@ -1317,7 +1095,6 @@ class BatchTopKTrainPerSeq(BatchTopK):
         *,
         train_r_min: Optional[float] = None,
         train_r_max: Optional[float] = None,
-        update_tau_train_from_train: bool = True,
     ):
         super().__init__(
             r=r,
@@ -1352,7 +1129,6 @@ class BatchTopKTrainPerSeq(BatchTopK):
             raise ValueError("BatchTopKTrainPerSeq: train_r_max must be >= train_r_min")
         self.train_r_min = train_r_min
         self.train_r_max = train_r_max
-        self.update_tau_train_from_train = bool(update_tau_train_from_train)
 
     @torch.no_grad()
     def forward(self, x: torch.Tensor) -> Tuple[torch.Tensor, torch.Tensor, torch.Tensor]:
@@ -1418,7 +1194,7 @@ class BatchTopKTrainPerSeq(BatchTopK):
 
         avg_r = self._compute_avg_r(mask, total, dtype)
         tau_used = tau_b.mean()
-        if self.update_tau_train_from_train and (self.fixed_tau is None):
+        if self.fixed_tau is None:
             self.tau_train.fill_(float(tau_used.item()))
         return mask, avg_r, tau_used
 

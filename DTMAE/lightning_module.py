@@ -1,5 +1,6 @@
 import os
 import random
+import inspect
 import hydra
 import numpy as np
 import librosa
@@ -26,29 +27,6 @@ from torchmetrics.aggregation import MeanMetric
 from pesq import NoUtterancesError
 import dtp.ops
 import dtp.resampler
-
-class LengthEmbedding(nn.Module):
-    """
-    Trainable embedding for integer "length ids" (e.g., token span length).
-
-    This is intentionally similar to learned absolute positional embeddings:
-    embed(id) is added to token features.
-    """
-    def __init__(self, max_len: int, dim: int, init_std: float = 0.02, scale: float = 1.0):
-        super().__init__()
-        if max_len <= 0:
-            raise ValueError("LengthEmbedding: max_len must be > 0")
-        if dim <= 0:
-            raise ValueError("LengthEmbedding: dim must be > 0")
-        self.max_len = int(max_len)
-        self.scale = float(scale)
-        self.emb = nn.Embedding(self.max_len + 1, dim)
-        nn.init.normal_(self.emb.weight, mean=0.0, std=float(init_std))
-
-    def forward(self, length_ids: torch.Tensor) -> torch.Tensor:
-        # length_ids: (...,) integer >= 0 (we clamp to [0, max_len])
-        length_ids = length_ids.to(torch.long).clamp(min=0, max=self.max_len)
-        return self.emb(length_ids) * self.scale
 
 class CodebookPerplexity(torchmetrics.Metric):
     def __init__(self, codebook_size, **kwargs):
@@ -110,40 +88,6 @@ class CodecLightningModule(pl.LightningModule):
         self.construct_asr_probe()
         self.save_hyperparameters()
         self.automatic_optimization = False
-
-    @staticmethod
-    def _length_ids_from_frontier_mask(mask: torch.Tensor) -> torch.Tensor:
-        """
-        Convert frontier mask [B, N] (True at kept/frontier positions) into per-position
-        length ids [B, N], where each position gets the length (span size) of its segment.
-
-        Example mask: 1 0 0 1 0 1 0 0
-          segments:   [0..2] [3..4] [5..7]
-          length ids:  3 3 3 2 2 3 3 3
-        """
-        if mask.dim() != 2:
-            raise ValueError("length_ids_from_frontier_mask expects mask of shape [B, N]")
-        B, N = mask.shape
-        if N == 0:
-            return mask.to(torch.long)
-
-        # DTP/resampler assumes the first token is always kept.
-        # Use torch._assert to keep `torch.compile` happy (avoid .item()).
-        torch._assert(mask[:, 0].all(), "Frontier mask must keep the first token (mask[:, 0] == True)")
-
-        device = mask.device
-        mask_l = mask.to(torch.long)
-
-        # Segment id per position: cumulative frontier count - 1 (in [0, N-1])
-        seg_id = (mask_l.cumsum(dim=1) - 1).clamp_min(0)
-
-        # Count positions per segment (allocate [B, N] to avoid data-dependent shapes).
-        ones = torch.ones((B, N), device=device, dtype=torch.long)
-        seg_counts = torch.zeros((B, N), device=device, dtype=torch.long)
-        seg_counts.scatter_add_(dim=1, index=seg_id, src=ones)
-
-        # Broadcast back to positions: length id for each position = seg_counts[b, seg_id[b, t]]
-        return seg_counts.gather(dim=1, index=seg_id)
 
     def construct_model(self):
         enccfg = self.cfg.model.codec_encoder
@@ -223,35 +167,23 @@ class CodecLightningModule(pl.LightningModule):
 
         resamplercfg = self.cfg.model.resampler
         self.use_dtp = resamplercfg.use_dtp
+
         if self.use_dtp:
             self.dtp = getattr(dtp.ops, resamplercfg.dtp_cls)(**resamplercfg.dtp_params)
-        self.downsampler = getattr(dtp.resampler, resamplercfg.downsampler_cls)(**resamplercfg.downsampler_params)
-        self.upsampler = getattr(dtp.resampler, resamplercfg.upsampler_cls)(**resamplercfg.upsampler_params)
 
-        # Optional: length embedding derived from frontier mask (span length).
-        len_cfg = getattr(resamplercfg, "length_embedding", None)
-        self.lenemb_after_downsample = bool(getattr(len_cfg, "after_downsample", False)) if len_cfg is not None else False
-        self.lenemb_after_encoder_level2 = bool(getattr(len_cfg, "after_encoder_level2", False)) if len_cfg is not None else False
-        self.lenemb_after_quantizer = bool(getattr(len_cfg, "after_quantizer", False)) if len_cfg is not None else False
-        self.lenemb_before_upsampler = bool(getattr(len_cfg, "before_upsampler", False)) if len_cfg is not None else False
+        downsampler_cls = getattr(dtp.resampler, resamplercfg.downsampler_cls)
+        upsampler_cls = getattr(dtp.resampler, resamplercfg.upsampler_cls)
+        downsampler_params = dict(getattr(resamplercfg, "downsampler_params", {}))
+        upsampler_params = dict(getattr(resamplercfg, "upsampler_params", {}))
 
-        enable_any_len_emb = (
-            self.lenemb_after_downsample
-            or self.lenemb_after_encoder_level2
-            or self.lenemb_after_quantizer
-            or self.lenemb_before_upsampler
-        )
-        if enable_any_len_emb and (not self.use_dtp):
-            raise ValueError("length_embedding requires use_dtp=True (needs a frontier mask to derive lengths)")
+        self.downsampler = downsampler_cls(**downsampler_params)
+        self.upsampler = upsampler_cls(**upsampler_params)
+        self.fixed_pattern_masking = None
+        self.upsampler_uses_mask = "mask" in inspect.signature(self.upsampler.forward).parameters
 
-        if enable_any_len_emb:
-            max_len = int(getattr(len_cfg, "max_len", 512))
-            init_std = float(getattr(len_cfg, "init_std", 0.02))
-            scale = float(getattr(len_cfg, "scale", 1.0))
-            dim = int(self.cfg.model.codec_decoder.in_channels)
-            self.length_embedding = LengthEmbedding(max_len=max_len, dim=dim, init_std=init_std, scale=scale)
-        else:
-            self.length_embedding = None
+        if (not self.use_dtp) and self.upsampler_uses_mask:
+            fixed_mask_params = dict(getattr(resamplercfg, "dtp_params", {}))
+            self.fixed_pattern_masking = dtp.resampler.FixedPatternMasking(**fixed_mask_params)
 
     def construct_asr_probe(self):
         # CTC probe is optional and should not backprop into encoder
@@ -316,6 +248,11 @@ class CodecLightningModule(pl.LightningModule):
         elif 'train_levels' in quantizer_params and 'codebook_dim' in quantizer_params:
             # DitheredFSQ (inference_levels defaults to max(train_levels))
             codebook_size = max(quantizer_params.train_levels) ** quantizer_params.codebook_dim
+        elif 'levels' in quantizer_params:
+            # TAAEDitheredFSQ: explicit per-dimension levels
+            codebook_size = 1
+            for L in quantizer_params.levels:
+                codebook_size *= L
         else:
             codebook_size = 16384  # fallback default
         metrics['codebook_perplexity'] = CodebookPerplexity(codebook_size=codebook_size)
@@ -330,58 +267,35 @@ class CodecLightningModule(pl.LightningModule):
         vq_emb = self.encoder(wav.unsqueeze(1), level=1)
 
         if self.use_dtp:
-            # Modified for DifferentiablePLE compatibility
-            # Check if dtp returns 4 values (including aux_loss) or 3 values
-            dtp_out = self.dtp(vq_emb)
-            if len(dtp_out) == 4:
-                mask, avg_r, tau_used, aux_loss = dtp_out
+            mask, avg_r, tau_used = self.dtp(vq_emb)
+            downsample_out = self.downsampler(vq_emb, mask)
+            if isinstance(downsample_out, tuple):
+                if len(downsample_out) == 5:
+                    vq_emb, position_ids, cu_seqlens, max_seqlen, mask = downsample_out
+                elif len(downsample_out) == 4:
+                    vq_emb, position_ids, cu_seqlens, max_seqlen = downsample_out
+                else:
+                    raise ValueError("downsampler must return tensor, 4-tuple, or 5-tuple")
             else:
-                mask, avg_r, tau_used = dtp_out
-                aux_loss = 0.0
-            
-            # Original code:
-            # mask, avg_r, tau_used = self.dtp(vq_emb)
-            
-            vq_emb, position_ids, cu_seqlens, max_seqlen = self.downsampler(vq_emb, mask)
+                vq_emb = downsample_out
+                position_ids = cu_seqlens = max_seqlen = None
         else:
-            # Original code:
-            # cu_seqlens = max_seqlen = avg_r = tau_used = None
-            # Modified for consistency
-            position_ids = cu_seqlens = max_seqlen = avg_r = tau_used = None
-            aux_loss = 0.0
-            
+            avg_r = tau_used = None
+            if self.fixed_pattern_masking is not None:
+                mask = self.fixed_pattern_masking(vq_emb)
+            else:
+                mask = None
             vq_emb = self.downsampler(vq_emb)
-            mask = None
-
-        # Length ids for reduced (kept) tokens (packed varlen): [total_kept]
-        length_ids_kept = None
-        if self.use_dtp and (self.length_embedding is not None):
-            length_ids_kept = self._length_ids_from_frontier_mask(mask)[mask]
-
-        # (1) After downsample, before encoder level2
-        if self.lenemb_after_downsample and (self.length_embedding is not None):
-            vq_emb = vq_emb + self.length_embedding(length_ids_kept).to(dtype=vq_emb.dtype)
+            position_ids = cu_seqlens = max_seqlen = None
 
         vq_emb = self.encoder(vq_emb, position_ids=position_ids, cu_seqlens=cu_seqlens, max_seqlen=max_seqlen, level=2)
 
-        # (2) After encoder level2, before VQ quantizer
-        if self.lenemb_after_encoder_level2 and (self.length_embedding is not None):
-            vq_emb = vq_emb + self.length_embedding(length_ids_kept).to(dtype=vq_emb.dtype)
-
         vq_post_emb, vq_code, vq_loss = self.decoder(vq_emb, vq=True)
-
-        # (3) After VQ quantizer
-        if self.lenemb_after_quantizer and (self.length_embedding is not None):
-            vq_post_emb = vq_post_emb + self.length_embedding(length_ids_kept).to(dtype=vq_post_emb.dtype)
 
         vq_post_emb = self.decoder(vq_post_emb, vq=False, position_ids=position_ids, cu_seqlens=cu_seqlens, max_seqlen=max_seqlen, level=2)
 
-        # (4) Before upsampler (i.e., right before entering upsampling)
-        if self.lenemb_before_upsampler and (self.length_embedding is not None):
-            vq_post_emb = vq_post_emb + self.length_embedding(length_ids_kept).to(dtype=vq_post_emb.dtype)
-
-        if self.use_dtp:
-            vq_post_emb = self.upsampler(vq_post_emb, mask)
+        if mask is not None:
+            vq_post_emb = self.upsampler(vq_post_emb, mask=mask)
         else:
             vq_post_emb = self.upsampler(vq_post_emb)
 
@@ -395,7 +309,6 @@ class CodecLightningModule(pl.LightningModule):
             'vq_code': vq_code,
             'avg_r': avg_r,
             'tau_used': tau_used,
-            'aux_loss': aux_loss, # Added for DifferentiablePLE
             'pre_quant_emb': vq_emb,  # used for ASR probe (gradients detached later)
             'cu_seqlens': cu_seqlens,
             'max_seqlen': max_seqlen,
@@ -503,14 +416,6 @@ class CodecLightningModule(pl.LightningModule):
         if 'entropy_loss' in output:
             gen_loss += output['entropy_loss']
             output_dict['entropy_loss'] = output['entropy_loss']
-
-        # Added for DifferentiablePLE: Auxiliary Loss (MSE for target r)
-        # Typically weight this loss appropriately (e.g., 1.0 or 10.0) depending on scale
-        if 'aux_loss' in output and output['aux_loss'] != 0.0:
-             # Weight for aux loss (can be moved to config later)
-             lambda_aux = 30.0
-             gen_loss += output['aux_loss'] * lambda_aux
-             output_dict['aux_loss'] = output['aux_loss']
 
         # Perceptual loss
         # output_dict['perceptual_se_loss_l2'] = perceptual_se_loss_l2
