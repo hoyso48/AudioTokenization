@@ -1,9 +1,9 @@
 defaults:
   - preprocess: default
-  - dataset: mls_eng_streaming
+  - dataset: default
   - model: default
   - train: default
-name: default-mls_eng_streaming-transformer-bs64-600k-100hz-tome50hzPLEBatchTopk-vq16384-2stage-ropebase10kposids-window128-lneps1e2-layerscale1-qknorm-nodropout
+name: default-transformer-bs64-600k-100hz-tome50hzPLEBatchTopk-vq16384-2stage-ropebase10kposids-window128-lneps1e2-layerscale1-qknorm-nodropout
 log_dir: pl_log
 debug: false
 resume_ckpt: null
