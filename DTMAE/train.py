@@ -27,10 +27,18 @@ def train(cfg):
 
     datamodule = DataModule(cfg)
     lightning_module = CodecLightningModule(cfg)
+
+    devices = cfg.train.trainer.get("devices", 1)
+    if isinstance(devices, (list, tuple)):
+        use_ddp = len(devices) >= 2
+    elif isinstance(devices, int):
+        use_ddp = devices >= 2
+    else:
+        use_ddp = False
     
     trainer = pl.Trainer(
         **cfg.train.trainer,
-        # strategy=DDPStrategy(find_unused_parameters=True),
+        strategy=DDPStrategy(find_unused_parameters=True) if use_ddp else None,
         callbacks=callbacks,
         limit_train_batches=1.0 if not cfg.debug else 0.001,
         logger = pl.loggers.WandbLogger(project='Audio-Tokenizer', name=cfg.name, save_dir=cfg.log_dir, id=cfg.wandb_id),
