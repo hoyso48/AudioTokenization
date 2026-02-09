@@ -912,6 +912,9 @@ class PLEBatchTopKTrainPerSeq(PLEBatchTopK):
         *,
         train_r_min: Optional[float] = None,
         train_r_max: Optional[float] = None,
+        train_r_sampling: str = "uniform",
+        train_r_beta_alpha: float = 2.0,
+        train_r_beta_beta: float = 2.0,
     ):
         super().__init__(
             r=r,
@@ -944,8 +947,16 @@ class PLEBatchTopKTrainPerSeq(PLEBatchTopK):
             raise ValueError("PLEBatchTopKTrainPerSeq: train_r_max must be in [0, 1]")
         if train_r_max < train_r_min:
             raise ValueError("PLEBatchTopKTrainPerSeq: train_r_max must be >= train_r_min")
+        train_r_sampling = str(train_r_sampling).lower()
+        if train_r_sampling not in {"uniform", "beta"}:
+            raise ValueError("PLEBatchTopKTrainPerSeq: train_r_sampling must be 'uniform' or 'beta'")
+        if float(train_r_beta_alpha) <= 0.0 or float(train_r_beta_beta) <= 0.0:
+            raise ValueError("PLEBatchTopKTrainPerSeq: beta parameters must be > 0")
         self.train_r_min = train_r_min
         self.train_r_max = train_r_max
+        self.train_r_sampling = train_r_sampling
+        self.train_r_beta_alpha = float(train_r_beta_alpha)
+        self.train_r_beta_beta = float(train_r_beta_beta)
 
         # Train-time statistics for tau estimation.
         self.register_buffer("l_over_n_ema", torch.tensor(0.0))
@@ -983,7 +994,16 @@ class PLEBatchTopKTrainPerSeq(PLEBatchTopK):
 
         # Sample per-sequence target r
         if self.train_r_max > self.train_r_min:
-            r_b = torch.empty(B, device=device, dtype=dtype).uniform_(self.train_r_min, self.train_r_max)
+            if self.train_r_sampling == "uniform":
+                r_b = torch.empty(B, device=device, dtype=dtype).uniform_(self.train_r_min, self.train_r_max)
+            else:  # beta on [train_r_min, train_r_max]
+                beta_dist = torch.distributions.Beta(
+                    torch.tensor(self.train_r_beta_alpha, device=device, dtype=torch.float32),
+                    torch.tensor(self.train_r_beta_beta, device=device, dtype=torch.float32),
+                )
+                beta_u = beta_dist.sample((B,)).to(device=device, dtype=dtype)
+                width = float(self.train_r_max - self.train_r_min)
+                r_b = float(self.train_r_min) + width * beta_u
         else:
             r_b = torch.full((B,), self.train_r_min, device=device, dtype=dtype)
         r_upper = 1.0 if N <= 1 else (1.0 - (1.0 / float(N)))
@@ -1095,6 +1115,9 @@ class BatchTopKTrainPerSeq(BatchTopK):
         *,
         train_r_min: Optional[float] = None,
         train_r_max: Optional[float] = None,
+        train_r_sampling: str = "uniform",
+        train_r_beta_alpha: float = 2.0,
+        train_r_beta_beta: float = 2.0,
     ):
         super().__init__(
             r=r,
@@ -1127,8 +1150,16 @@ class BatchTopKTrainPerSeq(BatchTopK):
             raise ValueError("BatchTopKTrainPerSeq: train_r_max must be in [0, 1]")
         if train_r_max < train_r_min:
             raise ValueError("BatchTopKTrainPerSeq: train_r_max must be >= train_r_min")
+        train_r_sampling = str(train_r_sampling).lower()
+        if train_r_sampling not in {"uniform", "beta"}:
+            raise ValueError("BatchTopKTrainPerSeq: train_r_sampling must be 'uniform' or 'beta'")
+        if float(train_r_beta_alpha) <= 0.0 or float(train_r_beta_beta) <= 0.0:
+            raise ValueError("BatchTopKTrainPerSeq: beta parameters must be > 0")
         self.train_r_min = train_r_min
         self.train_r_max = train_r_max
+        self.train_r_sampling = train_r_sampling
+        self.train_r_beta_alpha = float(train_r_beta_alpha)
+        self.train_r_beta_beta = float(train_r_beta_beta)
 
     @torch.no_grad()
     def forward(self, x: torch.Tensor) -> Tuple[torch.Tensor, torch.Tensor, torch.Tensor]:
@@ -1148,7 +1179,16 @@ class BatchTopKTrainPerSeq(BatchTopK):
 
         # Sample per-sequence target r and convert to number of tokens to drop.
         if self.train_r_max > self.train_r_min:
-            r_b = torch.empty(B, device=device, dtype=dtype).uniform_(self.train_r_min, self.train_r_max)
+            if self.train_r_sampling == "uniform":
+                r_b = torch.empty(B, device=device, dtype=dtype).uniform_(self.train_r_min, self.train_r_max)
+            else:  # beta on [train_r_min, train_r_max]
+                beta_dist = torch.distributions.Beta(
+                    torch.tensor(self.train_r_beta_alpha, device=device, dtype=torch.float32),
+                    torch.tensor(self.train_r_beta_beta, device=device, dtype=torch.float32),
+                )
+                beta_u = beta_dist.sample((B,)).to(device=device, dtype=dtype)
+                width = float(self.train_r_max - self.train_r_min)
+                r_b = float(self.train_r_min) + width * beta_u
         else:
             r_b = torch.full((B,), self.train_r_min, device=device, dtype=dtype)
         r_upper = 1.0 if N <= 1 else (1.0 - (1.0 / float(N)))

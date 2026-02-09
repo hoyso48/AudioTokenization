@@ -86,6 +86,9 @@ resampler:
   #   update_test_time: true
   #   train_r_min: 0.3
   #   train_r_max: 0.7
+  #   train_r_sampling: uniform   # choices: uniform | beta
+  #   train_r_beta_alpha: 2.0     # used only when train_r_sampling=beta
+  #   train_r_beta_beta: 2.0      # used only when train_r_sampling=beta
   #   max_s: null
   #   sample_prob: 0
   #   min_mask_span: 1
