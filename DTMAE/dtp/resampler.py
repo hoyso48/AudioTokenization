@@ -2,7 +2,7 @@ import torch
 import torch.nn as nn
 from typing import Optional
 
-from vq.module import ConvDownsample, ConvUpsample
+from vq.module import WNConv1d, WNConvTranspose1d
 
 
 def _fixed_pattern_stride(r: float) -> int:
@@ -65,6 +65,94 @@ class FixedPatternMasking(nn.Module):
             raise ValueError("FixedPatternMasking expects dense x of shape [B, N, C]")
         batch_size, seq_len, _ = x.shape
         return _build_fixed_pattern_mask(batch_size, seq_len, self.stride, x.device)
+
+
+class TAAEConvDownsampler(nn.Module):
+    """
+    TAAE-style dense conv downsampler.
+      - weight-normalized Conv1d
+      - activation before strided conv (Identity by default)
+      - input/output in [B, N, C]
+    """
+
+    def __init__(
+        self,
+        dim: int,
+        stride: int = 2,
+        activation: Optional[nn.Module] = None,
+        **kwargs,
+    ):
+        super().__init__()
+        dim = int(dim)
+        if dim <= 0:
+            raise ValueError("TAAEConvDownsampler: dim must be positive")
+        if int(stride) < 1:
+            raise ValueError("TAAEConvDownsampler: stride must be >= 1")
+
+        stride = int(stride)
+        kernel_size = 2 * stride if stride > 1 else 1
+        padding = stride // 2 + stride % 2 if stride > 1 else 0
+
+        self.activation = nn.Identity() if activation is None else activation
+        self.conv = WNConv1d(
+            in_channels=dim,
+            out_channels=dim,
+            kernel_size=kernel_size,
+            stride=stride,
+            padding=padding,
+        )
+
+    def forward(self, x: torch.Tensor):
+        if x.dim() != 3:
+            raise ValueError("TAAEConvDownsampler expects dense x of shape [B, N, C]")
+        x = x.transpose(1, 2)
+        x = self.activation(x)
+        x = self.conv(x)
+        return x.transpose(1, 2)
+
+
+class TAAEConvUpsampler(nn.Module):
+    """
+    TAAE-style dense conv upsampler.
+      - weight-normalized ConvTranspose1d
+      - activation before transposed conv (Identity by default)
+      - input/output in [B, N, C]
+    """
+
+    def __init__(
+        self,
+        dim: int,
+        stride: int = 2,
+        activation: Optional[nn.Module] = None,
+        **kwargs,
+    ):
+        super().__init__()
+        dim = int(dim)
+        if dim <= 0:
+            raise ValueError("TAAEConvUpsampler: dim must be positive")
+        if int(stride) < 1:
+            raise ValueError("TAAEConvUpsampler: stride must be >= 1")
+
+        stride = int(stride)
+        kernel_size = 2 * stride if stride > 1 else 1
+        padding = stride // 2 + stride % 2 if stride > 1 else 0
+
+        self.activation = nn.Identity() if activation is None else activation
+        self.conv = WNConvTranspose1d(
+            in_channels=dim,
+            out_channels=dim,
+            kernel_size=kernel_size,
+            stride=stride,
+            padding=padding,
+        )
+
+    def forward(self, x: torch.Tensor):
+        if x.dim() != 3:
+            raise ValueError("TAAEConvUpsampler expects dense x of shape [B, N, C]")
+        x = x.transpose(1, 2)
+        x = self.activation(x)
+        x = self.conv(x)
+        return x.transpose(1, 2)
 
 
 class RepeatUpsampler(nn.Module):

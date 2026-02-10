@@ -185,6 +185,21 @@ resampler:
   upsampler_params:
     dim: 256
 
+  # ---------------------------------------------------------------------------
+  # Example C) Conv50Hz baseline (No-DTP, TAAE-style conv down/up)
+  # - 100Hz -> (stride 2) -> 50Hz at level2
+  # - mask-based upsampling is not used
+  # ---------------------------------------------------------------------------
+  # use_dtp: False
+  # downsampler_cls: TAAEConvDownsampler
+  # downsampler_params:
+  #   dim: 256
+  #   stride: 2
+  # upsampler_cls: TAAEConvUpsampler
+  # upsampler_params:
+  #   dim: 256
+  #   stride: 2
+
 mpd:
   periods: [2, 3, 5, 7, 11]
   max_downsample_channels: 256

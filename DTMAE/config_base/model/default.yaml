@@ -125,6 +125,21 @@ resampler:
   upsampler_params:
     dim: 512
 
+  # ---------------------------------------------------------------------------
+  # Example C) Conv50Hz baseline (No-DTP, TAAE-style conv down/up)
+  # - 100Hz -> (stride 2) -> 50Hz at level2
+  # - mask-based upsampling is not used
+  # ---------------------------------------------------------------------------
+  # use_dtp: False
+  # downsampler_cls: TAAEConvDownsampler
+  # downsampler_params:
+  #   dim: 512
+  #   stride: 2
+  # upsampler_cls: TAAEConvUpsampler
+  # upsampler_params:
+  #   dim: 512
+  #   stride: 2
+
 # =============================================================================
 # Quantizer config (extensible pattern like resampler)
 # Available quantizers: ResidualVQ, DitheredFSQ, TAAEDitheredFSQ, FSQ, SimVQ

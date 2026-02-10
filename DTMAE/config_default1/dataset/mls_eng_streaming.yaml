@@ -1,0 +1,75 @@
+dataset:
+  _target_: data_module.FSDataset
+
+# MLS is parquet-based with many shards, so DataLoader workers can scale.
+# However, with HF *streaming* some environments deadlock with worker processes (fork + HF background threads).
+# Start with `num_workers: 0` and scale up only after verifying stability.
+dataloader:
+  # MLS decoding can be parallelized very effectively.
+  # Empirically in this environment: ~38 samples/sec at workers=0 -> ~286 samples/sec at workers=8.
+  num_workers: 24
+  pin_memory: true
+  persistent_workers: false
+  prefetch_factor: 2
+  # Lightning defaults a 60s timeout for streaming loaders with workers; MLS worker init can exceed that in DDP.
+  # Increase it so slow warmup doesn't look like a deadlock.
+  timeout: 600
+  # NOTE (Linux): with local snapshot mode (no HF networking), `fork` is typically safe and avoids
+  # Python 3.12 `multiprocessing.resource_tracker` warnings about leaked semaphores at shutdown.
+  # If you hit deadlocks in your environment, switch this to `spawn`.
+  multiprocessing_context: spawn
+
+hf_streaming_mls_eng:
+  hf_repo_id: parler-tts/mls_eng
+  split: train
+  # Streaming shuffle warms up a reservoir buffer before yielding; too-large buffers can
+  # look like a "hang" on slow/blocked networks. Increase only after confirming throughput.
+  shuffle_buffer_size: 20000
+  seed: 1024
+  # Use the already-downloaded local HF hub cache (no hub access required).
+  use_local_snapshot: true
+  # Put your HF cache root here. This should contain `hub/datasets--parler-tts--mls_eng/...`.
+  hf_home: /workspace/.hf_home
+  # Optional: pin the exact revision. If null, we resolve from `refs/main` in the hub cache.
+  revision: null
+  # Keep this true for DTMAE training (we need decoded waveforms).
+  audio_decode: true
+  # Preload the parquet streaming iterable once per rank in the parent process so forked workers
+  # don't each redo expensive "resolve 1416 shards" initialization.
+  preload_in_parent: true
+  # cache_dir is only used when `use_local_snapshot: false` (hub path).
+  cache_dir: null
+  download_max_retries: 50
+  download_timeout: 60
+
+train:
+  backend: hf_streaming_mls_eng
+  batch_size: 32
+  shuffle: true
+  min_audio_length: 64000
+
+val:
+  backend: filelist
+  filelist: ./filelists/librispeech_test_clean.txt
+  batch_size: 32
+  shuffle: false
+  min_audio_length: 64000
+  log_idxs: [0,1,2,3]
+
+test:
+  backend: filelist
+  filelist: ./filelists/librispeech_test_clean.txt
+  batch_size: 1
+  shuffle: false
+  min_audio_length: -1
+  log_idxs: [0,1,2,3]
+
+sample_rate: 16000
+multiple_of: 320
+
+# Optional: enable if you want ASR probe losses on MLS transcripts.
+transcript:
+  enable: false
+  lowercase: true
+
+
