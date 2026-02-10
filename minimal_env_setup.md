@@ -12,7 +12,11 @@ It targets this flow:
 ## Quick start
 
 ```bash
-bash setup_conda_envs_minimal.sh
+bash setup_conda_envs_minimal.sh \
+  --train_env atk \
+  --eval_env speech_eval \
+  --python_version 3.10 \
+  --recreate_on_python_mismatch
 ```
 
 Then run:

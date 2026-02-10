@@ -171,6 +171,11 @@ ensure_s3prl_version_file() {
 
 ensure_flash_attn() {
   local env_name="$1"
+
+  # flash-attn setup.py imports psutil during metadata/build steps.
+  # Keep these lightweight build helpers present before attempting install.
+  run_in_env "$env_name" python -m pip install --upgrade psutil ninja packaging
+
   if run_in_env "$env_name" python -c "import flash_attn" >/dev/null 2>&1; then
     log "flash-attn already available in $env_name"
     return

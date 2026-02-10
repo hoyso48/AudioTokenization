@@ -51,7 +51,18 @@ chmod 600 ~/.secrets/wandb_api_key.txt
 
 ```bash
 cd "$REPO_DIR"
-bash setup_conda_envs_minimal.sh --train_env atk --eval_env speech_eval
+bash setup_conda_envs_minimal.sh \
+  --train_env atk \
+  --eval_env speech_eval \
+  --python_version 3.10 \
+  --recreate_on_python_mismatch
+```
+
+검증:
+
+```bash
+conda run -n speech_eval python -c "import sys; print(sys.version)"
+# 3.10.x 출력이면 정상
 ```
 
 training + eval (`config_path` 쉽게 변경):
