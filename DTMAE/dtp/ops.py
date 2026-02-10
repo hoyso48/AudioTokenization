@@ -222,6 +222,7 @@ class _BatchSelectorBase(nn.Module):
         max_mask_prob: float,
         min_mask_span: int,
         max_mask_span: int,
+        random_mask_mode: str = "start_geom",
         max_s: Optional[int] = None,
         fixed_tau: Optional[float] = None,
         update_test_time: bool = False,
@@ -240,6 +241,12 @@ class _BatchSelectorBase(nn.Module):
         self.max_mask_prob = float(max_mask_prob)
         self.min_mask_span = int(min_mask_span)
         self.max_mask_span = int(max_mask_span)
+        mode = str(random_mask_mode).strip().lower()
+        if mode == "start_geom_span":
+            mode = "start_geom"
+        if mode not in {"start_geom", "iid_bernoulli"}:
+            raise ValueError("Batch selector: random_mask_mode must be 'start_geom' or 'iid_bernoulli'")
+        self.random_mask_mode = mode
         self.ema_mu = float(ema_mu)
         self.eta0 = float(eta0)
         self.decay_T = float(decay_T)
@@ -417,6 +424,61 @@ class _BatchSelectorBase(nn.Module):
                 final_mask[:, 0] = True
             return final_mask
 
+        if self.random_mask_mode == "iid_bernoulli":
+            # Legacy iid_bernoulli branch with span support:
+            # - span == 1: pure iid Bernoulli on tokens 1..N-1
+            # - span  > 1: wav2vec2-style fixed-span starts (overlap allowed)
+            # Token 0 is always kept.
+            if self.max_mask_span > self.min_mask_span:
+                span_b = torch.randint(
+                    low=self.min_mask_span,
+                    high=self.max_mask_span + 1,
+                    size=(B,),
+                    device=device,
+                ).to(torch.long)
+            else:
+                span_b = torch.full((B,), int(self.min_mask_span), device=device, dtype=torch.long)
+            span_b = span_b.clamp_min(1)
+
+            T = N - 1
+            r_b = mask_prob.clamp(min=0.0, max=1.0)
+            # Since token0 is fixed keep, match overall target-r by scaling tail ratio.
+            r_tail = (r_b * (float(N) / float(max(1, N - 1)))).clamp(min=0.0, max=1.0)
+
+            span_f = span_b.to(dtype=dtype).clamp(min=1.0)
+            r_tail_geom = r_tail.clamp(min=1e-6, max=1.0 - 1e-6)
+            p_start_geom = ((-torch.log1p(-r_tail_geom)) / span_f).clamp(min=1e-6, max=1.0)
+            p_start_iid = r_tail
+            p_start = torch.where(span_b <= 1, p_start_iid, p_start_geom)
+
+            starts = torch.rand(B, T, device=device, dtype=dtype) < p_start.unsqueeze(1)
+            if not bool(starts.any().item()):
+                final_mask[:, 0] = True
+                return final_mask
+
+            pos = torch.arange(1, N, device=device, dtype=torch.long).view(1, T).expand(B, -1)
+            b_idx = torch.arange(B, device=device, dtype=torch.long).view(B, 1).expand(B, T)
+            len_all = span_b.view(B, 1).expand(B, T)
+
+            start_pos = pos[starts]
+            start_len = len_all[starts]
+            start_b = b_idx[starts]
+            end_pos = (start_pos + start_len - 1).clamp(max=N - 1)
+
+            diff = torch.zeros(B, N + 1, device=device, dtype=dtype)
+            diff_flat = diff.view(-1)
+            row_stride = N + 1
+            flat_start = start_b * row_stride + start_pos
+            flat_endp1 = start_b * row_stride + (end_pos + 1)
+            ones = torch.ones_like(flat_start, dtype=dtype)
+            diff_flat.index_add_(0, flat_start, ones)
+            diff_flat.index_add_(0, flat_endp1, -ones)
+
+            covered = diff[:, :N].cumsum(dim=1) > 0
+            final_mask = ~covered
+            final_mask[:, 0] = True
+            return final_mask
+
         # Fully vectorized geom-span approximation (no Python loop over B or N):
         # 1) Sample span starts at each position with p_start.
         # 2) Sample geometric span length for each position.
@@ -497,6 +559,7 @@ class PLEBatchTopK(_BatchSelectorBase):
         max_mask_prob: float = 0.0,
         min_mask_span: int = 4,
         max_mask_span: int = 4,
+        random_mask_mode: str = "start_geom",
         max_s: Optional[int] = None,
         fixed_tau: Optional[float] = None,
         update_test_time: bool = False,
@@ -515,6 +578,7 @@ class PLEBatchTopK(_BatchSelectorBase):
             max_mask_prob=max_mask_prob,
             min_mask_span=min_mask_span,
             max_mask_span=max_mask_span,
+            random_mask_mode=random_mask_mode,
             max_s=max_s,
             fixed_tau=fixed_tau,
             update_test_time=update_test_time,
@@ -636,6 +700,7 @@ class PLEBatchTopKJitter(_BatchSelectorBase):
         max_mask_prob: float = 0.0,
         min_mask_span: int = 4,
         max_mask_span: int = 4,
+        random_mask_mode: str = "start_geom",
         max_s: Optional[int] = None,
         fixed_tau: Optional[float] = None,
         update_test_time: bool = False,
@@ -655,6 +720,7 @@ class PLEBatchTopKJitter(_BatchSelectorBase):
             max_mask_prob=max_mask_prob,
             min_mask_span=min_mask_span,
             max_mask_span=max_mask_span,
+            random_mask_mode=random_mask_mode,
             max_s=max_s,
             fixed_tau=fixed_tau,
             update_test_time=update_test_time,
@@ -774,6 +840,7 @@ class BatchTopK(_BatchSelectorBase):
         max_mask_prob: float = 0.0,
         min_mask_span: int = 4,
         max_mask_span: int = 4,
+        random_mask_mode: str = "start_geom",
         max_s: Optional[int] = None,
         fixed_tau: Optional[float] = None,
         update_test_time: bool = False,
@@ -792,6 +859,7 @@ class BatchTopK(_BatchSelectorBase):
             max_mask_prob=max_mask_prob,
             min_mask_span=min_mask_span,
             max_mask_span=max_mask_span,
+            random_mask_mode=random_mask_mode,
             max_s=max_s,
             fixed_tau=fixed_tau,
             update_test_time=update_test_time,
@@ -848,6 +916,7 @@ class BatchGreedy(_BatchSelectorBase):
         max_mask_prob: float = 0.0,
         min_mask_span: int = 4,
         max_mask_span: int = 4,
+        random_mask_mode: str = "start_geom",
         max_s: Optional[int] = None,
         fixed_tau: Optional[float] = None,
         update_test_time: bool = False,
@@ -866,6 +935,7 @@ class BatchGreedy(_BatchSelectorBase):
             max_mask_prob=max_mask_prob,
             min_mask_span=min_mask_span,
             max_mask_span=max_mask_span,
+            random_mask_mode=random_mask_mode,
             max_s=max_s,
             fixed_tau=fixed_tau,
             update_test_time=update_test_time,
@@ -958,6 +1028,7 @@ class PLEBatchTopKTrainPerSeq(PLEBatchTopK):
         max_mask_prob: float = 0.0,
         min_mask_span: int = 4,
         max_mask_span: int = 4,
+        random_mask_mode: str = "start_geom",
         max_s: Optional[int] = None,
         fixed_tau: Optional[float] = None,
         update_test_time: bool = False,
@@ -982,6 +1053,7 @@ class PLEBatchTopKTrainPerSeq(PLEBatchTopK):
             max_mask_prob=max_mask_prob,
             min_mask_span=min_mask_span,
             max_mask_span=max_mask_span,
+            random_mask_mode=random_mask_mode,
             max_s=max_s,
             fixed_tau=fixed_tau,
             update_test_time=update_test_time,
@@ -1161,6 +1233,7 @@ class BatchTopKTrainPerSeq(BatchTopK):
         max_mask_prob: float = 0.0,
         min_mask_span: int = 4,
         max_mask_span: int = 4,
+        random_mask_mode: str = "start_geom",
         max_s: Optional[int] = None,
         fixed_tau: Optional[float] = None,
         update_test_time: bool = False,
@@ -1185,6 +1258,7 @@ class BatchTopKTrainPerSeq(BatchTopK):
             max_mask_prob=max_mask_prob,
             min_mask_span=min_mask_span,
             max_mask_span=max_mask_span,
+            random_mask_mode=random_mask_mode,
             max_s=max_s,
             fixed_tau=fixed_tau,
             update_test_time=update_test_time,
@@ -1318,6 +1392,7 @@ class BatchGreedyTrainPerSeq(BatchGreedy):
         max_mask_prob: float = 0.0,
         min_mask_span: int = 4,
         max_mask_span: int = 4,
+        random_mask_mode: str = "start_geom",
         max_s: Optional[int] = None,
         fixed_tau: Optional[float] = None,
         update_test_time: bool = False,
@@ -1339,6 +1414,7 @@ class BatchGreedyTrainPerSeq(BatchGreedy):
             max_mask_prob=max_mask_prob,
             min_mask_span=min_mask_span,
             max_mask_span=max_mask_span,
+            random_mask_mode=random_mask_mode,
             max_s=max_s,
             fixed_tau=fixed_tau,
             update_test_time=update_test_time,
