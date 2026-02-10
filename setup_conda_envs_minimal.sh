@@ -4,6 +4,7 @@ set -euo pipefail
 ROOT="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
 
 PYTHON_VERSION="${PYTHON_VERSION:-3.10}"
+RECREATE_ON_PY_MISMATCH=0
 
 TRAIN_ENV="${TRAIN_ENV:-atk}"
 EVAL_ENV="${EVAL_ENV:-speech_eval}"
@@ -35,6 +36,7 @@ Usage:
 
 Options:
   --python_version <ver>          Python version for newly created envs (default: 3.10)
+  --recreate_on_python_mismatch   Recreate env automatically if existing Python version mismatches
 
   --train_env <name>              Train env name (default: atk)
   --eval_env <name>               Eval env name (default: speech_eval)
@@ -83,8 +85,36 @@ env_exists() {
   conda run -n "$env_name" python -V >/dev/null 2>&1
 }
 
+env_python_version() {
+  local env_name="$1"
+  conda run -n "$env_name" python - <<'PY'
+import sys
+print(f"{sys.version_info.major}.{sys.version_info.minor}")
+PY
+}
+
 ensure_env() {
   local env_name="$1"
+  if env_exists "$env_name"; then
+    local current_py
+    current_py="$(env_python_version "$env_name" | tail -n 1 | tr -d '[:space:]')"
+    if [[ "$current_py" != "$PYTHON_VERSION" ]]; then
+      if [[ "$RECREATE_ON_PY_MISMATCH" -eq 1 ]]; then
+        log "Recreating $env_name due to Python mismatch ($current_py != $PYTHON_VERSION)"
+        conda remove -n "$env_name" --all -y
+      else
+        err "Conda env '$env_name' uses Python $current_py, but this setup expects $PYTHON_VERSION."
+        err "Fix option A: remove env and rerun setup"
+        err "  conda remove -n $env_name --all -y"
+        err "Fix option B: rerun with --recreate_on_python_mismatch"
+        exit 1
+      fi
+    else
+      log "Conda env exists: $env_name (python=$current_py)"
+      return
+    fi
+  fi
+
   if env_exists "$env_name"; then
     log "Conda env exists: $env_name"
     return
@@ -310,6 +340,10 @@ while [[ $# -gt 0 ]]; do
     --python_version)
       PYTHON_VERSION="$2"
       shift 2
+      ;;
+    --recreate_on_python_mismatch)
+      RECREATE_ON_PY_MISMATCH=1
+      shift
       ;;
     --train_env)
       TRAIN_ENV="$2"
