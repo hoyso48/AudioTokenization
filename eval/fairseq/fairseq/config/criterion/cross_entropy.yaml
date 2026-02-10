@@ -1,0 +1,4 @@
+# @package criterion
+
+_target_: fairseq.criterions.cross_entropy.CrossEntropyCriterion
+sentence_avg: false

@@ -12,7 +12,6 @@ It targets this flow:
 ## Quick start
 
 ```bash
-git submodule update --init --recursive eval/fairseq eval/s3prl
 bash setup_conda_envs_minimal.sh
 ```
 
@@ -73,10 +72,14 @@ bash setup_conda_envs_minimal.sh --skip_train --force_reinstall_eval_torch
 ```
 
 ## Notes
-- If clone is missing nested eval sources, run:
+- This repo now vendors `eval/fairseq` directly (no submodule required).
+- If you are on a legacy clone and `eval/fairseq` is broken, repair once:
 
 ```bash
-git submodule update --init --recursive eval/fairseq eval/s3prl
+git pull
+git submodule deinit -f eval/fairseq || true
+rm -rf .git/modules/eval/fairseq eval/fairseq
+git restore --source=HEAD --staged --worktree eval/fairseq
 ```
 
 - Default train env is `atk`. If you use a different local env name, pass `--train_env <name>`.

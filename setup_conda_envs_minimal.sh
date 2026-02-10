@@ -116,25 +116,15 @@ ensure_eval_subrepos() {
   local fairseq_pkg="$ROOT/eval/fairseq/fairseq/__init__.py"
   local s3prl_pkg="$ROOT/eval/s3prl/s3prl/__init__.py"
 
-  if [[ -f "$fairseq_pkg" && -f "$s3prl_pkg" ]]; then
-    return
-  fi
-
-  log "Eval source trees look incomplete. Trying git submodule update..."
-  if command -v git >/dev/null 2>&1; then
-    if git -C "$ROOT" rev-parse --is-inside-work-tree >/dev/null 2>&1; then
-      git -C "$ROOT" submodule update --init --recursive eval/fairseq eval/s3prl || true
-    fi
-  fi
-
   if [[ ! -f "$fairseq_pkg" ]]; then
     err "Missing fairseq sources: $fairseq_pkg"
-    err "Run: git -C '$ROOT' submodule update --init --recursive eval/fairseq"
+    err "This repository now vendors eval/fairseq directly."
+    err "Refresh your working tree from origin and restore eval/fairseq."
     exit 1
   fi
   if [[ ! -f "$s3prl_pkg" ]]; then
     err "Missing s3prl sources: $s3prl_pkg"
-    err "Run: git -C '$ROOT' submodule update --init --recursive eval/s3prl"
+    err "Your repo is missing eval/s3prl sources. Re-clone this repository with full contents."
     exit 1
   fi
 }
@@ -265,14 +255,18 @@ from pathlib import Path
 
 root = Path(r"$ROOT").resolve()
 eval_root = root / "eval"
+fairseq_root = eval_root / "fairseq"
+s3prl_root = eval_root / "s3prl"
 paths = [
-    eval_root / "fairseq",
-    eval_root / "s3prl",
     eval_root / "speaker_verification",
     eval_root,
     root,
     root / "DTMAE",
 ]
+if (fairseq_root / "fairseq" / "__init__.py").is_file():
+    paths.insert(0, fairseq_root)
+if (s3prl_root / "s3prl" / "__init__.py").is_file():
+    paths.insert(0, s3prl_root)
 for p in paths:
     sp = str(p)
     if sp not in sys.path:

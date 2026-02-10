@@ -23,9 +23,19 @@ repo 루트가 아니면 `REPO_DIR`만 정확히 주면 나머지는 자동으�
 
 ```bash
 cd "$REPO_DIR"
-git submodule update --init --recursive eval/fairseq eval/s3prl
+
 chmod +x setup_conda_envs_minimal.sh run_train_then_eval.sh run_eval_only.sh
 chmod +x slurm/*.sh slurm/*.sbatch
+```
+
+레거시 클론(예전 submodule 상태) 복구가 필요하면 1회:
+
+```bash
+cd "$REPO_DIR"
+git pull
+git submodule deinit -f eval/fairseq || true
+rm -rf .git/modules/eval/fairseq eval/fairseq
+git restore --source=HEAD --staged --worktree eval/fairseq
 ```
 
 ## 2) W&B 토큰 파일(권장)

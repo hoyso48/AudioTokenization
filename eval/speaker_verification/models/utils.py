@@ -24,8 +24,8 @@ try:
 except Exception as e:
     raise ImportError(
         "Failed to import fairseq runtime modules. "
-        "Ensure eval/fairseq is populated (git submodule update --init --recursive eval/fairseq) "
-        "or install a compatible fairseq package."
+        "Ensure eval/fairseq is populated with your local project version "
+        "(including any custom patches), then rerun."
     ) from e
 
 def load_model(filepath):
