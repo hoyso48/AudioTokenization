@@ -532,6 +532,116 @@ class _BatchSelectorBase(nn.Module):
         return final_mask
 
 
+class FixedPattern(_BatchSelectorBase):
+    """
+    Fixed-pattern selector.
+
+    - Keeps token 0 and every `round(1 / (1 - r))`-th token.
+    - Does not use tau/controller updates.
+    - During training, samples per-sequence `r_b ~ Uniform(min_mask_prob, max_mask_prob)`.
+      If both bounds are 0, falls back to the configured `r`.
+
+    Tau-related arguments are accepted for config compatibility but ignored.
+    """
+
+    def __init__(
+        self,
+        r: float,
+        initial_tau: float = 1.0,
+        ema_mu: float = 0.95,
+        eta0: float = 0.1,
+        decay_T: float = 1000.0,
+        tau_min: float = 1e-6,
+        tau_max: float = 1e6,
+        update_every: int = 1,
+        sample_prob: float = 0.0,
+        min_mask_prob: float = 0.0,
+        max_mask_prob: float = 0.0,
+        min_mask_span: int = 4,
+        max_mask_span: int = 4,
+        random_mask_mode: str = "start_geom",
+        max_s: Optional[int] = None,
+        fixed_tau: Optional[float] = None,
+        update_test_time: bool = False,
+    ):
+        # Keep the same constructor surface as other selectors,
+        # but intentionally ignore tau/controller-related options.
+        super().__init__(
+            r=r,
+            initial_tau=1.0,
+            ema_mu=0.95,
+            eta0=0.1,
+            decay_T=1000.0,
+            tau_min=1e-6,
+            tau_max=1e6,
+            update_every=1,
+            sample_prob=sample_prob,
+            min_mask_prob=min_mask_prob,
+            max_mask_prob=max_mask_prob,
+            min_mask_span=min_mask_span,
+            max_mask_span=max_mask_span,
+            random_mask_mode=random_mask_mode,
+            max_s=max_s,
+            fixed_tau=1.0,
+            update_test_time=False,
+            invert_update=False,
+        )
+
+    @staticmethod
+    def _r_to_stride(r: torch.Tensor) -> torch.Tensor:
+        keep_ratio = (1.0 - r).clamp(min=1e-6)
+        stride = torch.round(1.0 / keep_ratio).to(torch.long)
+        return stride.clamp_min_(1)
+
+    def _sample_pattern_r(self, batch_size: int, device: torch.device, dtype: torch.dtype) -> torch.Tensor:
+        if not self.training:
+            return torch.full((batch_size,), float(self.r), device=device, dtype=dtype)
+
+        lo = float(self.min_mask_prob)
+        hi = float(self.max_mask_prob)
+
+        if lo == 0.0 and hi == 0.0:
+            lo = float(self.r)
+            hi = float(self.r)
+
+        if hi > lo:
+            r_b = torch.empty(batch_size, device=device, dtype=dtype).uniform_(lo, hi)
+        else:
+            r_b = torch.full((batch_size,), lo, device=device, dtype=dtype)
+
+        return r_b
+
+    @torch.no_grad()
+    def forward(self, x: torch.Tensor) -> Tuple[torch.Tensor, torch.Tensor, torch.Tensor]:
+        device = x.device
+        dtype = x.dtype
+        B, N, _C = x.shape if x.ndim == 3 else (0, 0, 0)
+        total = B * N
+
+        tau_used = self._get_tau_tensor(device, dtype)
+
+        if total == 0:
+            mask = torch.zeros(B, N, device=device, dtype=torch.bool)
+            avg_r = torch.zeros((), device=device, dtype=dtype)
+            return mask, avg_r, tau_used
+
+        r_b = self._sample_pattern_r(B, device, dtype)
+        r_b = r_b.clamp(min=0.0, max=1.0 - 1e-6)
+        stride_b = self._r_to_stride(r_b)
+
+        pos = torch.arange(N, device=device, dtype=torch.long).view(1, N)
+        mask = (pos % stride_b.view(B, 1)) == 0
+
+        mask = self._apply_max_span_constraint(mask)
+        mask = self._maybe_apply_random_mask(mask, dtype)
+        if N > 0:
+            mask[:, 0] = True
+        mask = self._apply_max_span_constraint(mask)
+
+        avg_r = self._compute_avg_r(mask, total, dtype)
+        return mask, avg_r, tau_used
+
+
 class PLEBatchTopK(_BatchSelectorBase):
     """
     Batch-level PLE (Path-Length Equalization) with a single global tau.

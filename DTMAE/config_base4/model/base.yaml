@@ -1,0 +1,204 @@
+codec_encoder:
+  hop_length: 80 #256
+  n_fft: 320 #1024
+  window_size: 320 #1024
+  dim: 256
+  n_layers_level1: 6
+  n_layers_level2: 12
+  r: 0.5
+  n_head: 4
+  ffn_mult: 4
+  dropout: 0
+  max_position_embeddings: 8192
+  base: 10000
+  causal: False
+  out_channels: 256
+  norm_eps: 1e-2
+  attn_window_size: [64, 64]
+  layerscale_gamma_init: 1
+
+codec_decoder:
+  in_channels: 256
+  hop_length: 80 #256
+  n_fft: 320 #1024
+  window_size: 320 #1024
+  dim: 256
+  n_layers_level1: 6
+  n_layers_level2: 12
+  r: 0.5
+  n_head: 4
+  ffn_mult: 4
+  dropout: 0
+  max_position_embeddings: 8192
+  base: 10000
+  causal: False
+  norm_eps: 1e-2
+  attn_window_size: [64, 64]
+  layerscale_gamma_init: 1
+  # Legacy quantizer params (reference only, use quantizer section instead):
+  # vq_num_quantizers: 1    → quantizer.params.num_quantizers
+  # vq_commit_weight: 0.5   → quantizer.params.commitment
+  # codebook_size: 16384    → quantizer.params.codebook_size
+  # codebook_dim: 8         → quantizer.params.codebook_dim
+  # fsq: False              → quantizer.cls: DitheredFSQ (or FSQ)
+  # fsq_levels: [8,8,8,5,5,5] → quantizer.params.train_levels
+  # vq_weight_init: False     (UNUSED - delete)
+  # vq_full_commit_loss: False (UNUSED - delete)
+
+# =============================================================================
+# Quantizer config (extensible pattern like resampler)
+# Available quantizers: ResidualVQ, DitheredFSQ, TAAEDitheredFSQ, FSQ, SimVQ
+# =============================================================================
+quantizer:
+  cls: ResidualVQ
+  params:
+    dim: 256
+    codebook_size: 16384
+    codebook_dim: 8
+    num_quantizers: 1
+    commitment: 0.5
+
+# =============================================================================
+# DitheredFSQ Config (from TAAE paper)
+# =============================================================================
+# Behavior automatically switches based on mode:
+#   model.train() → uses train_levels, train_num_residuals
+#   model.eval()  → uses inference_levels, inference_num_residuals
+#
+# BPS Calculation @25Hz:
+#   bps = 25 * num_residuals * ceil(log2(codebook_size))
+#
+# quantizer:
+#   cls: DitheredFSQ
+#   params:
+#     dim: 256
+#     codebook_dim: 6
+#     # --- Training (model.train()) ---
+#     train_levels: [17, 9, 5]              # Random sampling during training
+#     train_num_residuals: 1                # Usually 1 during training
+#     noise_dropout: 0.5
+#     # --- Inference (model.eval()) ---
+#     inference_levels: [5, 5, 5, 5, 5, 5]  # Per-dimension levels
+#     inference_num_residuals: 2            # 1=single, 2+=residual
+#     # --- Common ---
+#     num_codebooks: 1
+#     scale: 1.0
+#
+# -----------------------------------------------------------------------------
+# BPS Examples @25Hz (applied automatically when model.eval()):
+# -----------------------------------------------------------------------------
+# 400bps: inference_levels=[6,6,6,6,6,6], inference_num_residuals=1
+# 700bps: inference_levels=[5,5,5,5,5,5], inference_num_residuals=2
+# 350bps: inference_levels=[5,5,5,5,5,5], inference_num_residuals=1
+# Mixed:  inference_levels=[8,8,8,5,5,5], inference_num_residuals=1 → ~400bps
+# =============================================================================
+
+# =============================================================================
+# TAAEDitheredFSQ Config (official TAAE repo class, copied as-is)
+# NOTE: This class expects input dim == len(levels) * num_codebooks.
+#       In DTMAE decoder, input dim is usually 256/512, so use with care.
+# =============================================================================
+# quantizer:
+#   cls: TAAEDitheredFSQ
+#   params:
+#     levels: [17, 17, 17, 17, 17, 17]
+#     dither_inference: false
+#     num_codebooks: 1
+#     noise_dropout: 0.5
+#     scale: 1.0
+# =============================================================================
+
+resampler:
+  use_dtp: True
+  # dtp_cls: PLEBatchTopK
+  # dtp_params:
+  #   r: 0.5
+  #   initial_tau: 1.0
+  #   ema_mu: 0.95
+  #   eta0: 0.1
+  #   decay_T: 1000.0
+  #   tau_min: 1e-6
+  #   tau_max: 1e6
+  #   update_every: 1
+  #   max_s: null
+  #   sample_prob: 0
+  #   min_mask_span: 1
+  #   max_mask_span: 1
+  #   min_mask_prob: 0.5
+  #   max_mask_prob: 0.5
+
+  # ---------------------------------------------------------------------------
+  # Example A) PLE per-sequence training + eval-time update_test_time tuning
+  # - Train: per-sequence r sampling (Uniform(train_r_min, train_r_max))
+  # - Train tau bootstrap: tau_train ~ EMA(L/N)/(1-r)
+  # - Eval: starts from tau_train, then optional update_test_time adaptation
+  # ---------------------------------------------------------------------------
+  dtp_cls: PLEBatchTopKTrainPerSeq
+  dtp_params:
+    r: 0.5
+    initial_tau: 1.0
+    ema_mu: 0.95
+    eta0: 0.1
+    decay_T: 1000.0
+    tau_min: 1e-6
+    tau_max: 1e6
+    update_every: 1
+    update_test_time: false
+    train_r_min: 0.2
+    train_r_max: 0.8
+    max_s: null
+    sample_prob: 0
+    min_mask_span: 1
+    max_mask_span: 1
+    min_mask_prob: 0.5
+    max_mask_prob: 0.5
+
+  # ---------------------------------------------------------------------------
+  # Example B) PLE jitter training around a global tau
+  # - Train: tau_b = tau * exp(u), u~Uniform(-jitter_a, jitter_a)
+  # - Eval: fixed tau_train or optional update_test_time tuning
+  # ---------------------------------------------------------------------------
+  # dtp_cls: PLEBatchTopKJitter
+  # dtp_params:
+  #   r: 0.5
+  #   initial_tau: 1.0
+  #   ema_mu: 0.95
+  #   eta0: 0.1
+  #   decay_T: 1000.0
+  #   tau_min: 1e-6
+  #   tau_max: 1e6
+  #   update_every: 1
+  #   update_test_time: true
+  #   jitter_a: 0.2
+  #   max_s: null
+  #   sample_prob: 0
+  #   min_mask_span: 1
+  #   max_mask_span: 1
+  #   min_mask_prob: 0.5
+  #   max_mask_prob: 0.5
+  downsampler_cls: FrontierDownsampler
+  downsampler_params: {}
+  upsampler_cls: MaskUpsampler
+  upsampler_params:
+    dim: 256
+
+mpd:
+  periods: [2, 3, 5, 7, 11]
+  max_downsample_channels: 256
+  channels: 8
+  channel_increasing_factor: 4
+  use_weight_norm: False
+
+mstft:
+  stft_params:
+    fft_sizes: [78, 126, 206, 334, 542, 876, 1418, 2296]
+    hop_sizes: [39, 63, 103, 167, 271, 438, 709, 1148]
+    win_lengths: [78, 126, 206, 334, 542, 876, 1418, 2296]
+    window: hann_window
+  in_channels: 1
+  out_channels: 1
+  kernel_sizes: [5, 3]
+  channels: 8
+  max_downsample_channels: 256
+  downsample_scales: [2, 2, 2]
+  use_weight_norm: False
