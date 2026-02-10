@@ -1,13 +1,32 @@
+import sys
+from pathlib import Path
+
 import torch
-import fairseq
 from packaging import version
 import torch.nn.functional as F
-from fairseq import tasks
-from fairseq.checkpoint_utils import load_checkpoint_to_cpu
-from fairseq.dataclass.utils import convert_namespace_to_omegaconf
 from omegaconf import OmegaConf
 from s3prl.upstream.interfaces import UpstreamBase
 from torch.nn.utils.rnn import pad_sequence
+
+_FAIRSEQ_ROOT = Path(__file__).resolve().parents[2] / "fairseq"
+_FAIRSEQ_PKG = _FAIRSEQ_ROOT / "fairseq" / "__init__.py"
+if _FAIRSEQ_PKG.is_file():
+    fairseq_root_str = str(_FAIRSEQ_ROOT)
+    if fairseq_root_str not in sys.path:
+        sys.path.insert(0, fairseq_root_str)
+
+import fairseq
+
+try:
+    from fairseq import tasks
+    from fairseq.checkpoint_utils import load_checkpoint_to_cpu
+    from fairseq.dataclass.utils import convert_namespace_to_omegaconf
+except Exception as e:
+    raise ImportError(
+        "Failed to import fairseq runtime modules. "
+        "Ensure eval/fairseq is populated (git submodule update --init --recursive eval/fairseq) "
+        "or install a compatible fairseq package."
+    ) from e
 
 def load_model(filepath):
     state = torch.load(filepath, map_location=lambda storage, loc: storage)
@@ -75,4 +94,3 @@ class UpstreamExpert(UpstreamBase):
         return {
             "default": features,
         }
-

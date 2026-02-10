@@ -24,6 +24,7 @@ TORCH_INDEX_URL="${TORCH_INDEX_URL:-https://download.pytorch.org/whl/cu128}"
 TORCH_SPEC="${TORCH_SPEC:-torch==2.9.0+cu128}"
 TORCHAUDIO_SPEC="${TORCHAUDIO_SPEC:-torchaudio==2.9.0+cu128}"
 TORCHVISION_SPEC="${TORCHVISION_SPEC:-torchvision==0.24.0+cu128}"
+S3PRL_VERSION_FALLBACK="${S3PRL_VERSION_FALLBACK:-0.4.18}"
 
 usage() {
   cat <<'EOF'
@@ -111,14 +112,59 @@ ensure_ffmpeg() {
   fi
 }
 
+ensure_eval_subrepos() {
+  local fairseq_pkg="$ROOT/eval/fairseq/fairseq/__init__.py"
+  local s3prl_pkg="$ROOT/eval/s3prl/s3prl/__init__.py"
+
+  if [[ -f "$fairseq_pkg" && -f "$s3prl_pkg" ]]; then
+    return
+  fi
+
+  log "Eval source trees look incomplete. Trying git submodule update..."
+  if command -v git >/dev/null 2>&1; then
+    if git -C "$ROOT" rev-parse --is-inside-work-tree >/dev/null 2>&1; then
+      git -C "$ROOT" submodule update --init --recursive eval/fairseq eval/s3prl || true
+    fi
+  fi
+
+  if [[ ! -f "$fairseq_pkg" ]]; then
+    err "Missing fairseq sources: $fairseq_pkg"
+    err "Run: git -C '$ROOT' submodule update --init --recursive eval/fairseq"
+    exit 1
+  fi
+  if [[ ! -f "$s3prl_pkg" ]]; then
+    err "Missing s3prl sources: $s3prl_pkg"
+    err "Run: git -C '$ROOT' submodule update --init --recursive eval/s3prl"
+    exit 1
+  fi
+}
+
+ensure_s3prl_version_file() {
+  local version_file="$ROOT/eval/s3prl/s3prl/version.txt"
+  if [[ -f "$version_file" ]]; then
+    return
+  fi
+  log "Missing s3prl version.txt; creating fallback at $version_file"
+  mkdir -p "$(dirname "$version_file")"
+  printf "%s\n" "$S3PRL_VERSION_FALLBACK" > "$version_file"
+}
+
 ensure_flash_attn() {
   local env_name="$1"
   if run_in_env "$env_name" python -c "import flash_attn" >/dev/null 2>&1; then
     log "flash-attn already available in $env_name"
     return
   fi
+
   log "Installing flash-attn==$FLASH_ATTN_VERSION in $env_name"
-  run_in_env "$env_name" python -m pip install "flash-attn==$FLASH_ATTN_VERSION" --no-build-isolation
+  run_in_env "$env_name" python -m pip uninstall -y flash-attn flash_attn >/dev/null 2>&1 || true
+  run_in_env "$env_name" python -m pip install --force-reinstall --no-cache-dir "flash-attn==$FLASH_ATTN_VERSION" --no-build-isolation
+
+  if ! run_in_env "$env_name" python -c "import flash_attn" >/dev/null 2>&1; then
+    err "flash-attn import failed in $env_name after reinstall."
+    err "This usually means torch/flash-attn ABI mismatch. Reinstall torch stack first, then rerun setup."
+    exit 1
+  fi
 }
 
 install_eval_torch_stack_if_needed() {
@@ -171,6 +217,9 @@ PY
 }
 
 setup_eval_env() {
+  ensure_eval_subrepos
+  ensure_s3prl_version_file
+
   ensure_env "$EVAL_ENV"
   ensure_pip_base "$EVAL_ENV"
   ensure_ffmpeg "$EVAL_ENV"

@@ -12,6 +12,7 @@ It targets this flow:
 ## Quick start
 
 ```bash
+git submodule update --init --recursive eval/fairseq eval/s3prl
 bash setup_conda_envs_minimal.sh
 ```
 
@@ -72,6 +73,12 @@ bash setup_conda_envs_minimal.sh --skip_train --force_reinstall_eval_torch
 ```
 
 ## Notes
+- If clone is missing nested eval sources, run:
+
+```bash
+git submodule update --init --recursive eval/fairseq eval/s3prl
+```
+
 - Default train env is `atk`. If you use a different local env name, pass `--train_env <name>`.
 - `eval/wavlm_large_finetune.pth` is required for speaker similarity in eval.
   - The setup script warns if missing.

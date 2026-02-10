@@ -8,5 +8,9 @@ except:
     pass
 
 
-with (Path(__file__).parent.resolve() / "version.txt").open() as file:
-    __version__ = file.read().strip()
+_version_file = Path(__file__).parent.resolve() / "version.txt"
+if _version_file.is_file():
+    with _version_file.open() as file:
+        __version__ = file.read().strip()
+else:
+    __version__ = "0.0.0+local"

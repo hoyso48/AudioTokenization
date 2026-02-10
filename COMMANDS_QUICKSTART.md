@@ -23,6 +23,7 @@ repo 루트가 아니면 `REPO_DIR`만 정확히 주면 나머지는 자동으�
 
 ```bash
 cd "$REPO_DIR"
+git submodule update --init --recursive eval/fairseq eval/s3prl
 chmod +x setup_conda_envs_minimal.sh run_train_then_eval.sh run_eval_only.sh
 chmod +x slurm/*.sh slurm/*.sbatch
 ```
