@@ -121,11 +121,11 @@ resampler:
     tau_max: 1e6
     update_every: 1
     max_s: null
-    sample_prob: 0
-    min_mask_span: 1
-    max_mask_span: 1
-    min_mask_prob: 0.5
-    max_mask_prob: 0.5
+    sample_prob: 0       # random mask mix prob (0 disables random branch)
+    min_mask_span: 4     # start_geom m lower (default: start_geom_m4)
+    max_mask_span: 4     # start_geom m upper (e.g., 3~6 for m-jitter)
+    min_mask_prob: 0.5   # random branch target-r lower
+    max_mask_prob: 0.5   # random branch target-r upper
 
   # ---------------------------------------------------------------------------
   # Example A) PLE per-sequence training + eval-time update_test_time tuning
@@ -150,11 +150,11 @@ resampler:
   #   train_r_beta_alpha: 2.0     # used only when train_r_sampling=beta
   #   train_r_beta_beta: 2.0      # used only when train_r_sampling=beta
   #   max_s: null
-  #   sample_prob: 0
-  #   min_mask_span: 1
-  #   max_mask_span: 1
-  #   min_mask_prob: 0.5
-  #   max_mask_prob: 0.5
+  #   sample_prob: 0       # random mask mix prob
+  #   min_mask_span: 4     # start_geom m lower
+  #   max_mask_span: 4     # start_geom m upper
+  #   min_mask_prob: 0.5   # random branch target-r lower
+  #   max_mask_prob: 0.5   # random branch target-r upper
 
   # ---------------------------------------------------------------------------
   # Example B) PLE jitter training around a global tau
@@ -174,11 +174,11 @@ resampler:
   #   update_test_time: true
   #   jitter_a: 0.2
   #   max_s: null
-  #   sample_prob: 0
-  #   min_mask_span: 1
-  #   max_mask_span: 1
-  #   min_mask_prob: 0.5
-  #   max_mask_prob: 0.5
+  #   sample_prob: 0       # random mask mix prob
+  #   min_mask_span: 4     # start_geom m lower
+  #   max_mask_span: 4     # start_geom m upper
+  #   min_mask_prob: 0.5   # random branch target-r lower
+  #   max_mask_prob: 0.5   # random branch target-r upper
   downsampler_cls: FrontierDownsampler
   downsampler_params: {}
   upsampler_cls: MaskUpsampler

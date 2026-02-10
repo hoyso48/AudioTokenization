@@ -38,7 +38,7 @@ def train(cfg):
     
     trainer = pl.Trainer(
         **cfg.train.trainer,
-        strategy=DDPStrategy(find_unused_parameters=True) if use_ddp else None,
+        strategy=DDPStrategy(find_unused_parameters=True) if use_ddp else 'auto',
         callbacks=callbacks,
         limit_train_batches=1.0 if not cfg.debug else 0.001,
         logger = pl.loggers.WandbLogger(project='Audio-Tokenizer', name=cfg.name, save_dir=cfg.log_dir, id=cfg.wandb_id),
