@@ -22,8 +22,21 @@ def train(cfg):
                             save_top_k=1, save_last=True,
                             every_n_train_steps=10000, monitor='mel_loss', mode='min')
 
+    save_every_n_train_steps = int(getattr(cfg.train, "save_every_n_train_steps", 0))
+    callbacks = [checkpoint_callback]
+    if save_every_n_train_steps > 0:
+        periodic_checkpoint = ModelCheckpoint(
+            dirpath=cfg.log_dir,
+            filename="step-{step}",
+            every_n_train_steps=save_every_n_train_steps,
+            save_top_k=-1,
+            save_last=False,
+            auto_insert_metric_name=False,
+        )
+        callbacks.append(periodic_checkpoint)
+
     lr_monitor = LearningRateMonitor(logging_interval='step')
-    callbacks = [checkpoint_callback, lr_monitor]
+    callbacks += [lr_monitor]
 
     datamodule = DataModule(cfg)
     lightning_module = CodecLightningModule(cfg)

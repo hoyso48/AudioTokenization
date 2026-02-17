@@ -15,6 +15,11 @@ trainer:
   val_check_interval: null
   check_val_every_n_epoch: 5
 
+# Optional periodic checkpointing in addition to the main best/last checkpoint.
+# 0: disable periodic saving
+# N: save an unconditional checkpoint every N train steps
+save_every_n_train_steps: 0
+
 # loss
 lambdas:
   lambda_disc: 1.0
@@ -57,3 +62,4 @@ disc_schedule_params:
   down_step: 500000
   min_lr: 1.0e-5 # this should be the final lr
   max_lr: 1.0e-4 
+
