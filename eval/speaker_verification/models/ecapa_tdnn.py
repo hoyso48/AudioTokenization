@@ -4,6 +4,7 @@ import torch
 import torch.nn as nn
 import torch.nn.functional as F
 import torchaudio.transforms as trans
+from pathlib import Path
 from .utils import UpstreamExpert
 
 
@@ -193,7 +194,8 @@ class ECAPA_TDNN(nn.Module):
                                               melkwargs=melkwargs)
         else:
             if config_path is None:
-                self.feature_extract = torch.hub.load('s3prl/s3prl', feat_type)
+                local_s3prl_repo = Path(__file__).resolve().parents[2] / "s3prl"
+                self.feature_extract = torch.hub.load(str(local_s3prl_repo), feat_type, source="local")
             else:
                 self.feature_extract = UpstreamExpert(config_path)
             if len(self.feature_extract.model.encoder.layers) == 24 and hasattr(self.feature_extract.model.encoder.layers[23].self_attn, "fp32_attention"):
@@ -298,4 +300,3 @@ if __name__ == '__main__':
     out = model(x)
     # print(model)
     print(out.shape)
-

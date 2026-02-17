@@ -13,7 +13,10 @@ import torchmetrics
 from torchmetrics.text import CharErrorRate, WordErrorRate
 import torchaudio
 
-import wandb
+try:
+    import wandb
+except Exception:
+    wandb = None
 from vq import TransformerEncoderSTFT, TransformerDecoderISTFT
 from module import HiFiGANMultiPeriodDiscriminator, SpecDiscriminator
 from criterions import GANLoss, MultiResolutionMelSpectrogramLoss
@@ -550,7 +553,7 @@ class CodecLightningModule(pl.LightningModule):
                 self.log_dict({'val_ctc_loss': asr_out['ctc_loss']}, on_step=False, on_epoch=True, prog_bar=True, logger=True, batch_size=self.cfg.dataset.val.batch_size, sync_dist=True)
                 self.val_cer.update(asr_out['predicted_text'], asr_out['target_text'])
                 self.val_wer.update(asr_out['predicted_text'], asr_out['target_text'])
-        if batch_idx in self.cfg.dataset.val.log_idxs:
+        if batch_idx in self.cfg.dataset.val.log_idxs and wandb is not None and hasattr(self.logger, "experiment"):
             y_ = y_[0].squeeze().float().cpu().numpy()
             y = y[0].squeeze().float().cpu().numpy()
 
@@ -596,7 +599,7 @@ class CodecLightningModule(pl.LightningModule):
                 self.log_dict({'test_ctc_loss': asr_out['ctc_loss']}, on_step=False, on_epoch=True, prog_bar=True, logger=True, batch_size=self.cfg.dataset.test.batch_size, sync_dist=True)
                 self.test_cer.update(asr_out['predicted_text'], asr_out['target_text'])
                 self.test_wer.update(asr_out['predicted_text'], asr_out['target_text'])
-        if batch_idx in self.cfg.dataset.test.log_idxs:
+        if batch_idx in self.cfg.dataset.test.log_idxs and wandb is not None and hasattr(self.logger, "experiment"):
             y_ = y_[0].squeeze().float().cpu().numpy()
             y = y[0].squeeze().float().cpu().numpy()
 

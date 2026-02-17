@@ -81,9 +81,15 @@ def infer_codebook_size_from_cfg(cfg) -> int:
         return int(inf_levels) ** int(qparams.codebook_dim)
     if "train_levels" in qparams and "codebook_dim" in qparams:
         return int(max(qparams.train_levels)) ** int(qparams.codebook_dim)
+    if "levels" in qparams:
+        size = 1
+        for L in qparams.levels:
+            size *= int(L)
+        return int(size)
 
     # Conservative fallback: match previous default.
     return 16384
+
 
 
 def read_lines(path: str) -> List[str]:

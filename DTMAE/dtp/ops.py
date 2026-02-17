@@ -226,6 +226,7 @@ class _BatchSelectorBase(nn.Module):
         max_s: Optional[int] = None,
         fixed_tau: Optional[float] = None,
         update_test_time: bool = False,
+        sample_in_inference: bool = False,
         invert_update: bool = False,
     ):
         super().__init__()
@@ -258,6 +259,7 @@ class _BatchSelectorBase(nn.Module):
 
         self.fixed_tau = float(fixed_tau) if fixed_tau is not None else None
         self.update_test_time = bool(update_test_time)
+        self.sample_in_inference = bool(sample_in_inference)
         self.controller_sign = -1.0 if invert_update else 1.0
 
         if self.min_mask_span <= 0 or self.max_mask_span <= 0:
@@ -382,7 +384,7 @@ class _BatchSelectorBase(nn.Module):
         )
 
     def _maybe_apply_random_mask(self, mask: torch.Tensor, dtype: torch.dtype) -> torch.Tensor:
-        if not self.training or self.sample_prob <= 0.0:
+        if (not self.training and not self.sample_in_inference) or self.sample_prob <= 0.0:
             return mask
         if torch.rand(1, device=mask.device).item() >= self.sample_prob:
             return mask
@@ -563,6 +565,7 @@ class FixedPattern(_BatchSelectorBase):
         max_s: Optional[int] = None,
         fixed_tau: Optional[float] = None,
         update_test_time: bool = False,
+        sample_in_inference: bool = False,
     ):
         # Keep the same constructor surface as other selectors,
         # but intentionally ignore tau/controller-related options.
@@ -584,6 +587,7 @@ class FixedPattern(_BatchSelectorBase):
             max_s=max_s,
             fixed_tau=1.0,
             update_test_time=False,
+            sample_in_inference=sample_in_inference,
             invert_update=False,
         )
 
@@ -673,6 +677,7 @@ class PLEBatchTopK(_BatchSelectorBase):
         max_s: Optional[int] = None,
         fixed_tau: Optional[float] = None,
         update_test_time: bool = False,
+        sample_in_inference: bool = False,
     ):
         super().__init__(
             r=r,
@@ -692,6 +697,7 @@ class PLEBatchTopK(_BatchSelectorBase):
             max_s=max_s,
             fixed_tau=fixed_tau,
             update_test_time=update_test_time,
+            sample_in_inference=sample_in_inference,
             invert_update=False,
         )
 
@@ -814,6 +820,7 @@ class PLEBatchTopKJitter(_BatchSelectorBase):
         max_s: Optional[int] = None,
         fixed_tau: Optional[float] = None,
         update_test_time: bool = False,
+        sample_in_inference: bool = False,
         jitter_a: float = 0.4,
     ):
         super().__init__(
@@ -834,6 +841,7 @@ class PLEBatchTopKJitter(_BatchSelectorBase):
             max_s=max_s,
             fixed_tau=fixed_tau,
             update_test_time=update_test_time,
+            sample_in_inference=sample_in_inference,
             invert_update=False,
         )
         if jitter_a < 0.0:
@@ -954,6 +962,7 @@ class BatchTopK(_BatchSelectorBase):
         max_s: Optional[int] = None,
         fixed_tau: Optional[float] = None,
         update_test_time: bool = False,
+        sample_in_inference: bool = False,
     ):
         super().__init__(
             r=r,
@@ -973,6 +982,7 @@ class BatchTopK(_BatchSelectorBase):
             max_s=max_s,
             fixed_tau=fixed_tau,
             update_test_time=update_test_time,
+            sample_in_inference=sample_in_inference,
             invert_update=True,
         )
 
@@ -1030,6 +1040,7 @@ class BatchGreedy(_BatchSelectorBase):
         max_s: Optional[int] = None,
         fixed_tau: Optional[float] = None,
         update_test_time: bool = False,
+        sample_in_inference: bool = False,
     ):
         super().__init__(
             r=r,
@@ -1049,6 +1060,7 @@ class BatchGreedy(_BatchSelectorBase):
             max_s=max_s,
             fixed_tau=fixed_tau,
             update_test_time=update_test_time,
+            sample_in_inference=sample_in_inference,
             invert_update=True,
         )
 
@@ -1142,6 +1154,7 @@ class PLEBatchTopKTrainPerSeq(PLEBatchTopK):
         max_s: Optional[int] = None,
         fixed_tau: Optional[float] = None,
         update_test_time: bool = False,
+        sample_in_inference: bool = False,
         *,
         train_r_min: Optional[float] = None,
         train_r_max: Optional[float] = None,
@@ -1167,6 +1180,7 @@ class PLEBatchTopKTrainPerSeq(PLEBatchTopK):
             max_s=max_s,
             fixed_tau=fixed_tau,
             update_test_time=update_test_time,
+            sample_in_inference=sample_in_inference,
         )
 
         if train_r_min is None:
@@ -1347,6 +1361,7 @@ class BatchTopKTrainPerSeq(BatchTopK):
         max_s: Optional[int] = None,
         fixed_tau: Optional[float] = None,
         update_test_time: bool = False,
+        sample_in_inference: bool = False,
         *,
         train_r_min: Optional[float] = None,
         train_r_max: Optional[float] = None,
@@ -1372,6 +1387,7 @@ class BatchTopKTrainPerSeq(BatchTopK):
             max_s=max_s,
             fixed_tau=fixed_tau,
             update_test_time=update_test_time,
+            sample_in_inference=sample_in_inference,
         )
 
         if train_r_min is None:
@@ -1506,6 +1522,7 @@ class BatchGreedyTrainPerSeq(BatchGreedy):
         max_s: Optional[int] = None,
         fixed_tau: Optional[float] = None,
         update_test_time: bool = False,
+        sample_in_inference: bool = False,
         *,
         train_r_min: Optional[float] = None,
         train_r_max: Optional[float] = None,
@@ -1528,6 +1545,7 @@ class BatchGreedyTrainPerSeq(BatchGreedy):
             max_s=max_s,
             fixed_tau=fixed_tau,
             update_test_time=update_test_time,
+            sample_in_inference=sample_in_inference,
         )
 
         if train_r_min is None:

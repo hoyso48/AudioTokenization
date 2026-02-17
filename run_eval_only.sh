@@ -512,23 +512,47 @@ for run_dir in "${RUN_DIRS[@]}"; do
   echo "[OUT] eval=$eval_out"
   echo "[OUT] stats=$stats_out"
 
-  if [[ "$FORCE" -eq 0 && -f "$eval_out/metrics.json" ]]; then
-    echo "[SKIP] metrics exists: $eval_out/metrics.json"
-    skipped_runs=$((skipped_runs + 1))
-    done_runs=$((done_runs + 1))
-    continue
-  fi
-
   ensure_new_config "$run_dir"
 
   probe_line="$(probe_dtp_capability "$run_dir" "${EVAL_CFG_OVERRIDES[@]}")"
   IFS='|' read -r use_dtp dtp_cls supports_fixed_tau supports_update_test_time <<< "$probe_line"
 
+  dtp_cls_lc="$(printf "%s" "$dtp_cls" | tr '[:upper:]' '[:lower:]')"
+  is_fixed_pattern=0
+  if [[ "$dtp_cls_lc" == "fixedpattern" || "$dtp_cls_lc" == *.fixedpattern ]]; then
+    is_fixed_pattern=1
+  fi
+
   fixed_tau=""
+  fixed_pattern_r_override=""
   resolved_target_avg_r=""
   do_tau_search=0
-  if [[ "$TAU_FINETUNE" -eq 1 && "$use_dtp" -eq 1 && "$supports_fixed_tau" -eq 1 ]]; then
+  if [[ "$TAU_FINETUNE" -eq 1 && "$use_dtp" -eq 1 && "$supports_fixed_tau" -eq 1 && "$is_fixed_pattern" -eq 0 ]]; then
     do_tau_search=1
+  fi
+
+  if [[ "$use_dtp" -eq 1 && "$is_fixed_pattern" -eq 1 ]]; then
+    if [[ -n "$TARGET_AVG_R" ]]; then
+      fixed_pattern_r_override="$TARGET_AVG_R"
+      echo "=== [INFO] dtp_cls=FixedPattern -> skip tau search and set r=${fixed_pattern_r_override} ==="
+    else
+      echo "=== [INFO] dtp_cls=FixedPattern -> skip tau search (tau has no effect) ==="
+    fi
+  fi
+
+  summary_json="$stats_out/summary.json"
+  if [[ "$FORCE" -eq 0 && -f "$eval_out/metrics.json" ]]; then
+    if [[ "$do_tau_search" -eq 1 && ! -f "$summary_json" ]]; then
+      echo "[INFO] metrics exists but tau summary missing -> rerun tau search+eval"
+    else
+      echo "[SKIP] metrics exists: $eval_out/metrics.json"
+      if [[ "$do_tau_search" -eq 1 ]]; then
+        echo "[SKIP] tau summary exists: $summary_json"
+      fi
+      skipped_runs=$((skipped_runs + 1))
+      done_runs=$((done_runs + 1))
+      continue
+    fi
   fi
 
   if [[ "$do_tau_search" -eq 1 ]]; then
@@ -540,7 +564,6 @@ for run_dir in "${RUN_DIRS[@]}"; do
 
     run_tau_search "$run_dir" "$stats_out" "$supports_update_test_time" "$resolved_target_avg_r"
 
-    summary_json="$stats_out/summary.json"
     if [[ ! -f "$summary_json" ]]; then
       echo "[ERROR] Missing summary.json at: $summary_json" >&2
       exit 1
@@ -553,6 +576,8 @@ for run_dir in "${RUN_DIRS[@]}"; do
       echo "=== [INFO] Tau search disabled by --no_tau_finetune ==="
     elif [[ "$use_dtp" -ne 1 ]]; then
       echo "=== [INFO] use_dtp=False -> eval only ==="
+    elif [[ "$is_fixed_pattern" -eq 1 ]]; then
+      echo "=== [INFO] dtp_cls=FixedPattern -> eval only ==="
     elif [[ "$supports_fixed_tau" -ne 1 ]]; then
       echo "=== [INFO] dtp_cls=${dtp_cls:-unknown} does not expose fixed_tau -> eval only ==="
     else
@@ -578,6 +603,9 @@ for run_dir in "${RUN_DIRS[@]}"; do
   for ov in "${EVAL_CFG_OVERRIDES[@]}"; do
     EVAL_CMD+=("--cfg_override" "$ov")
   done
+  if [[ -n "$fixed_pattern_r_override" ]]; then
+    EVAL_CMD+=("--cfg_override" "model.resampler.dtp_params.r=${fixed_pattern_r_override}")
+  fi
   if [[ -n "$fixed_tau" ]]; then
     EVAL_CMD+=("--cfg_override" "model.resampler.dtp_params.fixed_tau=${fixed_tau}")
   fi

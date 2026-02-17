@@ -25,7 +25,14 @@ TORCH_INDEX_URL="${TORCH_INDEX_URL:-https://download.pytorch.org/whl/cu128}"
 TORCH_SPEC="${TORCH_SPEC:-torch==2.9.0+cu128}"
 TORCHAUDIO_SPEC="${TORCHAUDIO_SPEC:-torchaudio==2.9.0+cu128}"
 TORCHVISION_SPEC="${TORCHVISION_SPEC:-torchvision==0.24.0+cu128}"
+TORCHCODEC_SPEC="${TORCHCODEC_SPEC:-torchcodec==0.9.1}"
 S3PRL_VERSION_FALLBACK="${S3PRL_VERSION_FALLBACK:-0.4.18}"
+
+TORCH_INDEX_URL_SET=0
+TORCH_SPEC_SET=0
+TORCHAUDIO_SPEC_SET=0
+TORCHVISION_SPEC_SET=0
+TORCHCODEC_SPEC_SET=0
 
 usage() {
   cat <<'EOF'
@@ -37,6 +44,7 @@ Usage:
 Options:
   --python_version <ver>          Python version for newly created envs (default: 3.10)
   --recreate_on_python_mismatch   Recreate env automatically if existing Python version mismatches
+                                  NOTE: eval/fairseq currently requires Python 3.10
 
   --train_env <name>              Train env name (default: atk)
   --eval_env <name>               Eval env name (default: speech_eval)
@@ -57,6 +65,10 @@ Options:
   --torch_spec <spec>             Torch package spec
   --torchaudio_spec <spec>        Torchaudio package spec
   --torchvision_spec <spec>       Torchvision package spec
+  --torchcodec_spec <spec>        TorchCodec package spec
+
+  # NOTE: unless explicitly overridden by options above, eval torch stack
+  # specs are auto-synced from --train_requirements (default: requirements.txt)
 
   -h, --help                      Show this help
 
@@ -87,17 +99,113 @@ env_exists() {
 
 env_python_version() {
   local env_name="$1"
-  conda run -n "$env_name" python - <<'PY'
-import sys
-print(f"{sys.version_info.major}.{sys.version_info.minor}")
-PY
+  conda run -n "$env_name" python -c "import sys; print(f'{sys.version_info.major}.{sys.version_info.minor}')"
+}
+
+extract_major_minor_version() {
+  local raw="$1"
+  if [[ "$raw" =~ ([0-9]+)\.([0-9]+) ]]; then
+    printf "%s.%s" "${BASH_REMATCH[1]}" "${BASH_REMATCH[2]}"
+    return 0
+  fi
+  return 1
+}
+
+sync_torch_specs_from_requirements() {
+  local req_path="$1"
+  local req_line=""
+  local parsed_index_url=""
+  local parsed_torch_spec=""
+  local parsed_torchaudio_spec=""
+  local parsed_torchvision_spec=""
+  local parsed_torchcodec_spec=""
+
+  if [[ ! -f "$req_path" ]]; then
+    return
+  fi
+
+  while IFS= read -r req_line || [[ -n "$req_line" ]]; do
+    req_line="${req_line%%#*}"
+    if [[ "$req_line" =~ ^[[:space:]]*--extra-index-url[[:space:]]+([^[:space:]]+) ]]; then
+      parsed_index_url="${BASH_REMATCH[1]}"
+      continue
+    fi
+    if [[ "$req_line" =~ ^[[:space:]]*(torch==[^[:space:]]+) ]]; then
+      parsed_torch_spec="${BASH_REMATCH[1]}"
+      continue
+    fi
+    if [[ "$req_line" =~ ^[[:space:]]*(torchaudio==[^[:space:]]+) ]]; then
+      parsed_torchaudio_spec="${BASH_REMATCH[1]}"
+      continue
+    fi
+    if [[ "$req_line" =~ ^[[:space:]]*(torchvision==[^[:space:]]+) ]]; then
+      parsed_torchvision_spec="${BASH_REMATCH[1]}"
+      continue
+    fi
+    if [[ "$req_line" =~ ^[[:space:]]*(torchcodec==[^[:space:]]+) ]]; then
+      parsed_torchcodec_spec="${BASH_REMATCH[1]}"
+      continue
+    fi
+  done < "$req_path"
+
+  if [[ "$TORCH_INDEX_URL_SET" -eq 0 && -n "$parsed_index_url" ]]; then
+    TORCH_INDEX_URL="$parsed_index_url"
+  fi
+  if [[ "$TORCH_SPEC_SET" -eq 0 && -n "$parsed_torch_spec" ]]; then
+    TORCH_SPEC="$parsed_torch_spec"
+  fi
+  if [[ "$TORCHAUDIO_SPEC_SET" -eq 0 && -n "$parsed_torchaudio_spec" ]]; then
+    TORCHAUDIO_SPEC="$parsed_torchaudio_spec"
+  fi
+  if [[ "$TORCHVISION_SPEC_SET" -eq 0 && -n "$parsed_torchvision_spec" ]]; then
+    TORCHVISION_SPEC="$parsed_torchvision_spec"
+  fi
+  if [[ "$TORCHCODEC_SPEC_SET" -eq 0 && -n "$parsed_torchcodec_spec" ]]; then
+    TORCHCODEC_SPEC="$parsed_torchcodec_spec"
+  fi
+}
+
+require_eval_python_compat() {
+  local env_name="$1"
+  local py_raw=""
+  local py_ver=""
+
+  py_raw="$(env_python_version "$env_name" 2>&1 || true)"
+  py_ver="$(extract_major_minor_version "$py_raw" || true)"
+  if [[ -z "$py_ver" ]]; then
+    py_raw="$(conda run -n "$env_name" python -V 2>&1 || true)"
+    py_ver="$(extract_major_minor_version "$py_raw" || true)"
+  fi
+
+  if [[ -z "$py_ver" ]]; then
+    err "Unable to determine Python version for eval env '$env_name'."
+    err "Raw output: $py_raw"
+    exit 1
+  fi
+
+  if [[ "$py_ver" != "3.10" ]]; then
+    err "Eval env '$env_name' uses Python $py_ver, but vendored fairseq currently requires Python 3.10."
+    err "Recreate env with: --python_version 3.10 --recreate_on_python_mismatch"
+    exit 1
+  fi
 }
 
 ensure_env() {
   local env_name="$1"
   if env_exists "$env_name"; then
     local current_py
-    current_py="$(env_python_version "$env_name" | tail -n 1 | tr -d '[:space:]')"
+    local current_py_raw
+    current_py_raw="$(env_python_version "$env_name" 2>&1 || true)"
+    current_py="$(extract_major_minor_version "$current_py_raw" || true)"
+    if [[ -z "$current_py" ]]; then
+      current_py_raw="$(conda run -n "$env_name" python -V 2>&1 || true)"
+      current_py="$(extract_major_minor_version "$current_py_raw" || true)"
+    fi
+    if [[ -z "$current_py" ]]; then
+      err "Unable to determine Python version for conda env '$env_name'."
+      err "Raw output: $current_py_raw"
+      exit 1
+    fi
     if [[ "$current_py" != "$PYTHON_VERSION" ]]; then
       if [[ "$RECREATE_ON_PY_MISMATCH" -eq 1 ]]; then
         log "Recreating $env_name due to Python mismatch ($current_py != $PYTHON_VERSION)"
@@ -169,6 +277,18 @@ ensure_s3prl_version_file() {
   printf "%s\n" "$S3PRL_VERSION_FALLBACK" > "$version_file"
 }
 
+flash_attn_kernels_ready() {
+  local env_name="$1"
+  run_in_env "$env_name" python - <<'PY'
+try:
+    from flash_attn import flash_attn_qkvpacked_func
+    from flash_attn.flash_attn_interface import flash_attn_varlen_qkvpacked_func
+except Exception:
+    raise SystemExit(1)
+raise SystemExit(0)
+PY
+}
+
 ensure_flash_attn() {
   local env_name="$1"
 
@@ -176,17 +296,17 @@ ensure_flash_attn() {
   # Keep these lightweight build helpers present before attempting install.
   run_in_env "$env_name" python -m pip install --upgrade psutil ninja packaging
 
-  if run_in_env "$env_name" python -c "import flash_attn" >/dev/null 2>&1; then
-    log "flash-attn already available in $env_name"
+  if flash_attn_kernels_ready "$env_name" >/dev/null 2>&1; then
+    log "flash-attn kernels already available in $env_name"
     return
   fi
 
   log "Installing flash-attn==$FLASH_ATTN_VERSION in $env_name"
   run_in_env "$env_name" python -m pip uninstall -y flash-attn flash_attn >/dev/null 2>&1 || true
-  run_in_env "$env_name" python -m pip install --force-reinstall --no-cache-dir "flash-attn==$FLASH_ATTN_VERSION" --no-build-isolation
+  run_in_env "$env_name" python -m pip install --force-reinstall --no-cache-dir --no-deps "flash-attn==$FLASH_ATTN_VERSION" --no-build-isolation
 
-  if ! run_in_env "$env_name" python -c "import flash_attn" >/dev/null 2>&1; then
-    err "flash-attn import failed in $env_name after reinstall."
+  if ! flash_attn_kernels_ready "$env_name" >/dev/null 2>&1; then
+    err "flash-attn kernels are unavailable in $env_name after reinstall."
     err "This usually means torch/flash-attn ABI mismatch. Reinstall torch stack first, then rerun setup."
     exit 1
   fi
@@ -194,7 +314,7 @@ ensure_flash_attn() {
 
 install_eval_torch_stack_if_needed() {
   if [[ "$FORCE_REINSTALL_EVAL_TORCH" -eq 0 ]]; then
-    if run_in_env "$EVAL_ENV" python -c "import torch, torchaudio, torchvision" >/dev/null 2>&1; then
+    if run_in_env "$EVAL_ENV" python -c "import torch, torchaudio, torchvision, torchcodec" >/dev/null 2>&1; then
       log "Torch stack already available in $EVAL_ENV"
       return
     fi
@@ -203,7 +323,7 @@ install_eval_torch_stack_if_needed() {
   log "Installing torch stack in $EVAL_ENV"
   run_in_env "$EVAL_ENV" python -m pip install \
     --extra-index-url "$TORCH_INDEX_URL" \
-    "$TORCH_SPEC" "$TORCHAUDIO_SPEC" "$TORCHVISION_SPEC"
+    "$TORCH_SPEC" "$TORCHAUDIO_SPEC" "$TORCHVISION_SPEC" "$TORCHCODEC_SPEC"
 }
 
 setup_train_env() {
@@ -246,7 +366,10 @@ setup_eval_env() {
   ensure_s3prl_version_file
 
   ensure_env "$EVAL_ENV"
+  require_eval_python_compat "$EVAL_ENV"
   ensure_pip_base "$EVAL_ENV"
+  log "Removing conflicting eval packages (if present): fairseq catalyst"
+  run_in_env "$EVAL_ENV" python -m pip uninstall -y fairseq catalyst >/dev/null 2>&1 || true
   ensure_ffmpeg "$EVAL_ENV"
 
   install_eval_torch_stack_if_needed
@@ -254,6 +377,7 @@ setup_eval_env() {
   log "Installing minimal eval dependencies in $EVAL_ENV"
   run_in_env "$EVAL_ENV" python -m pip install \
     "numpy==1.26.4" \
+    "einops" \
     "omegaconf==2.3.0" \
     "hydra-core==1.3.2" \
     "tqdm" \
@@ -279,7 +403,9 @@ setup_eval_env() {
     "cffi" \
     "cython" \
     "sentencepiece" \
-    "librosa"
+    "librosa" \
+    "vector_quantize_pytorch" \
+    "wandb"
 
   ensure_flash_attn "$EVAL_ENV"
 
@@ -388,18 +514,27 @@ while [[ $# -gt 0 ]]; do
       ;;
     --torch_index_url)
       TORCH_INDEX_URL="$2"
+      TORCH_INDEX_URL_SET=1
       shift 2
       ;;
     --torch_spec)
       TORCH_SPEC="$2"
+      TORCH_SPEC_SET=1
       shift 2
       ;;
     --torchaudio_spec)
       TORCHAUDIO_SPEC="$2"
+      TORCHAUDIO_SPEC_SET=1
       shift 2
       ;;
     --torchvision_spec)
       TORCHVISION_SPEC="$2"
+      TORCHVISION_SPEC_SET=1
+      shift 2
+      ;;
+    --torchcodec_spec)
+      TORCHCODEC_SPEC="$2"
+      TORCHCODEC_SPEC_SET=1
       shift 2
       ;;
     -h|--help)
@@ -421,6 +556,8 @@ if [[ ! -f "$TRAIN_REQUIREMENTS" ]]; then
   exit 1
 fi
 
+sync_torch_specs_from_requirements "$TRAIN_REQUIREMENTS"
+
 if [[ "$INSTALL_TRAIN" -eq 0 && "$INSTALL_EVAL" -eq 0 ]]; then
   err "Nothing to do: both --skip_train and --skip_eval set"
   exit 1
@@ -429,6 +566,12 @@ fi
 log "ROOT=$ROOT"
 log "TRAIN_ENV=$TRAIN_ENV"
 log "EVAL_ENV=$EVAL_ENV"
+log "Torch stack specs:"
+log "  TORCH_INDEX_URL=$TORCH_INDEX_URL"
+log "  TORCH_SPEC=$TORCH_SPEC"
+log "  TORCHAUDIO_SPEC=$TORCHAUDIO_SPEC"
+log "  TORCHVISION_SPEC=$TORCHVISION_SPEC"
+log "  TORCHCODEC_SPEC=$TORCHCODEC_SPEC"
 
 if [[ "$INSTALL_TRAIN" -eq 1 ]]; then
   log "--- Setup train env start ---"
