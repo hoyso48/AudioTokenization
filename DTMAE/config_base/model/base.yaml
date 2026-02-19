@@ -127,6 +127,7 @@ resampler:
     max_mask_span: 4     # random span upper (iid: len jitter, start_geom: mean-span jitter)
     min_mask_prob: 0.5   # random branch target-r lower
     max_mask_prob: 0.5   # random branch target-r upper
+    fixed_mask_ratio: false
 
     # Legacy IID Bernoulli random branch example (commented):
     # random_mask_mode: iid_bernoulli   # span=1 pure iid Bernoulli; span>1 fixed-span (wav2vec2-style, overlap allowed)
@@ -187,7 +188,8 @@ resampler:
   #   min_mask_prob: 0.5   # random branch target-r lower
   #   max_mask_prob: 0.5   # random branch target-r upper
   downsampler_cls: FrontierDownsampler
-  downsampler_params: {}
+  downsampler_params:
+    use_varlen_path: null
   upsampler_cls: MaskUpsampler
   upsampler_params:
     dim: 256

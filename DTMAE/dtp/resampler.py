@@ -241,16 +241,23 @@ class MaskUpsampler(nn.Module):
 
 
 class FrontierDownsampler(nn.Module):
-    def __init__(self, r: Optional[float] = None, **kwargs):
+    def __init__(self, r: Optional[float] = None, use_varlen_path: Optional[bool] = None, **kwargs):
         super().__init__()
         self.stride = _fixed_pattern_stride(float(r)) if r is not None else None
+        if use_varlen_path is not None and not isinstance(use_varlen_path, bool):
+            raise ValueError("FrontierDownsampler: use_varlen_path must be bool or None")
+        self.use_varlen_path = use_varlen_path
 
     def forward(self, x: torch.Tensor, mask: torch.Tensor = None):
         """
         DTP mode:
-          - x: [B, N, C], mask: [B, N] -> (packed varlen, position_ids, cu_seqlens, max_seqlen)
+          - default: returns [B, N_kept, C] when all per-sequence kept lengths are equal
+          - otherwise: returns packed varlen (y_packed, position_ids, cu_seqlens, max_seqlen)
         Non-DTP mode:
           - x: [B, N, C] -> [B, N_kept, C] (fixed pattern)
+        use_varlen_path:
+          - True: always use packed varlen path when mask is provided
+          - None/False: prefer fixed-len [B, N_kept, C] when lengths are uniform
         """
         if x.dim() != 3:
             raise ValueError("FrontierDownsampler expects dense x of shape [B, N, C]")
@@ -259,6 +266,16 @@ class FrontierDownsampler(nn.Module):
             if self.stride is None:
                 raise ValueError("FrontierDownsampler(dense): r is required when mask is not provided")
             return x[:, ::self.stride, :]
+
+        counts = mask.sum(dim=1).to(torch.long)
+        uniform_kept_len = counts.numel() == 0 or bool(torch.all(counts == counts[0]))
+        if uniform_kept_len and self.use_varlen_path is not True:
+            if counts.numel() == 0:
+                return x[:, :0, :]
+            n_kept = int(counts[0].item())
+            if n_kept == 0:
+                return x[:, :0, :]
+            return x[mask].view(x.shape[0], n_kept, x.shape[-1])
 
         return _pack_with_mask(x, mask)
 

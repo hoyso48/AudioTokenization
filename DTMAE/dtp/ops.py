@@ -228,6 +228,7 @@ class _BatchSelectorBase(nn.Module):
         update_test_time: bool = False,
         sample_in_inference: bool = False,
         invert_update: bool = False,
+        fixed_mask_ratio: bool = False,
     ):
         super().__init__()
         if not (0.0 <= float(r) < 1.0):
@@ -261,6 +262,7 @@ class _BatchSelectorBase(nn.Module):
         self.update_test_time = bool(update_test_time)
         self.sample_in_inference = bool(sample_in_inference)
         self.controller_sign = -1.0 if invert_update else 1.0
+        self.fixed_mask_ratio = bool(fixed_mask_ratio)
 
         if self.min_mask_span <= 0 or self.max_mask_span <= 0:
             raise ValueError("Batch selector: mask spans must be >= 1")
@@ -272,6 +274,20 @@ class _BatchSelectorBase(nn.Module):
             raise ValueError("Batch selector: max_mask_prob must be in [0, 1]")
         if self.max_mask_prob < self.min_mask_prob:
             raise ValueError("Batch selector: max_mask_prob must be >= min_mask_prob")
+
+        if self.fixed_mask_ratio:
+            if self.random_mask_mode != "iid_bernoulli":
+                raise ValueError(
+                    "Batch selector: fixed_mask_ratio=True requires random_mask_mode='iid_bernoulli'"
+                )
+            if not (self.min_mask_span == 1 and self.max_mask_span == 1):
+                raise ValueError(
+                    "Batch selector: fixed_mask_ratio=True requires min_mask_span=max_mask_span=1"
+                )
+            if abs(self.max_mask_prob - self.min_mask_prob) > 1e-12:
+                raise ValueError(
+                    "Batch selector: fixed_mask_ratio=True requires min_mask_prob=max_mask_prob"
+                )
 
         init_val = self.fixed_tau if self.fixed_tau is not None else float(initial_tau)
         self.register_buffer("tau_train", torch.tensor(init_val))
@@ -422,11 +438,46 @@ class _BatchSelectorBase(nn.Module):
 
         final_mask = torch.ones(B, N, device=device, dtype=torch.bool)
         if N <= 1:
+            if self.fixed_mask_ratio:
+                num_zero_f = float(N) * float(self.min_mask_prob)
+                num_zero = int(round(num_zero_f))
+                if abs(num_zero_f - float(num_zero)) > 1e-6 or num_zero != 0:
+                    raise ValueError(
+                        "Batch selector: fixed_mask_ratio=True is invalid when N<=1 unless mask_prob=0"
+                    )
             if N > 0:
                 final_mask[:, 0] = True
             return final_mask
 
         if self.random_mask_mode == "iid_bernoulli":
+            if self.fixed_mask_ratio:
+                # Exact-ratio IID masking:
+                # - token 0 is always kept
+                # - each sample has exactly (N * mask_prob) masked tokens
+                # - masked positions are sampled uniformly without replacement from 1..N-1
+                mask_prob = float(self.min_mask_prob)
+                num_zero_f = float(N) * mask_prob
+                num_zero = int(round(num_zero_f))
+                if abs(num_zero_f - float(num_zero)) > 1e-6:
+                    raise ValueError(
+                        "Batch selector: fixed_mask_ratio=True requires N*mask_prob to be an integer"
+                    )
+                tail_len = N - 1
+                if num_zero < 0 or num_zero > tail_len:
+                    raise ValueError(
+                        "Batch selector: fixed_mask_ratio=True requires 0 <= N*mask_prob <= N-1 (token0 is always kept)"
+                    )
+
+                final_mask = torch.ones(B, N, device=device, dtype=torch.bool)
+                if num_zero > 0 and tail_len > 0:
+                    rand = torch.rand(B, tail_len, device=device, dtype=torch.float32)
+                    zero_idx = torch.topk(rand, k=num_zero, dim=1, largest=True, sorted=False).indices
+                    tail_keep = torch.ones(B, tail_len, device=device, dtype=torch.bool)
+                    tail_keep.scatter_(1, zero_idx, False)
+                    final_mask[:, 1:] = tail_keep
+                final_mask[:, 0] = True
+                return final_mask
+
             # Legacy iid_bernoulli branch with span support:
             # - span == 1: pure iid Bernoulli on tokens 1..N-1
             # - span  > 1: wav2vec2-style fixed-span starts (overlap allowed)
@@ -566,6 +617,7 @@ class FixedPattern(_BatchSelectorBase):
         fixed_tau: Optional[float] = None,
         update_test_time: bool = False,
         sample_in_inference: bool = False,
+        fixed_mask_ratio: bool = False,
     ):
         # Keep the same constructor surface as other selectors,
         # but intentionally ignore tau/controller-related options.
@@ -589,6 +641,7 @@ class FixedPattern(_BatchSelectorBase):
             update_test_time=False,
             sample_in_inference=sample_in_inference,
             invert_update=False,
+            fixed_mask_ratio=fixed_mask_ratio,
         )
 
     @staticmethod
@@ -678,6 +731,7 @@ class PLEBatchTopK(_BatchSelectorBase):
         fixed_tau: Optional[float] = None,
         update_test_time: bool = False,
         sample_in_inference: bool = False,
+        fixed_mask_ratio: bool = False,
     ):
         super().__init__(
             r=r,
@@ -699,6 +753,7 @@ class PLEBatchTopK(_BatchSelectorBase):
             update_test_time=update_test_time,
             sample_in_inference=sample_in_inference,
             invert_update=False,
+            fixed_mask_ratio=fixed_mask_ratio,
         )
 
     @torch.no_grad()
@@ -822,6 +877,7 @@ class PLEBatchTopKJitter(_BatchSelectorBase):
         update_test_time: bool = False,
         sample_in_inference: bool = False,
         jitter_a: float = 0.4,
+        fixed_mask_ratio: bool = False,
     ):
         super().__init__(
             r=r,
@@ -843,6 +899,7 @@ class PLEBatchTopKJitter(_BatchSelectorBase):
             update_test_time=update_test_time,
             sample_in_inference=sample_in_inference,
             invert_update=False,
+            fixed_mask_ratio=fixed_mask_ratio,
         )
         if jitter_a < 0.0:
             raise ValueError("PLEBatchTopKJitter: jitter_a must be >= 0")
@@ -963,6 +1020,7 @@ class BatchTopK(_BatchSelectorBase):
         fixed_tau: Optional[float] = None,
         update_test_time: bool = False,
         sample_in_inference: bool = False,
+        fixed_mask_ratio: bool = False,
     ):
         super().__init__(
             r=r,
@@ -984,6 +1042,7 @@ class BatchTopK(_BatchSelectorBase):
             update_test_time=update_test_time,
             sample_in_inference=sample_in_inference,
             invert_update=True,
+            fixed_mask_ratio=fixed_mask_ratio,
         )
 
     @torch.no_grad()
@@ -1041,6 +1100,7 @@ class BatchGreedy(_BatchSelectorBase):
         fixed_tau: Optional[float] = None,
         update_test_time: bool = False,
         sample_in_inference: bool = False,
+        fixed_mask_ratio: bool = False,
     ):
         super().__init__(
             r=r,
@@ -1062,6 +1122,7 @@ class BatchGreedy(_BatchSelectorBase):
             update_test_time=update_test_time,
             sample_in_inference=sample_in_inference,
             invert_update=True,
+            fixed_mask_ratio=fixed_mask_ratio,
         )
 
     @torch.no_grad()
@@ -1155,6 +1216,7 @@ class PLEBatchTopKTrainPerSeq(PLEBatchTopK):
         fixed_tau: Optional[float] = None,
         update_test_time: bool = False,
         sample_in_inference: bool = False,
+        fixed_mask_ratio: bool = False,
         *,
         train_r_min: Optional[float] = None,
         train_r_max: Optional[float] = None,
@@ -1181,6 +1243,7 @@ class PLEBatchTopKTrainPerSeq(PLEBatchTopK):
             fixed_tau=fixed_tau,
             update_test_time=update_test_time,
             sample_in_inference=sample_in_inference,
+            fixed_mask_ratio=fixed_mask_ratio,
         )
 
         if train_r_min is None:
@@ -1362,6 +1425,7 @@ class BatchTopKTrainPerSeq(BatchTopK):
         fixed_tau: Optional[float] = None,
         update_test_time: bool = False,
         sample_in_inference: bool = False,
+        fixed_mask_ratio: bool = False,
         *,
         train_r_min: Optional[float] = None,
         train_r_max: Optional[float] = None,
@@ -1388,6 +1452,7 @@ class BatchTopKTrainPerSeq(BatchTopK):
             fixed_tau=fixed_tau,
             update_test_time=update_test_time,
             sample_in_inference=sample_in_inference,
+            fixed_mask_ratio=fixed_mask_ratio,
         )
 
         if train_r_min is None:
@@ -1523,6 +1588,7 @@ class BatchGreedyTrainPerSeq(BatchGreedy):
         fixed_tau: Optional[float] = None,
         update_test_time: bool = False,
         sample_in_inference: bool = False,
+        fixed_mask_ratio: bool = False,
         *,
         train_r_min: Optional[float] = None,
         train_r_max: Optional[float] = None,
@@ -1546,6 +1612,7 @@ class BatchGreedyTrainPerSeq(BatchGreedy):
             fixed_tau=fixed_tau,
             update_test_time=update_test_time,
             sample_in_inference=sample_in_inference,
+            fixed_mask_ratio=fixed_mask_ratio,
         )
 
         if train_r_min is None:

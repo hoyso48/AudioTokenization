@@ -18,8 +18,8 @@ LENGTH_MODE="${LENGTH_MODE:-pad}"
 DEVICE="${DEVICE:-}"
 
 EVAL_STAGE="${EVAL_STAGE:-all}"
-EVAL_SUBDIR="${EVAL_SUBDIR:-eval_ft}"
-STATS_SUBDIR="${STATS_SUBDIR:-dtp_stats_ft}"
+EVAL_SUBDIR="${EVAL_SUBDIR:-eval_avg_bps{bps}}"
+STATS_SUBDIR="${STATS_SUBDIR:-dtp_stats_avg_bps{bps}}"
 
 CHECK_WAVLM=1
 FORCE=0
@@ -52,8 +52,9 @@ Options:
 
   --input <path>                   Eval input path (default: DTMAE/filelists/librispeech_test_clean.txt)
   --eval_stage <save|metrics|all>  Eval stage (default: all)
-  --eval_subdir <name>             Eval output subdir under each run_dir (default: eval_ft)
-  --stats_subdir <name>            Tau-search output subdir under run_dir (default: dtp_stats_ft)
+  --eval_subdir <name>             Eval output subdir/template (default: eval_avg_bps{bps})
+  --stats_subdir <name>            Tau-search subdir/template (default: dtp_stats_avg_bps{bps})
+                                   Templates support {bps} and {r} placeholders.
   --eval_out <path>                Explicit eval output path (single run only)
   --num_workers <int>              Eval dataloader workers (default: 4)
   --length_mode <pad|truncate>     Eval length mode (default: pad)
@@ -241,6 +242,108 @@ except Exception:
     target = 0.5
 
 print(target)
+PY
+}
+
+render_subdir_template() {
+  local template="$1"
+  local bps="$2"
+  local target_r="$3"
+
+  local rendered="$template"
+  rendered="${rendered//\{bps\}/$bps}"
+  rendered="${rendered//\{r\}/$target_r}"
+  printf "%s" "$rendered"
+}
+
+resolve_target_bps_from_cfg() {
+  local run_dir="$1"
+  local target_avg_r="$2"
+  shift 2
+
+  conda run --no-capture-output -n "$EVAL_ENV" "$PYTHON_EVAL" - "$run_dir" "$target_avg_r" "$@" <<'PY'
+import math
+import sys
+from pathlib import Path
+
+from omegaconf import OmegaConf
+
+
+def get_nested(cfg, path, default=None):
+    cur = cfg
+    for key in path:
+        if cur is None:
+            return default
+        try:
+            cur = cur[key]
+        except Exception:
+            cur = getattr(cur, key, None)
+        if cur is None:
+            return default
+    return cur
+
+
+def fmt(v: float) -> str:
+    if abs(v - round(v)) < 1e-9:
+        return str(int(round(v)))
+    return f"{v:.6f}".rstrip("0").rstrip(".")
+
+
+run_dir = Path(sys.argv[1]).resolve()
+target_avg_r = float(sys.argv[2])
+overrides = sys.argv[3:]
+
+cfg_path = run_dir / "hydra" / "config.yaml"
+cfg = OmegaConf.load(str(cfg_path))
+if overrides:
+    cfg = OmegaConf.merge(cfg, OmegaConf.from_dotlist(overrides))
+
+sample_rate = float(
+    get_nested(cfg, ["dataset", "sample_rate"], None)
+    or get_nested(cfg, ["preprocess", "audio", "sr"], 16000)
+)
+hop_length = float(get_nested(cfg, ["model", "codec_encoder", "hop_length"], 80))
+f_l1 = sample_rate / hop_length / 2.0
+
+quant_params = get_nested(cfg, ["model", "quantizer", "params"], None)
+if quant_params is None:
+    raise RuntimeError("Missing model.quantizer.params in config")
+
+codebook_size = get_nested(quant_params, ["codebook_size"], None)
+if codebook_size is not None:
+    codebook_size = float(codebook_size)
+else:
+    levels = get_nested(quant_params, ["levels"], None)
+    if not levels:
+        raise RuntimeError("Cannot infer codebook size: need codebook_size or levels")
+    codebook_size = 1.0
+    for lv in levels:
+        codebook_size *= float(lv)
+
+bits_per_token = int(math.ceil(math.log2(codebook_size)))
+
+dtp_cls = str(get_nested(cfg, ["model", "resampler", "dtp_cls"], ""))
+dtp_cls_lc = dtp_cls.lower()
+is_fixed_pattern = dtp_cls_lc == "fixedpattern" or dtp_cls_lc.endswith(".fixedpattern")
+
+f_tok = f_l1 * (1.0 - target_avg_r)
+b_content = f_tok * bits_per_token
+b_pos = 0.0 if is_fixed_pattern else f_l1
+b_total = b_content + b_pos
+bps_suffix = int(round(b_total))
+
+print(
+    "|".join(
+        [
+            str(bps_suffix),
+            fmt(b_total),
+            fmt(b_content),
+            fmt(b_pos),
+            fmt(f_l1),
+            str(bits_per_token),
+        ]
+    )
+)
 PY
 }
 
@@ -500,18 +603,6 @@ for run_dir in "${RUN_DIRS[@]}"; do
     exit 1
   fi
 
-  if [[ -n "$EVAL_OUT_OVERRIDE" ]]; then
-    eval_out="$EVAL_OUT_OVERRIDE"
-  else
-    eval_out="$run_dir/$EVAL_SUBDIR"
-  fi
-  stats_out="$run_dir/$STATS_SUBDIR"
-
-  echo "============================================================"
-  echo "[RUN] $run_dir"
-  echo "[OUT] eval=$eval_out"
-  echo "[OUT] stats=$stats_out"
-
   ensure_new_config "$run_dir"
 
   probe_line="$(probe_dtp_capability "$run_dir" "${EVAL_CFG_OVERRIDES[@]}")"
@@ -523,9 +614,32 @@ for run_dir in "${RUN_DIRS[@]}"; do
     is_fixed_pattern=1
   fi
 
+  resolved_target_avg_r="$TARGET_AVG_R"
+  if [[ -z "$resolved_target_avg_r" ]]; then
+    resolved_target_avg_r="$(resolve_target_avg_r_from_cfg "$run_dir" "${EVAL_CFG_OVERRIDES[@]}")"
+  fi
+
+  target_bps_line="$(resolve_target_bps_from_cfg "$run_dir" "$resolved_target_avg_r" "${EVAL_CFG_OVERRIDES[@]}")"
+  IFS='|' read -r target_bps_suffix target_total_bps target_content_bps target_pos_bps target_f_l1 target_bits_per_token <<< "$target_bps_line"
+
+  rendered_eval_subdir="$(render_subdir_template "$EVAL_SUBDIR" "$target_bps_suffix" "$resolved_target_avg_r")"
+  rendered_stats_subdir="$(render_subdir_template "$STATS_SUBDIR" "$target_bps_suffix" "$resolved_target_avg_r")"
+
+  if [[ -n "$EVAL_OUT_OVERRIDE" ]]; then
+    eval_out="$EVAL_OUT_OVERRIDE"
+  else
+    eval_out="$run_dir/$rendered_eval_subdir"
+  fi
+  stats_out="$run_dir/$rendered_stats_subdir"
+
+  echo "============================================================"
+  echo "[RUN] $run_dir"
+  echo "[OUT] eval=$eval_out"
+  echo "[OUT] stats=$stats_out"
+  echo "[TARGET] avg_r=$resolved_target_avg_r -> total_bps=$target_total_bps (content=$target_content_bps, pos=$target_pos_bps, f_L1=$target_f_l1, b=$target_bits_per_token)"
+
   fixed_tau=""
   fixed_pattern_r_override=""
-  resolved_target_avg_r=""
   do_tau_search=0
   if [[ "$TAU_FINETUNE" -eq 1 && "$use_dtp" -eq 1 && "$supports_fixed_tau" -eq 1 && "$is_fixed_pattern" -eq 0 ]]; then
     do_tau_search=1
@@ -556,12 +670,6 @@ for run_dir in "${RUN_DIRS[@]}"; do
   fi
 
   if [[ "$do_tau_search" -eq 1 ]]; then
-    resolved_target_avg_r="$TARGET_AVG_R"
-    if [[ -z "$resolved_target_avg_r" ]]; then
-      resolved_target_avg_r="$(resolve_target_avg_r_from_cfg "$run_dir" "${EVAL_CFG_OVERRIDES[@]}")"
-    fi
-    echo "=== [TARGET] avg_r=$resolved_target_avg_r ==="
-
     run_tau_search "$run_dir" "$stats_out" "$supports_update_test_time" "$resolved_target_avg_r"
 
     if [[ ! -f "$summary_json" ]]; then
