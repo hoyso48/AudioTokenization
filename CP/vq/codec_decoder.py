@@ -17,6 +17,10 @@ def init_weights(m):
         if m.bias is not None:
             nn.init.constant_(m.bias, 0)
 
+
+def set_module_trainable(module, trainable):
+    module.requires_grad_(bool(trainable))
+
 class ISTFT(nn.Module):
     """
     Custom implementation of ISTFT since torch.istft doesn't allow custom padding (other than `center=True`) with
@@ -174,11 +178,15 @@ class ConformerDecoderISTFT(nn.Module):
                  vq_full_commit_loss=False,
                  codebook_size=8192,
                  codebook_dim=8,
-                ):
+                 trainable=True,
+                 quantizer_trainable=True,
+                 ):
         super().__init__()
         self.hop_length = hop_length
         self.n_fft = n_fft
         self.fsq = fsq
+        self.trainable = bool(trainable)
+        self.quantizer_trainable = bool(quantizer_trainable)
         
         # Quantizer
         if fsq:
@@ -199,6 +207,7 @@ class ConformerDecoderISTFT(nn.Module):
                 weight_init=vq_weight_init,
                 full_commit_loss=vq_full_commit_loss,
             )
+        set_module_trainable(self.quantizer, self.quantizer_trainable)
         
         # Input projection from quantized features to conformer dimension
         if in_channels != dim:
@@ -227,6 +236,8 @@ class ConformerDecoderISTFT(nn.Module):
         self.head = ISTFTHead(dim=dim, n_fft=n_fft, hop_length=hop_length, padding="same")
         
         self.reset_parameters()
+        set_module_trainable(self, self.trainable)
+        set_module_trainable(self.quantizer, self.quantizer_trainable)
 
     def forward(self, x, unmerge_fn=None, vq=True):
         if vq is True:

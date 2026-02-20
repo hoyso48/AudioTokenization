@@ -1,4 +1,5 @@
 codec_encoder:
+  trainable: True
   hop_length: 80 #256
   n_fft: 320 #1024
   window_size: 320 #1024
@@ -18,6 +19,7 @@ codec_encoder:
   layerscale_gamma_init: 1
 
 codec_decoder:
+  trainable: True
   in_channels: 512
   hop_length: 80 #256
   n_fft: 320 #1024
@@ -154,6 +156,7 @@ resampler:
 # Available quantizers: ResidualVQ, DitheredFSQ, TAAEDitheredFSQ, FSQ, SimVQ
 # =============================================================================
 quantizer:
+  trainable: True
   cls: ResidualVQ
   params:
     dim: 512

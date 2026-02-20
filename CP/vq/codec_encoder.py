@@ -14,6 +14,10 @@ def init_weights(m):
         if m.bias is not None:
             nn.init.constant_(m.bias, 0)
 
+
+def set_module_trainable(module, trainable):
+    module.requires_grad_(bool(trainable))
+
 class STFT(nn.Module):
     def __init__(self,
                  hop_length=256,
@@ -61,10 +65,12 @@ class ConformerEncoderSTFT(nn.Module):
                  original_max_position_embeddings=4096,
                  base=10000.0,
                  causal=False,
-                 out_channels=1024):
+                 out_channels=1024,
+                 trainable=True):
         super().__init__()
         self.hop_length = hop_length
         self.n_fft = n_fft
+        self.trainable = bool(trainable)
         
         # STFT module
         self.stft = STFT(
@@ -119,6 +125,7 @@ class ConformerEncoderSTFT(nn.Module):
             self.output_proj = nn.Identity()
         
         self.reset_parameters()
+        set_module_trainable(self, self.trainable)
 
     def forward(self, x, stage=0):
         # x = self.patchify(x)

@@ -14,6 +14,10 @@ def init_weights(m):
         if m.bias is not None:
             nn.init.constant_(m.bias, 0)
 
+
+def set_module_trainable(module, trainable):
+    module.requires_grad_(bool(trainable))
+
 class STFT(nn.Module):
     def __init__(self,
                  hop_length=256,
@@ -64,10 +68,12 @@ class TransformerEncoderSTFT(nn.Module):
                  out_channels=1024,
                  norm_eps: float = 1e-2,
                  attn_window_size=(64, 64),
-                 layerscale_gamma_init: float = 1.0):
+                 layerscale_gamma_init: float = 1.0,
+                 trainable=True):
         super().__init__()
         self.hop_length = hop_length
         self.n_fft = n_fft
+        self.trainable = bool(trainable)
         
         # STFT module
         self.stft = STFT(
@@ -121,6 +127,7 @@ class TransformerEncoderSTFT(nn.Module):
             self.output_proj = nn.Identity()
         
         self.reset_parameters()
+        set_module_trainable(self, self.trainable)
 
     def forward(self, x, position_ids=None, cu_seqlens=None, max_seqlen=None, level=1):
         # x = self.patchify(x)

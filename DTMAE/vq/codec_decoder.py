@@ -153,6 +153,10 @@ def init_weights(m):
         if m.bias is not None:
             nn.init.constant_(m.bias, 0)
 
+
+def set_module_trainable(module, trainable):
+    module.requires_grad_(bool(trainable))
+
 class TransformerDecoderISTFT(nn.Module):
     def __init__(self,
                  in_channels=1024,
@@ -182,14 +186,18 @@ class TransformerDecoderISTFT(nn.Module):
                  # vq_full_commit_loss=False,
                  # codebook_size=8192,
                  # codebook_dim=8,
+                 trainable=True,
+                 quantizer_trainable=True,
                  norm_eps: float = 1e-2,
                  attn_window_size=(64, 64),
                  layerscale_gamma_init: float = 1.0,
-                ):
+                 ):
         super().__init__()
         self.hop_length = hop_length
         self.n_fft = n_fft
         self.quantizer_cls = quantizer_cls
+        self.trainable = bool(trainable)
+        self.quantizer_trainable = bool(quantizer_trainable)
         
         # Default quantizer params if not provided
         if quantizer_params is None:
@@ -204,6 +212,7 @@ class TransformerDecoderISTFT(nn.Module):
         # Dynamic quantizer instantiation (like resampler pattern)
         quantizer_class = getattr(quantizers, quantizer_cls)
         self.quantizer = quantizer_class(**quantizer_params)
+        set_module_trainable(self.quantizer, self.quantizer_trainable)
 
         self.quantizer_in_proj = nn.Identity()
         self.quantizer_out_proj = nn.Identity()
@@ -259,6 +268,8 @@ class TransformerDecoderISTFT(nn.Module):
         self.conv = ConvUpsample(dim, n_fft+2, norm_eps=norm_eps)
         
         self.reset_parameters()
+        set_module_trainable(self, self.trainable)
+        set_module_trainable(self.quantizer, self.quantizer_trainable)
 
     def forward(self, x, vq=True, position_ids=None, cu_seqlens=None, max_seqlen=None, level=1):
         if vq is True:

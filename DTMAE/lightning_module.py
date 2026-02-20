@@ -92,8 +92,16 @@ class CodecLightningModule(pl.LightningModule):
         self.save_hyperparameters()
         self.automatic_optimization = False
 
+    @staticmethod
+    def _set_trainable(module, trainable):
+        module.requires_grad_(bool(trainable))
+
     def construct_model(self):
         enccfg = self.cfg.model.codec_encoder
+        quantizer_cfg = self.cfg.model.quantizer
+        encoder_trainable = bool(getattr(enccfg, "trainable", True))
+        decoder_trainable = bool(getattr(self.cfg.model.codec_decoder, "trainable", True))
+        quantizer_trainable = bool(getattr(quantizer_cfg, "trainable", True))
         self.encoder = TransformerEncoderSTFT(
             hop_length=enccfg.hop_length,
             n_fft=enccfg.n_fft,
@@ -112,10 +120,11 @@ class CodecLightningModule(pl.LightningModule):
             norm_eps=enccfg.norm_eps,
             attn_window_size=enccfg.attn_window_size,
             layerscale_gamma_init=float(getattr(enccfg, "layerscale_gamma_init", 1.0)),
+            trainable=encoder_trainable,
         )
+        self._set_trainable(self.encoder, encoder_trainable)
 
         deccfg = self.cfg.model.codec_decoder
-        quantizer_cfg = self.cfg.model.quantizer
         self.decoder = TransformerDecoderISTFT(
                 in_channels=deccfg.in_channels,
                 hop_length=deccfg.hop_length,
@@ -134,6 +143,8 @@ class CodecLightningModule(pl.LightningModule):
                 # Extensible quantizer config (like resampler pattern)
                 quantizer_cls=quantizer_cfg.cls,
                 quantizer_params=dict(quantizer_cfg.params),
+                trainable=decoder_trainable,
+                quantizer_trainable=quantizer_trainable,
                 # Legacy quantizer params (kept for reference):
                 # fsq=deccfg.fsq,
                 # fsq_levels=deccfg.fsq_levels,
@@ -147,6 +158,9 @@ class CodecLightningModule(pl.LightningModule):
                 attn_window_size=deccfg.attn_window_size,
                 layerscale_gamma_init=float(getattr(deccfg, "layerscale_gamma_init", 1.0)),
         )
+        self._set_trainable(self.decoder, decoder_trainable)
+        if hasattr(self.decoder, 'quantizer'):
+            self._set_trainable(self.decoder.quantizer, quantizer_trainable)
 
         mpdcfg = self.cfg.model.mpd
         self.discriminator = HiFiGANMultiPeriodDiscriminator(
@@ -623,17 +637,18 @@ class CodecLightningModule(pl.LightningModule):
         self.test_metrics.reset()
 
     def configure_optimizers(self):
-        from itertools import chain
+        disc_params = [p for p in self.discriminator.parameters() if p.requires_grad]
+        disc_params.extend([p for p in self.spec_discriminator.parameters() if p.requires_grad])
 
-        disc_params = self.discriminator.parameters()
-        disc_params = chain(disc_params, self.spec_discriminator.parameters())
-
-        gen_params = chain(
-            self.encoder.parameters(),
-            self.decoder.parameters(),
-        )
+        gen_params = [p for p in self.encoder.parameters() if p.requires_grad]
+        gen_params.extend([p for p in self.decoder.parameters() if p.requires_grad])
         if self.use_asr_probe and self.asr_head is not None:
-            gen_params = chain(gen_params, self.asr_head.parameters())
+            gen_params.extend([p for p in self.asr_head.parameters() if p.requires_grad])
+
+        if len(gen_params) == 0:
+            raise ValueError("No trainable generator parameters found. Check trainable flags in config.")
+        if len(disc_params) == 0:
+            raise ValueError("No trainable discriminator parameters found.")
 
         gen_opt = optim.AdamW(gen_params, **self.cfg.train.gen_optim_params)
         disc_opt = optim.AdamW(disc_params, **self.cfg.train.disc_optim_params)

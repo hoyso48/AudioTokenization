@@ -86,8 +86,15 @@ class CodecLightningModule(pl.LightningModule):
         self.save_hyperparameters()
         self.automatic_optimization = False
 
+    @staticmethod
+    def _set_trainable(module, trainable):
+        module.requires_grad_(bool(trainable))
+
     def construct_model(self):
         enccfg = self.cfg.model.codec_encoder
+        encoder_trainable = bool(getattr(enccfg, 'trainable', True))
+        decoder_trainable = bool(getattr(self.cfg.model.codec_decoder, 'trainable', True))
+        quantizer_trainable = bool(getattr(self.cfg.model.codec_decoder, 'quantizer_trainable', True))
         if enccfg.type == 'bigcodec':
             self.encoder = BigCodecEncoder(
                         ngf=enccfg.ngf,
@@ -119,6 +126,8 @@ class CodecLightningModule(pl.LightningModule):
             )
         else:
             raise ValueError(f'Invalid codec encoder type: {enccfg.type}')
+        self._set_trainable(self.encoder, encoder_trainable)
+
         deccfg = self.cfg.model.codec_decoder
         if deccfg.type == 'bigcodec':
             self.decoder = BigCodecDecoder(
@@ -167,6 +176,10 @@ class CodecLightningModule(pl.LightningModule):
             )
         else:
             raise ValueError(f'Invalid codec decoder type: {deccfg.type}')
+        self._set_trainable(self.decoder, decoder_trainable)
+        if hasattr(self.decoder, 'quantizer'):
+            self._set_trainable(self.decoder.quantizer, quantizer_trainable)
+
         mpdcfg = self.cfg.model.mpd
         self.discriminator = HiFiGANMultiPeriodDiscriminator(
                     periods=mpdcfg.periods,
@@ -546,25 +559,22 @@ class CodecLightningModule(pl.LightningModule):
         self.test_metrics.reset()
 
     def configure_optimizers(self):
-        from itertools import chain
+        disc_params = [p for p in self.discriminator.parameters() if p.requires_grad]
+        disc_params.extend([p for p in self.spec_discriminator.parameters() if p.requires_grad])
 
-        disc_params = self.discriminator.parameters()
-        # if hasattr(self, 'spec_discriminator'):
-        disc_params = chain(disc_params, self.spec_discriminator.parameters())
-
-        gen_params = chain(
-            self.encoder.parameters(),
-            self.decoder.parameters(),
-        )
+        gen_params = [p for p in self.encoder.parameters() if p.requires_grad]
+        gen_params.extend([p for p in self.decoder.parameters() if p.requires_grad])
         if self.cfg.train.use_semantic:
-            gen_params = chain(
-                gen_params,
-                self.fc_prior.parameters(),
-                self.fc_post_a.parameters(),
-                self.fc_post_s.parameters(),
-                self.SemanticDecoder_module.parameters(),
-                self.SemanticEncoder_module.parameters()
-            )
+            gen_params.extend([p for p in self.fc_prior.parameters() if p.requires_grad])
+            gen_params.extend([p for p in self.fc_post_a.parameters() if p.requires_grad])
+            gen_params.extend([p for p in self.fc_post_s.parameters() if p.requires_grad])
+            gen_params.extend([p for p in self.SemanticDecoder_module.parameters() if p.requires_grad])
+            gen_params.extend([p for p in self.SemanticEncoder_module.parameters() if p.requires_grad])
+
+        if len(gen_params) == 0:
+            raise ValueError('No trainable generator parameters found. Check trainable flags in config.')
+        if len(disc_params) == 0:
+            raise ValueError('No trainable discriminator parameters found.')
 
         gen_opt = optim.AdamW(gen_params, **self.cfg.train.gen_optim_params)
         disc_opt = optim.AdamW(disc_params, **self.cfg.train.disc_optim_params)
