@@ -367,6 +367,9 @@ class FixedPatternMaskingUpsampler(nn.Module):
     Fixed deterministic mask-token upsampler (single input/output).
       in:  [B, N_kept, C]
       out: [B, N, C]
+
+    If `mask` is provided, it is used to recover the exact target sequence length.
+    Without `mask`, target length is inferred as `N_kept * stride`.
     """
 
     def __init__(self, r: float, dim: int, **kwargs):
@@ -374,15 +377,25 @@ class FixedPatternMaskingUpsampler(nn.Module):
         self.stride = _fixed_pattern_stride(float(r))
         self.mask_token = nn.Parameter(torch.randn(dim))
 
-    def forward(self, x: torch.Tensor):
+    def forward(self, x: torch.Tensor, mask: torch.Tensor = None):
         if x.dim() != 3:
             raise ValueError("FixedPatternMaskingUpsampler expects dense x of shape [B, N, C]")
         batch_size, n_kept, channels = x.shape
         if channels != int(self.mask_token.numel()):
             raise ValueError("FixedPatternMaskingUpsampler: dim mismatch between x and mask_token")
 
-        seq_len = n_kept * self.stride
-        mask = _build_fixed_pattern_mask(batch_size, seq_len, self.stride, x.device)
+        if mask is None:
+            seq_len = n_kept * self.stride
+            mask = _build_fixed_pattern_mask(batch_size, seq_len, self.stride, x.device)
+        else:
+            if mask.dim() != 2:
+                raise ValueError("FixedPatternMaskingUpsampler: mask must have shape [B, N]")
+            if int(mask.shape[0]) != int(batch_size):
+                raise ValueError("FixedPatternMaskingUpsampler: mask batch size must match x")
+            if mask.device != x.device:
+                mask = mask.to(device=x.device)
+            seq_len = int(mask.shape[1])
+
         y = self.mask_token.to(device=x.device, dtype=x.dtype).view(1, 1, channels).expand(batch_size, seq_len, channels).clone()
         _scatter_dense_kept_tokens(y, x, mask, "FixedPatternMaskingUpsampler")
         return y

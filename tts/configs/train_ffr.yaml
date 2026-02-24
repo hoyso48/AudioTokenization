@@ -1,0 +1,27 @@
+train_jsonl: ./data/examples_train.jsonl
+val_jsonl: ./data/examples_val.jsonl
+tokenizer_path: ./artifacts/text_tokenizer.json
+output_dir: ./runs/ffr
+
+use_vfr: false
+speech_vocab_size: 16384
+
+d_model: 1024
+n_head: 16
+n_layer: 12
+ffn_mult: 4
+dropout: 0.1
+max_position_embeddings: 4096
+
+max_text_tokens: 256
+max_prompt_tokens: 256
+max_target_tokens: 1024
+
+learning_rate: 5e-2
+weight_decay: 0.0
+num_train_epochs: 100
+warmup_ratio: 0.0
+lr_scheduler_type: cosine
+per_device_train_batch_size: 4
+per_device_eval_batch_size: 4
+gradient_accumulation_steps: 1

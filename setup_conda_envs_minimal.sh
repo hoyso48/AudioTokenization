@@ -27,6 +27,8 @@ TORCHAUDIO_SPEC="${TORCHAUDIO_SPEC:-torchaudio==2.9.0+cu128}"
 TORCHVISION_SPEC="${TORCHVISION_SPEC:-torchvision==0.24.0+cu128}"
 TORCHCODEC_SPEC="${TORCHCODEC_SPEC:-torchcodec==0.9.1}"
 S3PRL_VERSION_FALLBACK="${S3PRL_VERSION_FALLBACK:-0.4.18}"
+UTMOSV2_SPEC="${UTMOSV2_SPEC:-git+https://github.com/sarulab-speech/UTMOSv2.git@v1.2.1}"
+UTMOSV2_SPEC_FALLBACK="${UTMOSV2_SPEC_FALLBACK:-utmosv2}"
 
 TORCH_INDEX_URL_SET=0
 TORCH_SPEC_SET=0
@@ -66,6 +68,8 @@ Options:
   --torchaudio_spec <spec>        Torchaudio package spec
   --torchvision_spec <spec>       Torchvision package spec
   --torchcodec_spec <spec>        TorchCodec package spec
+  --utmosv2_spec <spec>           UTMOSv2 pip spec (default: git+https://github.com/sarulab-speech/UTMOSv2.git@v1.2.1)
+  --utmosv2_spec_fallback <spec>  Fallback UTMOSv2 spec if primary install fails
 
   # NOTE: unless explicitly overridden by options above, eval torch stack
   # specs are auto-synced from --train_requirements (default: requirements.txt)
@@ -326,6 +330,25 @@ install_eval_torch_stack_if_needed() {
     "$TORCH_SPEC" "$TORCHAUDIO_SPEC" "$TORCHVISION_SPEC" "$TORCHCODEC_SPEC"
 }
 
+ensure_eval_utmosv2() {
+  if run_in_env "$EVAL_ENV" python -c "import utmosv2" >/dev/null 2>&1; then
+    log "UTMOSv2 already available in $EVAL_ENV"
+    return
+  fi
+
+  log "Installing UTMOSv2 in $EVAL_ENV: $UTMOSV2_SPEC"
+  if ! run_in_env "$EVAL_ENV" python -m pip install "$UTMOSV2_SPEC"; then
+    if [[ "$UTMOSV2_SPEC" != "$UTMOSV2_SPEC_FALLBACK" ]]; then
+      log "Primary UTMOSv2 install failed; retrying fallback: $UTMOSV2_SPEC_FALLBACK"
+      run_in_env "$EVAL_ENV" python -m pip install "$UTMOSV2_SPEC_FALLBACK"
+    else
+      return 1
+    fi
+  fi
+
+  run_in_env "$EVAL_ENV" python -c "import utmosv2"
+}
+
 setup_train_env() {
   ensure_env "$TRAIN_ENV"
   ensure_pip_base "$TRAIN_ENV"
@@ -407,6 +430,8 @@ setup_eval_env() {
     "vector_quantize_pytorch" \
     "wandb"
 
+  ensure_eval_utmosv2
+
   ensure_flash_attn "$EVAL_ENV"
 
   log "Verifying eval env imports"
@@ -448,6 +473,7 @@ from torchmetrics.audio import ShortTimeObjectiveIntelligibility
 from mel_cepstral_distance import compare_audio_files
 import fairseq
 import s3prl
+import utmosv2
 from verification import init_model
 from UTMOS import UTMOSScore
 
@@ -537,6 +563,14 @@ while [[ $# -gt 0 ]]; do
       TORCHCODEC_SPEC_SET=1
       shift 2
       ;;
+    --utmosv2_spec)
+      UTMOSV2_SPEC="$2"
+      shift 2
+      ;;
+    --utmosv2_spec_fallback)
+      UTMOSV2_SPEC_FALLBACK="$2"
+      shift 2
+      ;;
     -h|--help)
       usage
       exit 0
@@ -572,6 +606,8 @@ log "  TORCH_SPEC=$TORCH_SPEC"
 log "  TORCHAUDIO_SPEC=$TORCHAUDIO_SPEC"
 log "  TORCHVISION_SPEC=$TORCHVISION_SPEC"
 log "  TORCHCODEC_SPEC=$TORCHCODEC_SPEC"
+log "  UTMOSV2_SPEC=$UTMOSV2_SPEC"
+log "  UTMOSV2_SPEC_FALLBACK=$UTMOSV2_SPEC_FALLBACK"
 
 if [[ "$INSTALL_TRAIN" -eq 1 ]]; then
   log "--- Setup train env start ---"

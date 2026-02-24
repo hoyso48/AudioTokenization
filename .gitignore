@@ -51,4 +51,9 @@ results*/
 *.wandb
 *.wav
 
+# Local runtime caches (avoid accidental commits)
+.cache/
+eval/.cache/
+pip-wheel-metadata/
+
 references/

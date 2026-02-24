@@ -38,12 +38,25 @@ bash eval/run_results_ft_suite.sh --run_list eval/run_dirs.txt
 - `--tau_finetune` / `--no_tau_finetune`
   - default: `--tau_finetune`
   - tau search runs only when DTP is enabled and class supports `fixed_tau`
+- `--bootstrap_iters <int>`
+  - default: `1`
+  - number of bootstrap passes for `update_test_time` warm-start
+- `--bootstrap_only` / `--no_bootstrap_only`
+  - default: `--no_bootstrap_only`
+  - optional: use bootstrap final `tau_end` directly (skip binary search)
 - `--cfg_override <dotlist>` (repeatable)
   - applies to both tau-search and eval
+- `--metrics <list|all>`
+  - default: `all`
+  - example: `--metrics stoi,pesq_wb,wer,utmos_v2`
+  - if `utmos_v2` is requested and missing, scripts auto-install UTMOSv2 by default
+- `--throughput_warmup_items <int>`
+  - default: `5`
+  - excludes initial torch-compile warmup iterations from throughput aggregation
 - `--eval_subdir`, `--stats_subdir`, `--name_suffix`
   - controls output subdirectory names under each run directory
 - `--force`
-  - re-runs eval even if `<eval_out>/metrics.json` exists
+  - re-runs eval even if `<eval_out>/metrics.json` already has requested metrics
 
 ### Output files
 
@@ -55,6 +68,10 @@ For each run directory:
 - Eval output
   - `<run_dir>/<eval_subdir><name_suffix>/metrics.json`
   - plus `manifest.jsonl`, `audio_metrics.json`, and related outputs
+  - `manifest.jsonl` now includes prediction throughput fields (`prediction_elapsed_sec`, `prediction_samples`, `prediction_samples_per_sec`, `prediction_items_per_sec`)
+  - `metrics.json` includes `utmos_v2` when selected and no longer includes `avg_sim`
+  - when `use_dtp=True`, `metrics.json` also includes final realized `dtp_avg_r_mean/std` and `dtp_tau_used_mean/std`
+  - if rerun with a new metric subset, only missing metric keys are added/updated (existing keys are preserved)
 
 ### Usage examples
 
@@ -90,6 +107,11 @@ bash eval/run_results_ft_suite.sh \
 ### Notes
 
 - Tau search assumes `avg_r` is monotonic with respect to `fixed_tau`.
-- Bootstrap warm-start (`update_test_time`) is enabled by default when supported.
+- Bootstrap warm-start (`update_test_time`) is enabled by default when supported, with `--bootstrap_iters 1`.
+- Bootstrap always computes `avg_r` on the full dataset (not capped by `--max_samples`).
+- Bootstrap starts from previous final tau when available (prior `summary.json` tau_end, then current fixed_tau, then cached trials fallback).
+- If `<stats_subdir>/summary.json` already exists and `--force` is not set, scripts reuse that `fixed_tau` instead of rerunning bootstrap/search.
+- For `--metrics all`, scripts rerun only when at least one expected metric key is missing in `metrics.json`.
+- By default, search continues after bootstrap warm-start; use `--bootstrap_only` to use final bootstrap `tau_end` directly.
 - Search defaults to no-resume behavior (`--no_resume_search`).
 - First metrics run may download HF weights (`facebook/hubert-large-ls960-ft`).

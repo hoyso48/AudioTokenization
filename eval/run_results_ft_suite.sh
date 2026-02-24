@@ -23,10 +23,17 @@ KEEP_AUDIO=0
 
 TAU_FINETUNE=1
 BOOTSTRAP_UPDATE_TEST_TIME=1
+BOOTSTRAP_ONLY=0
 BOOTSTRAP_OVERRIDE_UPDATE_TEST_TIME=1
+BOOTSTRAP_ITERS="1"
 SEARCH_NO_RESUME=1
 AUTO_EXPAND=0
 AUTO_EXPAND_MAX_TAU="100.0"
+METRICS="all"
+THROUGHPUT_WARMUP_ITEMS="5"
+AUTO_INSTALL_METRIC_DEPS=1
+UTMOSV2_SPEC="${UTMOSV2_SPEC:-git+https://github.com/sarulab-speech/UTMOSv2.git@v1.2.1}"
+UTMOSV2_SPEC_FALLBACK="${UTMOSV2_SPEC_FALLBACK:-utmosv2}"
 
 FORCE=0
 
@@ -67,10 +74,13 @@ Options:
 
   --bootstrap_update_test_time     Enable bootstrap tau warm-start (default)
   --no_bootstrap_update_test_time  Disable bootstrap
+  --bootstrap_only                 Use bootstrap tau directly
+  --no_bootstrap_only              Continue with binary search after bootstrap (default)
   --bootstrap_override_update_test_time
-                                   Force update_test_time=True during bootstrap (default)
+                                    Force update_test_time=True during bootstrap (default)
   --no_bootstrap_override_update_test_time
-                                   Do not force update_test_time=True
+                                    Do not force update_test_time=True
+  --bootstrap_iters <int>           Number of bootstrap passes (default: 1)
 
   --auto_expand                    Enable dtp_stats_search --auto_expand
   --auto_expand_max_tau <float>    Max tau used by auto-expand (default: 100.0)
@@ -79,6 +89,12 @@ Options:
   --no_resume_search               Do not reuse trials.jsonl (default)
 
   --eval_stage <save|metrics|all>  Eval stage (default: all)
+  --metrics <list|all>             Metrics for eval.py (default: all)
+  --throughput_warmup_items <int>  Exclude first N iterations from throughput (default: 5)
+  --auto_install_metric_deps       Auto-install missing metric deps like UTMOSv2 (default)
+  --no_auto_install_metric_deps    Disable auto-install and fail with guidance
+  --utmosv2_spec <spec>            UTMOSv2 spec used when auto-installing (default: git+https://github.com/sarulab-speech/UTMOSv2.git@v1.2.1)
+  --utmosv2_spec_fallback <spec>   Fallback UTMOSv2 spec if primary install fails
   --eval_subdir <name>             Eval output subdir under run_dir (default: eval_ft)
   --stats_subdir <name>            Tau-search output subdir (default: dtp_stats_ft)
   --name_suffix <suffix>           Suffix appended to both subdir names
@@ -211,11 +227,127 @@ PY
 
 should_skip_eval() {
   local eval_out="$1"
-  if [[ -f "$eval_out/metrics.json" ]]; then
-    echo "=== [SKIP] metrics.json already exists at $eval_out/metrics.json ==="
+  local metrics_json="$eval_out/metrics.json"
+  if [[ ! -f "$metrics_json" ]]; then
+    return 1
+  fi
+
+  if "$PYTHON_BIN" - "$metrics_json" "$METRICS" <<'PY'
+import json
+import sys
+
+metrics_path = sys.argv[1]
+metrics_arg = (sys.argv[2] or "").strip().lower()
+
+aliases = {
+    "spk": "speaker_similarity",
+    "spk_sim": "speaker_similarity",
+    "speaker": "speaker_similarity",
+    "utmosv2": "utmos_v2",
+}
+
+if not metrics_arg or metrics_arg == "all":
+    requested = [
+        "stoi",
+        "pesq_wb",
+        "pesq_nb",
+        "si_snr",
+        "si_sdr",
+        "speaker_similarity",
+        "mcd",
+        "wer",
+        "wer_sentence_avg",
+        "utmos",
+        "utmos_v2",
+    ]
+else:
+    requested = []
+    for tok in metrics_arg.split(","):
+        key = aliases.get(tok.strip(), tok.strip())
+        if key:
+            requested.append(key)
+
+if "wer_sentence_avg" in requested and "wer" not in requested:
+    requested.append("wer")
+
+requested = list(dict.fromkeys(requested))
+
+with open(metrics_path, "r") as f:
+    data = json.load(f)
+
+if not isinstance(data, dict):
+    sys.exit(1)
+
+for k in requested:
+    if k not in data:
+        sys.exit(1)
+
+sys.exit(0)
+PY
+  then
+    echo "=== [SKIP] requested metrics already exist at $metrics_json ==="
     return 0
   fi
   return 1
+}
+
+metrics_contains() {
+  local needle="$1"
+  local metrics_lc
+  local -a items
+  metrics_lc="$(printf "%s" "$METRICS" | tr '[:upper:]' '[:lower:]')"
+  if [[ -z "$metrics_lc" || "$metrics_lc" == "all" ]]; then
+    return 0
+  fi
+
+  local item trimmed
+  IFS=',' read -r -a items <<< "$metrics_lc"
+  for item in "${items[@]}"; do
+    trimmed="$(trim_whitespace "$item")"
+    if [[ "$trimmed" == "utmosv2" ]]; then
+      trimmed="utmos_v2"
+    fi
+    if [[ "$trimmed" == "$needle" ]]; then
+      return 0
+    fi
+  done
+  return 1
+}
+
+ensure_metric_runtime_deps() {
+  if [[ "$EVAL_STAGE" == "save" ]]; then
+    return
+  fi
+
+  if ! metrics_contains "utmos_v2"; then
+    return
+  fi
+
+  if "$PYTHON_BIN" -c "import utmosv2" >/dev/null 2>&1; then
+    return
+  fi
+
+  if [[ "$AUTO_INSTALL_METRIC_DEPS" -ne 1 ]]; then
+    echo "[ERROR] utmosv2 is required for metric 'utmos_v2' but is not installed." >&2
+    echo "        Install with: $PYTHON_BIN -m pip install '$UTMOSV2_SPEC'" >&2
+    exit 2
+  fi
+
+  echo "[INFO] Missing utmosv2 detected; installing into current Python env..."
+  if ! "$PYTHON_BIN" -m pip install "$UTMOSV2_SPEC"; then
+    if [[ "$UTMOSV2_SPEC" != "$UTMOSV2_SPEC_FALLBACK" ]]; then
+      echo "[WARN] Primary UTMOSv2 install failed; retrying fallback: $UTMOSV2_SPEC_FALLBACK"
+      "$PYTHON_BIN" -m pip install "$UTMOSV2_SPEC_FALLBACK"
+    else
+      echo "[ERROR] Failed to install UTMOSv2 spec: $UTMOSV2_SPEC" >&2
+      exit 2
+    fi
+  fi
+
+  if ! "$PYTHON_BIN" -c "import utmosv2" >/dev/null 2>&1; then
+    echo "[ERROR] utmosv2 import still fails after install." >&2
+    exit 2
+  fi
 }
 
 run_tau_search() {
@@ -252,6 +384,12 @@ run_tau_search() {
 
   if [[ "$BOOTSTRAP_UPDATE_TEST_TIME" -eq 1 && "$supports_update_test_time" -eq 1 ]]; then
     args+=(--bootstrap_update_test_time)
+    args+=(--bootstrap_iters "$BOOTSTRAP_ITERS")
+    if [[ "$BOOTSTRAP_ONLY" -eq 1 ]]; then
+      args+=(--bootstrap_only)
+    else
+      args+=(--no_bootstrap_only)
+    fi
     if [[ "$BOOTSTRAP_OVERRIDE_UPDATE_TEST_TIME" -eq 1 ]]; then
       args+=(--bootstrap_override_update_test_time)
     fi
@@ -271,11 +409,15 @@ run_eval() {
   local eval_out="$2"
   local fixed_tau="${3:-}"
 
+  ensure_metric_runtime_deps
+
   local -a args=()
   args+=(--input "$INPUT")
   args+=(--run_dir "$run_dir")
   args+=(--output_dir "$eval_out")
   args+=(--stage "$EVAL_STAGE")
+  args+=(--metrics "$METRICS")
+  args+=(--throughput_warmup_items "$THROUGHPUT_WARMUP_ITEMS")
   args+=(--length_mode "$LENGTH_MODE")
   args+=(--num_workers "$NUM_WORKERS")
 
@@ -356,6 +498,14 @@ while [[ $# -gt 0 ]]; do
       BOOTSTRAP_UPDATE_TEST_TIME=0
       shift
       ;;
+    --bootstrap_only)
+      BOOTSTRAP_ONLY=1
+      shift
+      ;;
+    --no_bootstrap_only)
+      BOOTSTRAP_ONLY=0
+      shift
+      ;;
     --bootstrap_override_update_test_time)
       BOOTSTRAP_OVERRIDE_UPDATE_TEST_TIME=1
       shift
@@ -363,6 +513,10 @@ while [[ $# -gt 0 ]]; do
     --no_bootstrap_override_update_test_time)
       BOOTSTRAP_OVERRIDE_UPDATE_TEST_TIME=0
       shift
+      ;;
+    --bootstrap_iters)
+      BOOTSTRAP_ITERS="$2"
+      shift 2
       ;;
     --auto_expand)
       AUTO_EXPAND=1
@@ -382,6 +536,30 @@ while [[ $# -gt 0 ]]; do
       ;;
     --eval_stage)
       EVAL_STAGE="$2"
+      shift 2
+      ;;
+    --metrics)
+      METRICS="$2"
+      shift 2
+      ;;
+    --throughput_warmup_items)
+      THROUGHPUT_WARMUP_ITEMS="$2"
+      shift 2
+      ;;
+    --auto_install_metric_deps)
+      AUTO_INSTALL_METRIC_DEPS=1
+      shift
+      ;;
+    --no_auto_install_metric_deps)
+      AUTO_INSTALL_METRIC_DEPS=0
+      shift
+      ;;
+    --utmosv2_spec)
+      UTMOSV2_SPEC="$2"
+      shift 2
+      ;;
+    --utmosv2_spec_fallback)
+      UTMOSV2_SPEC_FALLBACK="$2"
       shift 2
       ;;
     --eval_subdir)
@@ -493,16 +671,21 @@ for run_dir in "${RUN_DIRS[@]}"; do
     do_tau_search=1
   fi
 
-  if [[ "$do_tau_search" -eq 1 ]]; then
-    run_tau_search "$run_dir" "$stats_out" "$supports_update_test_time"
+  summary_json="$stats_out/summary.json"
 
-    summary_json="$stats_out/summary.json"
-    if [[ ! -f "$summary_json" ]]; then
-      echo "[ERROR] Missing summary.json at: $summary_json" >&2
-      exit 1
+  if [[ "$do_tau_search" -eq 1 ]]; then
+    if [[ "$FORCE" -eq 0 && -f "$summary_json" ]]; then
+      tau="$(json_get_best_tau "$summary_json")"
+      echo "=== [REUSE] fixed_tau=$tau (from existing $summary_json) ==="
+    else
+      run_tau_search "$run_dir" "$stats_out" "$supports_update_test_time"
+      if [[ ! -f "$summary_json" ]]; then
+        echo "[ERROR] Missing summary.json at: $summary_json" >&2
+        exit 1
+      fi
+      tau="$(json_get_best_tau "$summary_json")"
+      echo "=== [FOUND] fixed_tau=$tau (from $summary_json) ==="
     fi
-    tau="$(json_get_best_tau "$summary_json")"
-    echo "=== [FOUND] fixed_tau=$tau (from $summary_json) ==="
 
     run_eval "$run_dir" "$eval_out" "$tau"
     tau_runs=$((tau_runs + 1))

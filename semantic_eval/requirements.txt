@@ -1,0 +1,10 @@
+-r ../requirements.txt
+scikit-learn==1.5.2
+joblib
+gdown>=5.2.0
+xmltodict
+yt-dlp
+pandas>=2.2.0
+tqdm>=4.66.0
+pyannote.core
+pyannote.metrics

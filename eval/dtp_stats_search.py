@@ -70,6 +70,7 @@ class SearchConfig:
     bootstrap_update_test_time: bool
     bootstrap_only: bool
     bootstrap_override_update_test_time: bool
+    bootstrap_iters: int
     # If true, allow expanding tau bounds when target can't be bracketed.
     auto_expand: bool
     auto_expand_max_tau: float
@@ -89,6 +90,8 @@ def _ensure_tau_range(cfg: SearchConfig) -> None:
             raise ValueError("--auto_expand_max_tau must be > 0 when --auto_expand is enabled")
     if cfg.direction_probe_step <= 0:
         raise ValueError("--direction_probe_step must be >= 1")
+    if cfg.bootstrap_iters <= 0:
+        raise ValueError("--bootstrap_iters must be >= 1")
 
 
 def _index_bounds(cfg: SearchConfig) -> Tuple[int, int]:
@@ -137,12 +140,27 @@ def _set_fixed_tau(dtp_module: torch.nn.Module, fixed_tau: float) -> None:
                 buf.fill_(float(fixed_tau))
 
 
-def _clear_fixed_tau_enable_update_test_time(dtp_module: torch.nn.Module) -> None:
+def _clear_fixed_tau_enable_update_test_time(
+    dtp_module: torch.nn.Module,
+    init_tau: Optional[float] = None,
+) -> Optional[float]:
     """
     Prepare the DTP module to adapt tau during eval (update_test_time=True, fixed_tau=None).
     """
     if not hasattr(dtp_module, "fixed_tau") or not hasattr(dtp_module, "update_test_time"):
         raise AttributeError("DTP module does not expose fixed_tau/update_test_time attributes.")
+    # Prefer explicitly provided init_tau; otherwise reuse current fixed_tau if available.
+    start_tau: Optional[float] = None
+    if init_tau is not None:
+        start_tau = float(init_tau)
+    else:
+        ft = getattr(dtp_module, "fixed_tau", None)
+        if ft is not None:
+            try:
+                start_tau = float(ft)
+            except Exception:
+                start_tau = None
+
     dtp_module.fixed_tau = None
     dtp_module.update_test_time = True
     # Keep eval buffers consistent for a fresh adaptation run.
@@ -151,11 +169,21 @@ def _clear_fixed_tau_enable_update_test_time(dtp_module: torch.nn.Module) -> Non
             buf = getattr(dtp_module, name)
             if torch.is_tensor(buf):
                 buf.zero_()
-    if hasattr(dtp_module, "tau_eval") and hasattr(dtp_module, "tau_train"):
+    if start_tau is not None and np.isfinite(start_tau) and start_tau > 0.0:
+        for name in ("tau_train", "tau_eval"):
+            if hasattr(dtp_module, name):
+                buf = getattr(dtp_module, name)
+                if torch.is_tensor(buf):
+                    buf.fill_(float(start_tau))
+                else:
+                    setattr(dtp_module, name, float(start_tau))
+    elif hasattr(dtp_module, "tau_eval") and hasattr(dtp_module, "tau_train"):
         te = getattr(dtp_module, "tau_eval")
         tt = getattr(dtp_module, "tau_train")
         if torch.is_tensor(te) and torch.is_tensor(tt):
             te.copy_(tt)
+
+    return start_tau
 
 
 def _load_existing_trials(trials_path: Path) -> Dict[str, Dict[str, object]]:
@@ -175,6 +203,42 @@ def _load_existing_trials(trials_path: Path) -> Dict[str, Dict[str, object]]:
         if isinstance(tau_key, str):
             cache[tau_key] = rec
     return cache
+
+
+def _load_previous_bootstrap_tau(summary_path: Path) -> Optional[float]:
+    if not summary_path.is_file():
+        return None
+    try:
+        with open(summary_path, "r") as f:
+            data = json.load(f)
+    except Exception:
+        return None
+    if not isinstance(data, dict):
+        return None
+
+    # Prefer the previous bootstrap-updated tau_end.
+    tau = None
+    bootstrap = data.get("bootstrap")
+    if isinstance(bootstrap, dict):
+        tau_progress = bootstrap.get("tau_progress")
+        if isinstance(tau_progress, dict):
+            tau = tau_progress.get("end")
+
+    # Fallback to previous best fixed_tau if needed.
+    if tau is None:
+        best = data.get("best")
+        if isinstance(best, dict):
+            tau = best.get("fixed_tau")
+
+    if tau is None:
+        return None
+    try:
+        tau_f = float(tau)
+    except Exception:
+        return None
+    if not (np.isfinite(tau_f) and tau_f > 0.0):
+        return None
+    return tau_f
 
 
 def _tau_key(tau: float) -> str:
@@ -256,34 +320,65 @@ def bootstrap_tau_with_update_test_time(
     model: CodecLightningModule,
     dataloader: DataLoader,
     device_type: str,
-    max_samples: Optional[int],
+    bootstrap_iters: int,
+    initial_tau: Optional[float],
 ) -> Dict[str, object]:
     """
-    Run one full pass with update_test_time=True and fixed_tau=None so the internal controller
-    adapts tau_eval towards the target r. The resulting tau_end is a good initial guess.
+    Run repeated full-dataset passes with update_test_time=True and fixed_tau=None so the internal
+    controller keeps adapting tau_eval towards the target r. Increasing bootstrap_iters effectively
+    extends the dataset length by reusing the same samples multiple times.
+
+    Notes:
+    - tau state is NOT reset between iterations; updates are continuous across passes.
+    - each iteration always uses the full dataset (no max_samples cap during bootstrap).
     """
     dtp_module = model.dtp
     tau_state_before = get_tau_state(dtp_module)
 
-    _clear_fixed_tau_enable_update_test_time(dtp_module)
+    bootstrap_init_tau = _clear_fixed_tau_enable_update_test_time(dtp_module, init_tau=initial_tau)
 
     params = list(model.parameters())
     model_device = params[0].device if params else torch.device("cpu")
 
-    avg_r_values: List[float] = []
-    tau_used_values: List[float] = []
-    processed = 0
+    all_avg_r_values: List[float] = []
+    all_tau_used_values: List[float] = []
+    processed_total = 0
+    total_seconds = 0.0
+    iter_summaries: List[Dict[str, object]] = []
 
-    t0 = time.time()
-    for batch in tqdm(dataloader, total=len(dataloader), desc="bootstrap(update_test_time)", leave=False):
-        wav = batch["wav"].to(model_device)
-        _, avg_r_val, tau_used = run_generator_forward(model, wav, device_type)
-        avg_r_values.append(float(avg_r_val))
-        tau_used_values.append(float(tau_used))
-        processed += 1
-        if max_samples is not None and processed >= int(max_samples):
-            break
-    dt = time.time() - t0
+    for iter_idx in range(int(bootstrap_iters)):
+        avg_r_values: List[float] = []
+        tau_used_values: List[float] = []
+        processed = 0
+
+        t0 = time.time()
+        desc = f"bootstrap(update_test_time) [{iter_idx + 1}/{bootstrap_iters}]"
+        for batch in tqdm(dataloader, total=len(dataloader), desc=desc, leave=False):
+            wav = batch["wav"].to(model_device)
+            _, avg_r_val, tau_used = run_generator_forward(model, wav, device_type)
+            avg_r_values.append(float(avg_r_val))
+            tau_used_values.append(float(tau_used))
+            processed += 1
+        dt = time.time() - t0
+        total_seconds += float(dt)
+        processed_total += int(processed)
+        all_avg_r_values.extend(avg_r_values)
+        all_tau_used_values.extend(tau_used_values)
+
+        tau_state_iter = get_tau_state(dtp_module)
+        prefer_eval_tau = bool(getattr(dtp_module, "update_test_time", False))
+        tau_iter = pick_tau_value(tau_state_iter, prefer_eval_tau)
+        iter_summaries.append(
+            {
+                "iter": int(iter_idx + 1),
+                "num_sequences": int(processed),
+                "seconds": float(dt),
+                "avg_r_summary": _summarize(avg_r_values),
+                "tau_used_summary": _summarize(tau_used_values),
+                "tau_state": tau_state_iter,
+                "tau": tau_iter,
+            }
+        )
 
     tau_state_after = get_tau_state(dtp_module)
     prefer_eval_tau = bool(getattr(dtp_module, "update_test_time", False))
@@ -291,13 +386,17 @@ def bootstrap_tau_with_update_test_time(
     tau_end = pick_tau_value(tau_state_after, prefer_eval_tau)
 
     return {
-        "num_sequences": int(processed),
-        "seconds": float(dt),
-        "avg_r_summary": _summarize(avg_r_values),
-        "tau_used_summary": _summarize(tau_used_values),
+        "bootstrap_iters": int(bootstrap_iters),
+        "bootstrap_full_dataset": True,
+        "bootstrap_init_tau": (float(bootstrap_init_tau) if bootstrap_init_tau is not None else None),
+        "num_sequences": int(processed_total),
+        "seconds": float(total_seconds),
+        "avg_r_summary": _summarize(all_avg_r_values),
+        "tau_used_summary": _summarize(all_tau_used_values),
         "tau_state_before": tau_state_before,
         "tau_state_after": tau_state_after,
         "tau_progress": {"start": tau_start, "end": tau_end},
+        "iterations": iter_summaries,
     }
 
 
@@ -424,6 +523,48 @@ def search_fixed_tau(
 
     cache = {} if no_resume else _load_existing_trials(trials_path)
 
+    bootstrap_init_tau: Optional[float] = None
+    bootstrap_init_source = "none"
+
+    prev_summary_tau = _load_previous_bootstrap_tau(trials_path.parent / "summary.json")
+    if prev_summary_tau is not None:
+        bootstrap_init_tau = float(prev_summary_tau)
+        bootstrap_init_source = "previous_summary"
+
+    if bootstrap_init_tau is None:
+        dtp_fixed_tau = getattr(model.dtp, "fixed_tau", None)
+        if dtp_fixed_tau is not None:
+            try:
+                tau_val = float(dtp_fixed_tau)
+                if np.isfinite(tau_val) and tau_val > 0.0:
+                    bootstrap_init_tau = tau_val
+                    bootstrap_init_source = "model_fixed_tau"
+            except Exception:
+                bootstrap_init_tau = None
+
+    if bootstrap_init_tau is None and cache:
+        best_err = float("inf")
+        best_tau: Optional[float] = None
+        for rec in cache.values():
+            tau_raw = rec.get("fixed_tau")
+            avg_raw = rec.get("avg_r_mean")
+            if tau_raw is None or avg_raw is None:
+                continue
+            try:
+                tau_val = float(tau_raw)
+                avg_val = float(avg_raw)
+            except Exception:
+                continue
+            if not (np.isfinite(tau_val) and tau_val > 0.0 and np.isfinite(avg_val)):
+                continue
+            err = abs(avg_val - float(cfg.target_avg_r))
+            if err < best_err:
+                best_err = err
+                best_tau = tau_val
+        if best_tau is not None:
+            bootstrap_init_tau = float(best_tau)
+            bootstrap_init_source = "cached_trials"
+
     def eval_idx(idx: int) -> Dict[str, object]:
         tau = _idx_to_tau(idx, cfg.tau_step)
         key = _tau_key(tau)
@@ -450,13 +591,16 @@ def search_fixed_tau(
     if cfg.bootstrap_update_test_time:
         # Optionally override update_test_time via model mutation even if config doesn't include it.
         if cfg.bootstrap_override_update_test_time:
-            _clear_fixed_tau_enable_update_test_time(model.dtp)
+            _clear_fixed_tau_enable_update_test_time(model.dtp, init_tau=bootstrap_init_tau)
         bootstrap_info = bootstrap_tau_with_update_test_time(
             model=model,
             dataloader=dataloader,
             device_type=device_type,
-            max_samples=cfg.max_samples,
+            bootstrap_iters=cfg.bootstrap_iters,
+            initial_tau=bootstrap_init_tau,
         )
+        if bootstrap_info is not None:
+            bootstrap_info["bootstrap_init_source"] = bootstrap_init_source
 
         tau_end = bootstrap_info.get("tau_progress", {}).get("end")
         if tau_end is not None:
@@ -475,7 +619,9 @@ def search_fixed_tau(
             tau_end = bootstrap_info.get("tau_progress", {}).get("end")
             if tau_end is None:
                 raise RuntimeError("Bootstrap enabled but tau_end is None.")
-            tau_guess = _round_tau_to_step(float(tau_end), cfg.tau_step)
+            tau_guess = float(tau_end)
+            if tau_guess <= 0.0:
+                tau_guess = float(cfg.tau_step)
             best_rec = evaluate_tau_avg_r(
                 model=model,
                 dataloader=dataloader,
@@ -494,10 +640,12 @@ def search_fixed_tau(
                     "length_mode": cfg.length_mode,
                     "bootstrap_update_test_time": cfg.bootstrap_update_test_time,
                     "bootstrap_only": cfg.bootstrap_only,
+                    "bootstrap_iters": cfg.bootstrap_iters,
                 },
                 "bootstrap": bootstrap_info,
                 "best": {
                     "fixed_tau": float(tau_guess),
+                    "bootstrap_tau_end": float(tau_end),
                     "avg_r_summary": best_rec.get("avg_r_summary"),
                     "avg_r_mean": best_rec.get("avg_r_mean"),
                     "tau_state": best_rec.get("tau_state"),
@@ -691,6 +839,7 @@ def search_fixed_tau(
             "length_mode": cfg.length_mode,
             "bootstrap_update_test_time": cfg.bootstrap_update_test_time,
             "bootstrap_only": cfg.bootstrap_only,
+            "bootstrap_iters": cfg.bootstrap_iters,
             "auto_expand": cfg.auto_expand,
             "auto_expand_max_tau": cfg.auto_expand_max_tau,
         },
@@ -739,7 +888,12 @@ def build_parser() -> argparse.ArgumentParser:
     p.add_argument("--device", type=str, default="cuda" if torch.cuda.is_available() else "cpu")
     p.add_argument("--num_workers", type=int, default=4)
     p.add_argument("--length_mode", type=str, choices=["pad", "truncate"], default="pad")
-    p.add_argument("--max_samples", type=int, default=None, help="Optional max number of sequences per tau evaluation.")
+    p.add_argument(
+        "--max_samples",
+        type=int,
+        default=None,
+        help="Optional max number of sequences per fixed-tau trial (bootstrap always uses full dataset per iteration).",
+    )
 
     p.add_argument("--target_avg_r", type=float, default=0.5, help="Target avg_r (reduction ratio) to reach.")
     p.add_argument("--tau_min", type=float, default=0.001, help="Minimum fixed_tau (must be > 0).")
@@ -749,13 +903,27 @@ def build_parser() -> argparse.ArgumentParser:
     p.add_argument(
         "--bootstrap_update_test_time",
         action="store_true",
-        help="Before searching, run one pass with update_test_time=True (and fixed_tau=None) to get a good tau guess.",
+        help="Before searching, run bootstrap with update_test_time=True (and fixed_tau=None) to get a good tau guess.",
+    )
+    p.add_argument(
+        "--bootstrap_iters",
+        type=int,
+        default=1,
+        help="Number of bootstrap passes over the same dataset (default: 1).",
     )
     p.add_argument(
         "--bootstrap_only",
+        dest="bootstrap_only",
         action="store_true",
-        help="Only run the update_test_time bootstrap and then evaluate fixed_tau=round(tau_end). No binary search.",
+        help="Use bootstrap tau_end directly (with one verification pass); skip binary search.",
     )
+    p.add_argument(
+        "--no_bootstrap_only",
+        dest="bootstrap_only",
+        action="store_false",
+        help="After bootstrap warm-start, continue with binary search (default).",
+    )
+    p.set_defaults(bootstrap_only=False)
     p.add_argument(
         "--bootstrap_override_update_test_time",
         action="store_true",
@@ -876,6 +1044,7 @@ def main() -> None:
         bootstrap_update_test_time=bool(args.bootstrap_update_test_time),
         bootstrap_only=bool(args.bootstrap_only),
         bootstrap_override_update_test_time=bool(args.bootstrap_override_update_test_time),
+        bootstrap_iters=int(args.bootstrap_iters),
         auto_expand=bool(args.auto_expand),
         auto_expand_max_tau=float(args.auto_expand_max_tau),
         direction_probe_step=int(args.direction_probe_step),
@@ -904,4 +1073,3 @@ def main() -> None:
 
 if __name__ == "__main__":
     main()
-

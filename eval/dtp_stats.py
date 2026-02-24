@@ -408,11 +408,29 @@ def run_generator_forward(
         with ac_context:
             vq_emb = model.encoder(wav.unsqueeze(1), level=1)
             dtp_out = model.dtp(vq_emb)
+            if not isinstance(dtp_out, tuple):
+                raise RuntimeError(f"Unexpected dtp output type: {type(dtp_out)!r}")
             if len(dtp_out) == 4:
                 mask, avg_r, tau_used, _ = dtp_out
-            else:
+            elif len(dtp_out) == 3:
                 mask, avg_r, tau_used = dtp_out
-            vq_emb, position_ids, cu_seqlens, max_seqlen = model.downsampler(vq_emb, mask)
+            else:
+                raise RuntimeError(f"Unexpected dtp output tuple length: {len(dtp_out)}")
+
+            downsample_out = model.downsampler(vq_emb, mask)
+            if isinstance(downsample_out, tuple):
+                if len(downsample_out) == 5:
+                    vq_emb, position_ids, cu_seqlens, max_seqlen, mask = downsample_out
+                elif len(downsample_out) == 4:
+                    vq_emb, position_ids, cu_seqlens, max_seqlen = downsample_out
+                else:
+                    raise RuntimeError(
+                        f"Unexpected downsampler tuple length: {len(downsample_out)} (expected 4 or 5)"
+                    )
+            else:
+                vq_emb = downsample_out
+                position_ids = cu_seqlens = max_seqlen = None
+
             vq_emb = model.encoder(
                 vq_emb,
                 position_ids=position_ids,
@@ -429,9 +447,18 @@ def run_generator_forward(
                 max_seqlen=max_seqlen,
                 level=2,
             )
-            vq_post_emb = model.upsampler(vq_post_emb, mask)
+            if mask is not None:
+                vq_post_emb = model.upsampler(vq_post_emb, mask=mask)
+            else:
+                vq_post_emb = model.upsampler(vq_post_emb)
             _ = model.decoder(vq_post_emb, vq=False, level=1)
-    return mask, float(avg_r.detach().cpu().item()), float(tau_used.detach().cpu().item())
+
+    def _to_float(x: object) -> float:
+        if torch.is_tensor(x):
+            return float(x.detach().cpu().item())
+        return float(x)
+
+    return mask, _to_float(avg_r), _to_float(tau_used)
 
 
 def collect_dtp_stats(args) -> None:

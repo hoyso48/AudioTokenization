@@ -1170,6 +1170,395 @@ class BatchGreedy(_BatchSelectorBase):
         return mask, avg_r, tau_used
 
 
+class BatchClusteringVarsTok(_BatchSelectorBase):
+    """
+    VarsTok-like contiguous clustering selector.
+
+    This selector builds contiguous clusters around high-scoring seeds and keeps one
+    representative token (cluster start) per cluster.
+    """
+
+    def __init__(
+        self,
+        r: float,
+        initial_tau: float = 0.7,
+        ema_mu: float = 0.95,
+        eta0: float = 0.1,
+        decay_T: float = 1000.0,
+        tau_min: float = 1e-4,
+        tau_max: float = 0.999,
+        update_every: int = 1,
+        sample_prob: float = 0.0,
+        min_mask_prob: float = 0.0,
+        max_mask_prob: float = 0.0,
+        min_mask_span: int = 4,
+        max_mask_span: int = 4,
+        random_mask_mode: str = "start_geom",
+        max_s: Optional[int] = None,
+        fixed_tau: Optional[float] = None,
+        update_test_time: bool = False,
+        sample_in_inference: bool = False,
+        fixed_mask_ratio: bool = False,
+        *,
+        k_neighbors: int = 10,
+        beta: float = 0.2,
+        use_dynamic_threshold: bool = False,
+        dynamic_std_coeff: float = 0.5,
+        cluster_max_span: Optional[int] = None,
+    ):
+        super().__init__(
+            r=r,
+            initial_tau=initial_tau,
+            ema_mu=ema_mu,
+            eta0=eta0,
+            decay_T=decay_T,
+            tau_min=tau_min,
+            tau_max=tau_max,
+            update_every=update_every,
+            sample_prob=sample_prob,
+            min_mask_prob=min_mask_prob,
+            max_mask_prob=max_mask_prob,
+            min_mask_span=min_mask_span,
+            max_mask_span=max_mask_span,
+            random_mask_mode=random_mask_mode,
+            max_s=max_s,
+            fixed_tau=fixed_tau,
+            update_test_time=update_test_time,
+            sample_in_inference=sample_in_inference,
+            invert_update=True,
+            fixed_mask_ratio=fixed_mask_ratio,
+        )
+        if int(k_neighbors) <= 0:
+            raise ValueError("BatchClusteringVarsTok: k_neighbors must be >= 1")
+        if float(beta) < 0.0:
+            raise ValueError("BatchClusteringVarsTok: beta must be >= 0")
+        self.k_neighbors = int(k_neighbors)
+        self.beta = float(beta)
+        self.use_dynamic_threshold = bool(use_dynamic_threshold)
+        self.dynamic_std_coeff = float(dynamic_std_coeff)
+
+        if max_s is not None:
+            self.cluster_max_span = int(max_s)
+        elif cluster_max_span is None:
+            self.cluster_max_span = None
+        else:
+            self.cluster_max_span = int(cluster_max_span)
+
+        if self.cluster_max_span is not None and self.cluster_max_span <= 0:
+            raise ValueError("BatchClusteringVarsTok: cluster_max_span must be >= 1 or None")
+
+    def _pairwise_similarity(self, x: torch.Tensor) -> torch.Tensor:
+        x = F.normalize(x, dim=-1)
+        return (torch.matmul(x, x.transpose(1, 2)) + 1.0) / 2.0
+
+    def _local_density(self, sim: torch.Tensor) -> torch.Tensor:
+        B, T, _ = sim.shape
+        if T <= 1:
+            return torch.ones(B, T, device=sim.device, dtype=sim.dtype)
+
+        k_eff = min(self.k_neighbors, T - 1)
+        knn = sim.topk(k_eff + 1, dim=-1).values[:, :, 1:]
+        return torch.exp(knn.mean(dim=-1))
+
+    def _delta(self, sim: torch.Tensor, rho: torch.Tensor) -> torch.Tensor:
+        dist = 1.0 - sim
+        rho_i = rho.unsqueeze(2)
+        rho_j = rho.unsqueeze(1)
+        higher_mask = rho_j > rho_i
+
+        dist_masked = dist.masked_fill(~higher_mask, float("inf"))
+        delta, _ = dist_masked.min(dim=2)
+
+        no_higher = ~higher_mask.any(dim=2)
+        max_dist, _ = dist.max(dim=2)
+        delta[no_higher] = max_dist[no_higher]
+        return delta
+
+    @torch.no_grad()
+    def forward(self, x: torch.Tensor) -> Tuple[torch.Tensor, torch.Tensor, torch.Tensor]:
+        device = x.device
+        dtype = x.dtype
+        B, N, C = x.shape if x.ndim == 3 else (0, 0, 0)
+        total = B * N
+        tau_used = self._get_tau_tensor(device, dtype)
+
+        if total == 0:
+            mask = torch.zeros(B, N, device=device, dtype=torch.bool)
+            avg_r = torch.zeros((), device=device, dtype=dtype)
+            return mask, avg_r, tau_used
+
+        if N <= 1:
+            mask = torch.ones(B, N, device=device, dtype=torch.bool)
+            avg_r = self._compute_avg_r(mask, total, dtype)
+            self._controller_step(avg_r)
+            mask = self._maybe_apply_random_mask(mask, dtype)
+            if N > 0:
+                mask[:, 0] = True
+            return mask, avg_r, tau_used
+
+        sim = self._pairwise_similarity(x)
+        rho = self._local_density(sim)
+        delta = self._delta(sim, rho)
+        s = rho * delta
+
+        tau_scalar = float(tau_used.item()) if bool(torch.isfinite(tau_used).item()) else 0.7
+        tau_scalar = min(max(tau_scalar, 1e-6), 0.999)
+
+        mask = torch.zeros(B, N, device=device, dtype=torch.bool)
+
+        for b in range(B):
+            sim_b = sim[b]
+            s_b = s[b]
+            span_limit = self.cluster_max_span if self.cluster_max_span is not None else N
+
+            dyn_th = tau_scalar
+            if self.use_dynamic_threshold:
+                mu = float(sim_b.mean().item())
+                sg = float(sim_b.std().item())
+                dyn_th = mu + self.dynamic_std_coeff * sg
+                dyn_th = min(max(dyn_th, 1e-6), 0.999)
+
+            sim_score = sim_b - self.beta * s_b.view(1, -1)
+
+            assigned = torch.zeros(N, dtype=torch.bool, device=device)
+            clusters = []
+            remaining = N
+
+            while remaining > 0:
+                seed = int(torch.argmax(s_b.masked_fill(assigned, -1e9)).item())
+                clst = [seed]
+                assigned[seed] = True
+                remaining -= 1
+
+                right_stop = min(N, seed + span_limit + 1)
+                for t in range(seed + 1, right_stop):
+                    if assigned[t] or len(clst) >= span_limit:
+                        break
+                    if float(sim_score[seed, t].item()) > dyn_th:
+                        clst.append(t)
+                        assigned[t] = True
+                        remaining -= 1
+                    else:
+                        break
+
+                left_stop = max(-1, seed - span_limit - 1)
+                for t in range(seed - 1, left_stop, -1):
+                    if assigned[t] or len(clst) >= span_limit:
+                        break
+                    if float(sim_score[seed, t].item()) > dyn_th:
+                        clst.insert(0, t)
+                        assigned[t] = True
+                        remaining -= 1
+                    else:
+                        break
+
+                clusters.append(clst)
+
+            clusters.sort(key=lambda c: c[0])
+            for c in clusters:
+                mask[b, c[0]] = True
+
+        if N > 0:
+            mask[:, 0] = True
+
+        mask = self._apply_max_span_constraint(mask)
+
+        avg_r = self._compute_avg_r(mask, total, dtype)
+        self._controller_step(avg_r)
+        mask = self._maybe_apply_random_mask(mask, dtype)
+        if N > 0:
+            mask[:, 0] = True
+        mask = self._apply_max_span_constraint(mask)
+        return mask, avg_r, tau_used
+
+
+class BatchDPCodecSlime(_BatchSelectorBase):
+    """
+    CodecSlime-like exact DP selector using segment reconstruction distortion.
+
+    Objective (per sequence):
+      - Partition N tokens into K contiguous segments (K from target r)
+      - Optional max segment length U (uses max_s when provided)
+      - Minimize total segment SSE to segment means
+
+    Output mask keeps one representative per segment (segment start), including token 0.
+    """
+
+    def __init__(
+        self,
+        r: float,
+        initial_tau: float = 1.0,
+        ema_mu: float = 0.95,
+        eta0: float = 0.1,
+        decay_T: float = 1000.0,
+        tau_min: float = 1e-6,
+        tau_max: float = 1e6,
+        update_every: int = 1,
+        sample_prob: float = 0.0,
+        min_mask_prob: float = 0.0,
+        max_mask_prob: float = 0.0,
+        min_mask_span: int = 4,
+        max_mask_span: int = 4,
+        random_mask_mode: str = "start_geom",
+        max_s: Optional[int] = 4,
+        fixed_tau: Optional[float] = None,
+        update_test_time: bool = False,
+        sample_in_inference: bool = False,
+        fixed_mask_ratio: bool = False,
+    ):
+        super().__init__(
+            r=r,
+            initial_tau=1.0,
+            ema_mu=0.95,
+            eta0=0.1,
+            decay_T=1000.0,
+            tau_min=1e-6,
+            tau_max=1e6,
+            update_every=1,
+            sample_prob=sample_prob,
+            min_mask_prob=min_mask_prob,
+            max_mask_prob=max_mask_prob,
+            min_mask_span=min_mask_span,
+            max_mask_span=max_mask_span,
+            random_mask_mode=random_mask_mode,
+            max_s=max_s,
+            fixed_tau=1.0,
+            update_test_time=False,
+            sample_in_inference=sample_in_inference,
+            invert_update=False,
+            fixed_mask_ratio=fixed_mask_ratio,
+        )
+
+    @staticmethod
+    def _target_keep_count(n_tokens: int, r: float, max_span: Optional[int]) -> int:
+        if n_tokens <= 0:
+            return 0
+        keep = int(round((1.0 - float(r)) * float(n_tokens)))
+        keep = max(1, min(n_tokens, keep))
+        if max_span is not None and max_span > 0:
+            min_keep = int(math.ceil(float(n_tokens) / float(max_span)))
+            keep = max(keep, min_keep)
+        return keep
+
+    @torch.no_grad()
+    def _build_segment_cost_table(self, xb: torch.Tensor, max_span: int) -> torch.Tensor:
+        """
+        Returns cost_end[j, s] for j in [1..N], s in [1..max_span], where
+        segment is [j-s, j-1] (end-exclusive index j).
+        Cost is exact SSE to segment mean.
+        """
+        N, C = xb.shape
+        dtype = xb.dtype
+        device = xb.device
+
+        ps = torch.zeros(N + 1, C, device=device, dtype=dtype)
+        ps[1:] = torch.cumsum(xb, dim=0)
+
+        sq = (xb * xb).sum(dim=1)
+        psq = torch.zeros(N + 1, device=device, dtype=dtype)
+        psq[1:] = torch.cumsum(sq, dim=0)
+
+        cost_end = torch.full((N + 1, max_span + 1), float("inf"), device=device, dtype=dtype)
+
+        for s in range(1, max_span + 1):
+            j = torch.arange(s, N + 1, device=device, dtype=torch.long)
+            a = j - s
+            b = j
+            seg_sum = ps.index_select(0, b) - ps.index_select(0, a)
+            seg_sq = psq.index_select(0, b) - psq.index_select(0, a)
+
+            seg_sse = seg_sq - (seg_sum * seg_sum).sum(dim=1) / float(s)
+            seg_sse = torch.clamp(seg_sse, min=0.0)
+            cost_end[j, s] = seg_sse
+
+        return cost_end
+
+    @torch.no_grad()
+    def _solve_dp_boundaries(self, xb: torch.Tensor, keep_count: int, max_span: int) -> torch.Tensor:
+        """
+        Solve exact DP for one sequence. Returns segment start indices [K].
+        """
+        N, _C = xb.shape
+        K = int(keep_count)
+
+        inf = torch.tensor(float("inf"), device=xb.device, dtype=xb.dtype)
+        cost_end = self._build_segment_cost_table(xb, max_span=max_span)
+
+        prev = torch.full((N + 1,), inf, device=xb.device, dtype=xb.dtype)
+        prev[0] = 0.0
+
+        back = torch.full((K + 1, N + 1), -1, device=xb.device, dtype=torch.long)
+
+        for i in range(1, K + 1):
+            cur = torch.full((N + 1,), inf, device=xb.device, dtype=xb.dtype)
+            arg = torch.full((N + 1,), -1, device=xb.device, dtype=torch.long)
+
+            s_min = 1
+            s_max = min(max_span, N)
+            for s in range(s_min, s_max + 1):
+                j0 = max(i, s)
+                if j0 > N:
+                    continue
+                j = torch.arange(j0, N + 1, device=xb.device, dtype=torch.long)
+                cand = prev.index_select(0, j - s) + cost_end.index_select(0, j)[:, s]
+
+                cur_j = cur.index_select(0, j)
+                better = cand < cur_j
+                if bool(better.any().item()):
+                    better_j = j[better]
+                    cur[better_j] = cand[better]
+                    arg[better_j] = better_j - s
+
+            prev = cur
+            back[i] = arg
+
+        if (not torch.isfinite(prev[N])) or int(back[K, N].item()) < 0:
+            raise RuntimeError("BatchDPCodecSlime: DP failed to find a feasible solution")
+
+        starts = torch.empty((K,), device=xb.device, dtype=torch.long)
+        j = N
+        for i in range(K, 0, -1):
+            p = int(back[i, j].item())
+            if p < 0:
+                raise RuntimeError("BatchDPCodecSlime: invalid backpointer during traceback")
+            starts[i - 1] = p
+            j = p
+        return starts
+
+    @torch.no_grad()
+    def forward(self, x: torch.Tensor) -> Tuple[torch.Tensor, torch.Tensor, torch.Tensor]:
+        device = x.device
+        dtype = x.dtype
+        B, N, C = x.shape if x.ndim == 3 else (0, 0, 0)
+        total = B * N
+        tau_used = self._get_tau_tensor(device, dtype)
+
+        if total == 0:
+            mask = torch.zeros(B, N, device=device, dtype=torch.bool)
+            avg_r = torch.zeros((), device=device, dtype=dtype)
+            return mask, avg_r, tau_used
+
+        keep_count = self._target_keep_count(N, self.r, self.max_s)
+        span_limit = int(self.max_s) if self.max_s is not None else N
+        span_limit = max(1, min(span_limit, N))
+
+        mask = torch.zeros(B, N, device=device, dtype=torch.bool)
+
+        if N > 0:
+            for b in range(B):
+                starts = self._solve_dp_boundaries(x[b], keep_count=keep_count, max_span=span_limit)
+                mask[b, starts] = True
+            mask[:, 0] = True
+
+        avg_r = self._compute_avg_r(mask, total, dtype)
+        mask = self._maybe_apply_random_mask(mask, dtype)
+        if N > 0:
+            mask[:, 0] = True
+        if self.max_s is not None:
+            mask = self._apply_max_span_constraint(mask)
+        return mask, avg_r, tau_used
+
+
 class PLEBatchTopKTrainPerSeq(PLEBatchTopK):
     """Hybrid selector with train/eval split.
 

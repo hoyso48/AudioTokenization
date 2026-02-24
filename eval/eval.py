@@ -5,9 +5,11 @@ import json
 import math
 import argparse
 import shutil
+import time
+import inspect
 from collections import OrderedDict
 from pathlib import Path
-from typing import List, Optional, Tuple, Dict, Iterable
+from typing import List, Optional, Tuple, Dict, Iterable, Set, cast
 from contextlib import nullcontext
 
 EVAL_ROOT = Path(__file__).resolve().parent
@@ -48,8 +50,28 @@ from verification import init_model as init_spk_model
 from UTMOS import UTMOSScore  # type: ignore
 from mel_cepstral_distance import compare_audio_files as mcd_compare
 
+try:
+    import utmosv2  # type: ignore
+except Exception:
+    utmosv2 = None
+
 
 ALLOWED_AUDIO_EXTS = {".wav", ".flac"}
+
+DEFAULT_METRICS = [
+    "stoi",
+    "pesq_wb",
+    "pesq_nb",
+    "si_snr",
+    "si_sdr",
+    "speaker_similarity",
+    "mcd",
+    "wer",
+    "utmos",
+    "utmos_v2",
+]
+
+SUPPORTED_METRICS = set(DEFAULT_METRICS + ["wer_sentence_avg"])
 
 def infer_codebook_size_from_cfg(cfg) -> int:
     """
@@ -312,6 +334,115 @@ def compute_wer(ref: str, hyp: str) -> float:
     return dp[n][m] / max(1, n)
 
 
+def parse_metrics_arg(metrics_arg: Optional[str]) -> List[str]:
+    if metrics_arg is None:
+        return list(DEFAULT_METRICS)
+
+    raw = metrics_arg.strip()
+    if not raw:
+        return list(DEFAULT_METRICS)
+    if raw.lower() == "all":
+        return list(DEFAULT_METRICS)
+
+    aliases = {
+        "spk": "speaker_similarity",
+        "spk_sim": "speaker_similarity",
+        "speaker": "speaker_similarity",
+        "utmosv2": "utmos_v2",
+    }
+
+    parsed: List[str] = []
+    for token in raw.split(","):
+        key = token.strip().lower()
+        if not key:
+            continue
+        key = aliases.get(key, key)
+        if key not in SUPPORTED_METRICS:
+            supported = ", ".join(sorted(SUPPORTED_METRICS))
+            raise ValueError(f"Unknown metric '{token}'. Supported metrics: {supported}")
+        if key not in parsed:
+            parsed.append(key)
+
+    if not parsed:
+        return list(DEFAULT_METRICS)
+
+    # 'wer_sentence_avg' is derived from the same ASR pass as 'wer'.
+    if "wer_sentence_avg" in parsed and "wer" not in parsed:
+        parsed.append("wer")
+
+    return parsed
+
+
+class UTMOSv2Score:
+    def __init__(self, device: str):
+        if utmosv2 is None:
+            raise RuntimeError(
+                "utmosv2 is not installed. Install with either: "
+                "(1) bash setup_conda_envs_minimal.sh --skip_train, or "
+                "(2) pip install utmosv2"
+            )
+        self.device = device
+        self.model = utmosv2.create_model(pretrained=True, device=device)
+        sig = inspect.signature(self.model.predict)
+        params = set(sig.parameters.keys())
+        self._predict_supports_input_path = "input_path" in params
+        self._predict_supports_data = "data" in params
+
+    def score(self, pred_path: str, wavs: Optional[torch.Tensor] = None) -> torch.Tensor:
+        if self._predict_supports_input_path:
+            pred = self.model.predict(
+                input_path=pred_path,
+                device=self.device,
+                num_workers=0,
+                batch_size=1,
+                verbose=False,
+            )
+        elif self._predict_supports_data:
+            if wavs is None:
+                raise RuntimeError("UTMOSv2 predict(data=...) path requires waveform tensor fallback.")
+            if wavs.dim() == 1:
+                payload = wavs.unsqueeze(0)
+            elif wavs.dim() == 2:
+                payload = wavs
+            elif wavs.dim() == 3:
+                if wavs.size(1) != 1:
+                    raise ValueError("UTMOSv2Score expects mono audio for 3D input ([B,1,T]).")
+                payload = wavs.squeeze(1)
+            else:
+                raise ValueError("UTMOSv2Score expects input tensor with <= 3 dimensions.")
+
+            payload = payload.detach().to(torch.float32).cpu()
+            pred = self.model.predict(
+                data=payload,
+                sr=16000,
+                device=self.device,
+                num_workers=0,
+                batch_size=max(1, int(payload.size(0))),
+                verbose=False,
+            )
+        else:
+            sig = str(inspect.signature(self.model.predict))
+            raise RuntimeError(f"Unsupported UTMOSv2 predict signature: {sig}")
+
+        if torch.is_tensor(pred):
+            out = pred.detach().cpu().to(torch.float32)
+        elif isinstance(pred, np.ndarray):
+            out = torch.from_numpy(pred).to(torch.float32)
+        elif isinstance(pred, list):
+            vals: List[float] = []
+            for item in pred:
+                if isinstance(item, dict) and "score" in item:
+                    vals.append(float(item["score"]))
+                elif isinstance(item, (int, float, np.floating, np.integer)):
+                    vals.append(float(item))
+                else:
+                    raise RuntimeError(f"Unsupported UTMOSv2 list item type: {type(item)!r}")
+            out = torch.tensor(vals, dtype=torch.float32)
+        else:
+            out = torch.tensor([float(pred)], dtype=torch.float32)
+        return out
+
+
 # Helpers for metrics stage
 
 def load_audio_mono_16k(path: str) -> torch.Tensor:
@@ -320,54 +451,6 @@ def load_audio_mono_16k(path: str) -> torch.Tensor:
         wav = torchaudio.transforms.Resample(sr, 16000)(wav)
     wav = wav[:1, :]
     return wav
-
-
-def compute_pair_metrics(gt_wav: torch.Tensor, pred_wav: torch.Tensor,
-                         asr_model, processor,
-                         spk_model, mcd_compare,
-                         pred_path: str) -> Dict[str, Optional[float]]:
-    T = min(gt_wav.size(1), pred_wav.size(1))
-    gt = gt_wav[:, :T]
-    pr = pred_wav[:, :T]
-
-    stoi_metric = ShortTimeObjectiveIntelligibility(fs=16000, extended=False)
-    pesq_wb_metric = PerceptualEvaluationSpeechQuality(fs=16000, mode='wb')
-    pesq_nb_metric = PerceptualEvaluationSpeechQuality(fs=8000, mode='nb')
-    si_snr_metric = ScaleInvariantSignalNoiseRatio()
-    si_sdr_metric = ScaleInvariantSignalDistortionRatio()
-
-    stoi_metric.update(pr.unsqueeze(0), gt.unsqueeze(0))
-    stoi_val = float(stoi_metric.compute().item())
-
-    pesq_wb_metric.update(pr.unsqueeze(0), gt.unsqueeze(0))
-    pesq_wb_val = float(pesq_wb_metric.compute().item())
-
-    pr8 = torchaudio.transforms.Resample(16000, 8000)(pr)
-    gt8 = torchaudio.transforms.Resample(16000, 8000)(gt)
-    pesq_nb_metric.update(pr8.unsqueeze(0), gt8.unsqueeze(0))
-    pesq_nb_val = float(pesq_nb_metric.compute().item())
-
-    si_snr_metric.update(pr.unsqueeze(0), gt.unsqueeze(0))
-    si_snr_val = float(si_snr_metric.compute().item())
-
-    si_sdr_metric.update(pr.unsqueeze(0), gt.unsqueeze(0))
-    si_sdr_val = float(si_sdr_metric.compute().item())
-
-    spk_sim_val = None
-    if spk_model is not None:
-        with torch.inference_mode():
-            emb_ref = spk_model(gt.to('cuda'))
-            emb_rec = spk_model(pr.to('cuda'))
-        spk_sim_val = float(F.cosine_similarity(emb_ref, emb_rec).mean().item())
-
-    return {
-        "stoi": stoi_val,
-        "pesq_wb": pesq_wb_val,
-        "pesq_nb": pesq_nb_val,
-        "si_snr": si_snr_val,
-        "si_sdr": si_sdr_val,
-        "speaker_similarity": spk_sim_val,
-    }
 
 
 class AudioDataset(Dataset):
@@ -405,8 +488,9 @@ class AudioDataset(Dataset):
     def collate_fn(batch: List[Dict[str, object]]) -> Dict[str, object]:
         assert len(batch) == 1, "Batch size must be 1 for this model."
         b = batch[0]
+        wav = cast(torch.Tensor, b["wav"])
         return {
-            "wav": b["wav"].unsqueeze(0),
+            "wav": wav.unsqueeze(0),
             "paths": [b["path"]],
             "orig_lengths": torch.tensor([b["orig_length"]], dtype=torch.long),
             "proc_lengths": torch.tensor([b["proc_length"]], dtype=torch.long),
@@ -425,7 +509,18 @@ def run_save_stage(args, cfg, model, input_paths: List[str], eval_dir: Path, gt_
     codebook_perplexity = CodebookPerplexity(codebook_size=codebook_size)
     codebook_utilization = CodebookUtilization(codebook_size=codebook_size)
 
-    avg_sims: List[float] = []
+    prediction_total_samples = 0
+    prediction_total_seconds = 0.0
+    prediction_num_items = 0
+    prediction_total_samples_raw = 0
+    prediction_total_seconds_raw = 0.0
+    prediction_num_items_raw = 0
+    dtp_avg_r_vals: List[float] = []
+    dtp_tau_used_vals: List[float] = []
+
+    throughput_warmup_items = max(0, int(getattr(args, "throughput_warmup_items", 0)))
+    use_cuda_timing = bool(torch.cuda.is_available() and str(args.device).startswith("cuda"))
+    sync_device = torch.device(str(args.device)) if use_cuda_timing else None
 
     if gt_out_dir is not None:
         gt_out_dir.mkdir(parents=True, exist_ok=True)
@@ -437,7 +532,12 @@ def run_save_stage(args, cfg, model, input_paths: List[str], eval_dir: Path, gt_
 
     with open(manifest_path, "w") as mf:
         for batch in tqdm(dl, total=len(ds)):
-            wav = batch["wav"].to(args.device)
+            if use_cuda_timing and sync_device is not None:
+                torch.cuda.synchronize(sync_device)
+            pred_t0 = time.perf_counter()
+            wav = batch["wav"]
+            assert isinstance(wav, torch.Tensor)
+            wav = wav.to(args.device)
             paths = batch["paths"]
             orig_lengths = batch["orig_lengths"].tolist()
             proc_lengths = batch["proc_lengths"].tolist()
@@ -455,7 +555,8 @@ def run_save_stage(args, cfg, model, input_paths: List[str], eval_dir: Path, gt_
             y_ref = out['gt_wav']
             y_rec = out['gen_wav']
             vq_code = out.get('vq_code', None)
-            avg_sim_val = out.get('avg_sim', None)
+            avg_r_val = out.get('avg_r', None)
+            tau_used_val = out.get('tau_used', None)
 
             cut_len = int(proc_lengths[0]) if args.length_mode == "truncate" else int(orig_lengths[0])
             y_ref = y_ref[:, :, :cut_len]
@@ -481,8 +582,37 @@ def run_save_stage(args, cfg, model, input_paths: List[str], eval_dir: Path, gt_
                 codebook_perplexity.update(vq_code.detach().cpu())
                 codebook_utilization.update(vq_code.detach().cpu())
 
-            if avg_sim_val is not None:
-                avg_sims.append(float(avg_sim_val.detach().mean().item()))
+            if use_cuda_timing and sync_device is not None:
+                torch.cuda.synchronize(sync_device)
+            pred_dt = max(0.0, time.perf_counter() - pred_t0)
+            prediction_num_items_raw += 1
+            prediction_total_samples_raw += int(cut_len)
+            prediction_total_seconds_raw += float(pred_dt)
+
+            throughput_excluded = prediction_num_items_raw <= throughput_warmup_items
+            if not throughput_excluded:
+                prediction_num_items += 1
+                prediction_total_samples += int(cut_len)
+                prediction_total_seconds += float(pred_dt)
+
+            prediction_sps = (float(cut_len) / pred_dt) if pred_dt > 0.0 else None
+            prediction_ips = (1.0 / pred_dt) if pred_dt > 0.0 else None
+
+            dtp_avg_r = None
+            if avg_r_val is not None:
+                if torch.is_tensor(avg_r_val):
+                    dtp_avg_r = float(avg_r_val.detach().cpu().item())
+                else:
+                    dtp_avg_r = float(avg_r_val)
+                dtp_avg_r_vals.append(dtp_avg_r)
+
+            dtp_tau_used = None
+            if tau_used_val is not None:
+                if torch.is_tensor(tau_used_val):
+                    dtp_tau_used = float(tau_used_val.detach().cpu().item())
+                else:
+                    dtp_tau_used = float(tau_used_val)
+                dtp_tau_used_vals.append(dtp_tau_used)
 
             transcript_text = load_transcript_for_audio(src_path)
             transcript_path = None
@@ -500,14 +630,40 @@ def run_save_stage(args, cfg, model, input_paths: List[str], eval_dir: Path, gt_
                 "gt_16k_path": str(gt_16k_path) if gt_16k_path is not None else None,
                 "pred_16k_path": str(pred_16k_path.resolve()),
                 "transcript_path": transcript_path,
-                "avg_sim": (float(avg_sims[-1]) if len(avg_sims) > 0 else None),
+                "prediction_elapsed_sec": float(pred_dt),
+                "prediction_samples": int(cut_len),
+                "prediction_samples_per_sec": prediction_sps,
+                "prediction_items_per_sec": prediction_ips,
+                "throughput_warmup_excluded": bool(throughput_excluded),
+                "dtp_avg_r": dtp_avg_r,
+                "dtp_tau_used": dtp_tau_used,
             }
             mf.write(json.dumps(record) + "\n")
 
     stats = {
         "codebook_perplexity": None,
         "codebook_utilization": None,
-        "avg_sim_mean": float(np.mean(avg_sims)) if len(avg_sims) > 0 else None,
+        "throughput_warmup_items": int(throughput_warmup_items),
+        "prediction_num_items_raw": int(prediction_num_items_raw),
+        "prediction_total_samples_raw": int(prediction_total_samples_raw),
+        "prediction_total_seconds_raw": float(prediction_total_seconds_raw),
+        "prediction_num_items": int(prediction_num_items),
+        "prediction_total_samples": int(prediction_total_samples),
+        "prediction_total_seconds": float(prediction_total_seconds),
+        "prediction_samples_per_sec": (
+            float(prediction_total_samples / prediction_total_seconds)
+            if prediction_total_seconds > 0.0
+            else None
+        ),
+        "prediction_items_per_sec": (
+            float(prediction_num_items / prediction_total_seconds)
+            if prediction_total_seconds > 0.0
+            else None
+        ),
+        "dtp_avg_r_mean": float(np.mean(dtp_avg_r_vals)) if len(dtp_avg_r_vals) > 0 else None,
+        "dtp_avg_r_std": float(np.std(dtp_avg_r_vals)) if len(dtp_avg_r_vals) > 0 else None,
+        "dtp_tau_used_mean": float(np.mean(dtp_tau_used_vals)) if len(dtp_tau_used_vals) > 0 else None,
+        "dtp_tau_used_std": float(np.std(dtp_tau_used_vals)) if len(dtp_tau_used_vals) > 0 else None,
     }
     stats["codebook_perplexity"] = float(codebook_perplexity.compute().item())
     stats["codebook_utilization"] = float(codebook_utilization.compute().item())
@@ -518,31 +674,63 @@ def run_save_stage(args, cfg, model, input_paths: List[str], eval_dir: Path, gt_
     return stats
 
 
-def run_metrics_stage(args, manifest_path: Path, eval_dir: Path) -> Dict[str, Optional[float]]:
-    processor = Wav2Vec2Processor.from_pretrained("facebook/hubert-large-ls960-ft")
-    asr_model = HubertForCTC.from_pretrained("facebook/hubert-large-ls960-ft").to(args.device).eval()
+def run_metrics_stage(
+    args,
+    manifest_path: Path,
+    eval_dir: Path,
+    selected_metrics: Set[str],
+) -> Dict[str, Optional[float]]:
+    selected = set(selected_metrics)
+    want_stoi = "stoi" in selected
+    want_pesq_wb = "pesq_wb" in selected
+    want_pesq_nb = "pesq_nb" in selected
+    want_si_snr = "si_snr" in selected
+    want_si_sdr = "si_sdr" in selected
+    want_spk = "speaker_similarity" in selected
+    want_mcd = "mcd" in selected
+    want_wer = "wer" in selected
+    want_utmos = "utmos" in selected
+    want_utmos_v2 = "utmos_v2" in selected
 
-    spk_ckpt = EVAL_ROOT / "wavlm_large_finetune.pth"
-    spk_model = init_spk_model('wavlm_large', str(spk_ckpt))
-    spk_model = spk_model.to(args.device).eval()
+    processor = None
+    asr_model = None
+    if want_wer:
+        processor = Wav2Vec2Processor.from_pretrained("facebook/hubert-large-ls960-ft")
+        asr_model = HubertForCTC.from_pretrained("facebook/hubert-large-ls960-ft").to(args.device).eval()
 
-    utmos_model = UTMOSScore(device=args.device)
+    spk_model = None
+    if want_spk:
+        spk_ckpt = EVAL_ROOT / "wavlm_large_finetune.pth"
+        spk_model = init_spk_model("wavlm_large", str(spk_ckpt))
+        spk_model = spk_model.to(args.device).eval()
 
-    stoi_vals: List[float] = []
+    utmos_model = UTMOSScore(device=args.device) if want_utmos else None
+    utmos_v2_model = UTMOSv2Score(device=args.device) if want_utmos_v2 else None
+
+    stoi_metric = ShortTimeObjectiveIntelligibility(fs=16000, extended=False) if want_stoi else None
+    pesq_wb_metric = PerceptualEvaluationSpeechQuality(fs=16000, mode="wb") if want_pesq_wb else None
+    pesq_nb_metric = PerceptualEvaluationSpeechQuality(fs=8000, mode="nb") if want_pesq_nb else None
+    si_snr_metric = ScaleInvariantSignalNoiseRatio() if want_si_snr else None
+    si_sdr_metric = ScaleInvariantSignalDistortionRatio() if want_si_sdr else None
+    to_8k = torchaudio.transforms.Resample(16000, 8000) if want_pesq_nb else None
+
+    stoi_vals: List[Optional[float]] = []
     pesq_wb_vals: List[Optional[float]] = []
     pesq_nb_vals: List[Optional[float]] = []
-    si_snr_vals: List[float] = []
-    si_sdr_vals: List[float] = []
+    si_snr_vals: List[Optional[float]] = []
+    si_sdr_vals: List[Optional[float]] = []
     spk_sim_vals: List[Optional[float]] = []
     mcd_vals: List[Optional[float]] = []
     wer_frac_vals: List[Optional[float]] = []
     utmos_vals: List[Optional[float]] = []
+    utmos_v2_vals: List[Optional[float]] = []
 
     # For corpus-level WER (not mean of per-sample)
     corpus_refs: List[str] = []
     corpus_hyps: List[str] = []
 
-    lines = open(manifest_path, "r").read().splitlines()
+    with open(manifest_path, "r") as f:
+        lines = f.read().splitlines()
     updated_records: List[Dict[str, object]] = []
 
     for line in tqdm(lines, total=len(lines)):
@@ -557,7 +745,10 @@ def run_metrics_stage(args, manifest_path: Path, eval_dir: Path) -> Dict[str, Op
                 raise RuntimeError("Manifest entry missing orig_path.")
             info = torchaudio.info(orig_path)
             if Path(orig_path).suffix.lower() != ".wav" or info.sample_rate != 16000:
-                raise RuntimeError("GT is not saved and original is not 16k WAV. Re-run with --stage save and provide --gt_out_dir to save GT at 16k WAV.")
+                raise RuntimeError(
+                    "GT is not saved and original is not 16k WAV. "
+                    "Re-run with --stage save and provide --gt_out_dir to save GT at 16k WAV."
+                )
             gt_path = orig_path
 
         if not (gt_path and pred_path):
@@ -566,97 +757,159 @@ def run_metrics_stage(args, manifest_path: Path, eval_dir: Path) -> Dict[str, Op
 
         gt_wav = load_audio_mono_16k(gt_path)
         pred_wav = load_audio_mono_16k(pred_path)
+        T = min(gt_wav.size(1), pred_wav.size(1))
+        gt = gt_wav[:, :T]
+        pr = pred_wav[:, :T]
 
-        pair = compute_pair_metrics(gt_wav, pred_wav, asr_model, processor, spk_model, mcd_compare, pred_path)
+        if want_stoi and stoi_metric is not None:
+            stoi_metric.reset()
+            stoi_metric.update(pr.unsqueeze(0), gt.unsqueeze(0))
+            stoi_val = float(stoi_metric.compute().item())
+            rec["stoi"] = stoi_val
+            stoi_vals.append(stoi_val)
 
-        mcd_val = None
-        if mcd_compare is not None:
+        if want_pesq_wb and pesq_wb_metric is not None:
+            pesq_wb_metric.reset()
+            pesq_wb_metric.update(pr.unsqueeze(0), gt.unsqueeze(0))
+            pesq_wb_val = float(pesq_wb_metric.compute().item())
+            rec["pesq_wb"] = pesq_wb_val
+            pesq_wb_vals.append(pesq_wb_val)
+
+        if want_pesq_nb and pesq_nb_metric is not None and to_8k is not None:
+            pr8 = to_8k(pr)
+            gt8 = to_8k(gt)
+            pesq_nb_metric.reset()
+            pesq_nb_metric.update(pr8.unsqueeze(0), gt8.unsqueeze(0))
+            pesq_nb_val = float(pesq_nb_metric.compute().item())
+            rec["pesq_nb"] = pesq_nb_val
+            pesq_nb_vals.append(pesq_nb_val)
+
+        if want_si_snr and si_snr_metric is not None:
+            si_snr_metric.reset()
+            si_snr_metric.update(pr.unsqueeze(0), gt.unsqueeze(0))
+            si_snr_val = float(si_snr_metric.compute().item())
+            rec["si_snr"] = si_snr_val
+            si_snr_vals.append(si_snr_val)
+
+        if want_si_sdr and si_sdr_metric is not None:
+            si_sdr_metric.reset()
+            si_sdr_metric.update(pr.unsqueeze(0), gt.unsqueeze(0))
+            si_sdr_val = float(si_sdr_metric.compute().item())
+            rec["si_sdr"] = si_sdr_val
+            si_sdr_vals.append(si_sdr_val)
+
+        if want_spk and spk_model is not None:
+            with torch.inference_mode():
+                emb_ref = spk_model(gt.to(args.device))
+                emb_rec = spk_model(pr.to(args.device))
+            spk_sim_val = float(F.cosine_similarity(emb_ref, emb_rec).mean().item())
+            rec["speaker_similarity"] = spk_sim_val
+            spk_sim_vals.append(spk_sim_val)
+
+        if want_mcd and mcd_compare is not None:
             mcd, _ = mcd_compare(gt_path, pred_path)
             mcd_val = float(mcd) if mcd is not None and not math.isnan(mcd) else None
+            rec["mcd"] = mcd_val
+            mcd_vals.append(mcd_val)
 
-        # UTMOS predicted MOS on reconstructed audio
-        utmos_tensor = utmos_model.score(pred_wav.to(args.device))
-        utmos_val = float(utmos_tensor.squeeze().item())
+        if want_utmos and utmos_model is not None:
+            utmos_tensor = utmos_model.score(pr.to(args.device))
+            utmos_val = float(utmos_tensor.squeeze().item())
+            rec["utmos"] = utmos_val
+            utmos_vals.append(utmos_val)
 
-        wer_frac = None
-        gt_text: Optional[str] = None
-        asr_text: Optional[str] = None
-        if transcript_path and Path(transcript_path).is_file():
-            with open(transcript_path, "r") as tf:
-                ref_line = None
-                file_id = Path(gt_path).stem
-                for tline in tf:
-                    if tline.startswith(file_id + " "):
-                        ref_line = tline[len(file_id) + 1 :].strip()
-                        break
-            if ref_line is not None:
-                gt_text = ref_line
-                inputs = processor(pred_wav.squeeze().numpy(), sampling_rate=16000, return_tensors="pt").input_values.to(args.device)
-                with torch.inference_mode():
-                    logits = asr_model(inputs).logits
-                    predicted_ids = torch.argmax(logits, dim=-1)
-                    hyp_text = processor.decode(predicted_ids[0].detach().cpu())
-                asr_text = hyp_text
-                wer_frac = float(jiwer_wer(ref_line, hyp_text))
-                corpus_refs.append(ref_line)
-                corpus_hyps.append(hyp_text)
+        if want_utmos_v2 and utmos_v2_model is not None:
+            utmos_v2_tensor = utmos_v2_model.score(pred_path=pred_path, wavs=pr)
+            utmos_v2_val = float(utmos_v2_tensor.squeeze().item())
+            rec["utmos_v2"] = utmos_v2_val
+            utmos_v2_vals.append(utmos_v2_val)
 
-        rec.update({
-            "stoi": pair["stoi"],
-            "pesq_wb": pair["pesq_wb"],
-            "pesq_nb": pair["pesq_nb"],
-            "si_snr": pair["si_snr"],
-            "si_sdr": pair["si_sdr"],
-            "speaker_similarity": pair["speaker_similarity"],
-            "mcd": mcd_val,
-            "wer_fraction": wer_frac,
-            "wer": (wer_frac * 100.0) if wer_frac is not None else None,
-            "utmos": utmos_val,
-            "gt_text": gt_text,
-            "asr_text": asr_text,
-        })
+        if want_wer:
+            wer_frac = None
+            gt_text: Optional[str] = None
+            asr_text: Optional[str] = None
+            if transcript_path and Path(transcript_path).is_file() and processor is not None and asr_model is not None:
+                with open(transcript_path, "r") as tf:
+                    ref_line = None
+                    file_id = Path(gt_path).stem
+                    for tline in tf:
+                        if tline.startswith(file_id + " "):
+                            ref_line = tline[len(file_id) + 1 :].strip()
+                            break
+                if ref_line is not None:
+                    gt_text = ref_line
+                    inputs = processor(
+                        pr.squeeze().numpy(),
+                        sampling_rate=16000,
+                        return_tensors="pt",
+                    ).input_values.to(args.device)
+                    with torch.inference_mode():
+                        logits = asr_model(inputs).logits
+                        predicted_ids = torch.argmax(logits, dim=-1)
+                        hyp_text = processor.decode(predicted_ids[0].detach().cpu())
+                    asr_text = hyp_text
+                    wer_frac = float(jiwer_wer(ref_line, hyp_text))
+                    corpus_refs.append(ref_line)
+                    corpus_hyps.append(hyp_text)
+
+            rec["wer_fraction"] = wer_frac
+            rec["wer"] = (wer_frac * 100.0) if wer_frac is not None else None
+            rec["gt_text"] = gt_text
+            rec["asr_text"] = asr_text
+            wer_frac_vals.append(wer_frac)
+
         updated_records.append(rec)
-
-        if pair["stoi"] is not None: stoi_vals.append(pair["stoi"]) 
-        pesq_wb_vals.append(pair["pesq_wb"]) 
-        pesq_nb_vals.append(pair["pesq_nb"]) 
-        if pair["si_snr"] is not None: si_snr_vals.append(pair["si_snr"]) 
-        if pair["si_sdr"] is not None: si_sdr_vals.append(pair["si_sdr"]) 
-        spk_sim_vals.append(pair["speaker_similarity"]) 
-        mcd_vals.append(mcd_val)
-        wer_frac_vals.append(wer_frac)
-        utmos_vals.append(utmos_val)
 
     with open(manifest_path, "w") as mf:
         for rec in updated_records:
             mf.write(json.dumps(rec) + "\n")
 
-    def mean_ignore_none(values: List[Optional[float]]) -> Optional[float]:
+    def mean_ignore_none(values: Iterable[Optional[float]]) -> Optional[float]:
         arr = [v for v in values if v is not None]
         return float(np.mean(arr)) if len(arr) > 0 else None
 
-    sentence_avg_wer_frac = mean_ignore_none(wer_frac_vals)
-    corpus_wer_frac: Optional[float] = None
-    if len(corpus_refs) > 0 and len(corpus_refs) == len(corpus_hyps):
-        corpus_wer_frac = float(jiwer_wer(corpus_refs, corpus_hyps))
+    audio_metrics_path = eval_dir / "audio_metrics.json"
+    metrics: Dict[str, Optional[float]] = {}
+    if audio_metrics_path.is_file():
+        try:
+            with open(audio_metrics_path, "r") as f:
+                prev_metrics = json.load(f)
+            if isinstance(prev_metrics, dict):
+                metrics.update(prev_metrics)
+        except Exception:
+            pass
 
-    metrics = {
-        "count": int(len(updated_records)),
-        "stoi": mean_ignore_none(stoi_vals),
-        "si_snr": mean_ignore_none(si_snr_vals),
-        "si_sdr": mean_ignore_none(si_sdr_vals),
-        "pesq_wb": mean_ignore_none(pesq_wb_vals),
-        "pesq_nb": mean_ignore_none(pesq_nb_vals),
-        "speaker_similarity": mean_ignore_none(spk_sim_vals),
-        "mcd": mean_ignore_none(mcd_vals),
-        # 'wer' is corpus-level WER (not an average of per-sample)
-        "wer": (corpus_wer_frac * 100.0) if corpus_wer_frac is not None else None,
-        # Provide the mean sentence-level WER as a separate metric
-        "wer_sentence_avg": (sentence_avg_wer_frac * 100.0) if sentence_avg_wer_frac is not None else None,
-        "utmos": mean_ignore_none(utmos_vals),
-    }
+    metrics["count"] = int(len(updated_records))
 
-    with open(eval_dir / "audio_metrics.json", "w") as f:
+    if want_stoi:
+        metrics["stoi"] = mean_ignore_none(stoi_vals)
+    if want_si_snr:
+        metrics["si_snr"] = mean_ignore_none(si_snr_vals)
+    if want_si_sdr:
+        metrics["si_sdr"] = mean_ignore_none(si_sdr_vals)
+    if want_pesq_wb:
+        metrics["pesq_wb"] = mean_ignore_none(pesq_wb_vals)
+    if want_pesq_nb:
+        metrics["pesq_nb"] = mean_ignore_none(pesq_nb_vals)
+    if want_spk:
+        metrics["speaker_similarity"] = mean_ignore_none(spk_sim_vals)
+    if want_mcd:
+        metrics["mcd"] = mean_ignore_none(mcd_vals)
+    if want_utmos:
+        metrics["utmos"] = mean_ignore_none(utmos_vals)
+    if want_utmos_v2:
+        metrics["utmos_v2"] = mean_ignore_none(utmos_v2_vals)
+    if want_wer:
+        sentence_avg_wer_frac = mean_ignore_none(wer_frac_vals)
+        corpus_wer_frac: Optional[float] = None
+        if len(corpus_refs) > 0 and len(corpus_refs) == len(corpus_hyps):
+            corpus_wer_frac = float(jiwer_wer(corpus_refs, corpus_hyps))
+        metrics["wer"] = (corpus_wer_frac * 100.0) if corpus_wer_frac is not None else None
+        metrics["wer_sentence_avg"] = (
+            (sentence_avg_wer_frac * 100.0) if sentence_avg_wer_frac is not None else None
+        )
+
+    with open(audio_metrics_path, "w") as f:
         json.dump(metrics, f, indent=2)
 
     return metrics
@@ -683,6 +936,22 @@ def main():
     parser.add_argument("--num_workers", type=int, default=4)
     parser.add_argument("--device", type=str, default="cuda" if torch.cuda.is_available() else "cpu")
     parser.add_argument(
+        "--throughput_warmup_items",
+        type=int,
+        default=5,
+        help="Exclude first N save-stage iterations from throughput aggregation (default: 5).",
+    )
+    parser.add_argument(
+        "--metrics",
+        type=str,
+        default="all",
+        help=(
+            "Comma-separated metric names to compute during metrics stage. "
+            "Use 'all' for the default metric set. "
+            "Supported: stoi,pesq_wb,pesq_nb,si_snr,si_sdr,speaker_similarity,mcd,wer,wer_sentence_avg,utmos,utmos_v2"
+        ),
+    )
+    parser.add_argument(
         "--cfg_override",
         action="append",
         default=None,
@@ -696,6 +965,7 @@ def main():
         help="Keep generated gt_16k/pred_16k audio directories. Default behavior is to delete them after metrics are computed.",
     )
     args = parser.parse_args()
+    selected_metrics = parse_metrics_arg(args.metrics)
 
     torch.set_grad_enabled(False)
     torch.backends.cudnn.benchmark = True
@@ -738,10 +1008,12 @@ def main():
     metadata["input"] = str(args.input)
     metadata["resolved_input_count"] = resolved_input_count
     metadata["length_mode"] = args.length_mode
+    metadata["throughput_warmup_items"] = int(args.throughput_warmup_items)
     metadata["manifest_path"] = str(manifest_path)
     metadata["pred_out_dir"] = str(pred_out_dir)
     metadata["gt_out_dir"] = str(gt_out_dir) if gt_out_dir is not None else None
     metadata["cfg_overrides"] = list(args.cfg_override) if args.cfg_override else []
+    metadata["selected_metrics"] = list(selected_metrics)
     metadata["save_stage_stats_path"] = str(save_stage_stats_path)
     metadata["audio_metrics_path"] = str(audio_metrics_path)
     metadata["final_metrics_path"] = str(final_metrics_path)
@@ -779,7 +1051,7 @@ def main():
     if args.stage in ("metrics", "all"):
         if not manifest_path.is_file():
             raise FileNotFoundError(f"Manifest not found at {manifest_path}. Run with --stage save first to generate 16k GT/PRED and a manifest, optionally providing --gt_out_dir.")
-        audio_metrics = run_metrics_stage(args, manifest_path, eval_dir)
+        audio_metrics = run_metrics_stage(args, manifest_path, eval_dir, set(selected_metrics))
         metrics_stage_source = "computed"
     else:
         audio_metrics = {}
@@ -791,7 +1063,15 @@ def main():
     final_metrics.update(audio_metrics)
     final_metrics["codebook_perplexity"] = save_stats.get("codebook_perplexity")
     final_metrics["codebook_utilization"] = save_stats.get("codebook_utilization")
-    final_metrics["avg_sim"] = save_stats.get("avg_sim_mean")
+    final_metrics["prediction_samples_per_sec"] = save_stats.get("prediction_samples_per_sec")
+    final_metrics["prediction_items_per_sec"] = save_stats.get("prediction_items_per_sec")
+    final_metrics["prediction_total_samples"] = save_stats.get("prediction_total_samples")
+    final_metrics["prediction_total_seconds"] = save_stats.get("prediction_total_seconds")
+    final_metrics["throughput_warmup_items"] = save_stats.get("throughput_warmup_items")
+    final_metrics["dtp_avg_r_mean"] = save_stats.get("dtp_avg_r_mean")
+    final_metrics["dtp_avg_r_std"] = save_stats.get("dtp_avg_r_std")
+    final_metrics["dtp_tau_used_mean"] = save_stats.get("dtp_tau_used_mean")
+    final_metrics["dtp_tau_used_std"] = save_stats.get("dtp_tau_used_std")
 
     with open(final_metrics_path, "w") as f:
         json.dump(final_metrics, f, indent=2)
