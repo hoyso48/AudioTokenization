@@ -107,6 +107,18 @@ FFR_LOG="${WORK_BASE}/logs/ffr_gpu1.log"
 
 mkdir -p "${WORK_BASE}/data" "${WORK_BASE}/logs"
 
+run_with_heartbeat() {
+  local heartbeat_tag="$1"
+  shift
+  "$@" &
+  local cmd_pid=$!
+  while kill -0 "${cmd_pid}" 2>/dev/null; do
+    echo "[${heartbeat_tag}] still running... $(date '+%Y-%m-%d %H:%M:%S')"
+    sleep 30
+  done
+  wait "${cmd_pid}"
+}
+
 if [[ "${SETUP_ENV}" == "1" ]]; then
   echo "[SETUP] Installing environment ${ENV_NAME}"
   bash "${SCRIPT_DIR}/setup_env_tts.sh" "${ENV_NAME}"
@@ -126,10 +138,11 @@ if [[ ${#missing_subsets[@]} -gt 0 ]]; then
     exit 1
   fi
   echo "[DATA] Downloading missing LibriTTS subsets: ${missing_subsets[*]}"
-  conda run --no-capture-output -n "${ENV_NAME}" python -u "${SCRIPT_DIR}/download_libritts.py" \
-    --root "${LIBRITTS_ROOT}" \
-    --subsets train-clean-100 train-clean-360 train-other-500 dev-clean test-clean \
-    --download
+  run_with_heartbeat "DATA" \
+    conda run --no-capture-output -n "${ENV_NAME}" python -u "${SCRIPT_DIR}/download_libritts.py" \
+      --root "${LIBRITTS_ROOT}" \
+      --subsets train-clean-100 train-clean-360 train-other-500 dev-clean test-clean \
+      --download
 fi
 
 echo "[DATA] Building 585h filelist at ${TRAIN_FILELIST}"
