@@ -126,7 +126,7 @@ if [[ ${#missing_subsets[@]} -gt 0 ]]; then
     exit 1
   fi
   echo "[DATA] Downloading missing LibriTTS subsets: ${missing_subsets[*]}"
-  conda run -n "${ENV_NAME}" python "${SCRIPT_DIR}/download_libritts.py" \
+  conda run --no-capture-output -n "${ENV_NAME}" python "${SCRIPT_DIR}/download_libritts.py" \
     --root "${LIBRITTS_ROOT}" \
     --subsets train-clean-100 train-clean-360 train-other-500 dev-clean test-clean \
     --download
@@ -184,10 +184,11 @@ echo "[LAUNCH] Starting VFR on GPU 0 (W&B: ${WANDB_PROJECT})"
   export CUDA_VISIBLE_DEVICES=0
   export WANDB_PROJECT="${WANDB_PROJECT}"
   export WANDB_MODE="${WANDB_MODE}"
+  export PYTHONUNBUFFERED=1
   if [[ -n "${WANDB_ENTITY}" ]]; then
     export WANDB_ENTITY="${WANDB_ENTITY}"
   fi
-  conda run -n "${ENV_NAME}" bash "${SCRIPT_DIR}/run_tts_modeling_train_only.sh" \
+  conda run --no-capture-output -n "${ENV_NAME}" bash "${SCRIPT_DIR}/run_tts_modeling_train_only.sh" \
     --codec-run-dir "${VFR_CODEC_RUN}" \
     --variant vfr \
     --work-dir "${VFR_WORK_DIR}" \
@@ -203,10 +204,11 @@ echo "[LAUNCH] Starting FFR on GPU 1 (W&B: ${WANDB_PROJECT})"
   export CUDA_VISIBLE_DEVICES=1
   export WANDB_PROJECT="${WANDB_PROJECT}"
   export WANDB_MODE="${WANDB_MODE}"
+  export PYTHONUNBUFFERED=1
   if [[ -n "${WANDB_ENTITY}" ]]; then
     export WANDB_ENTITY="${WANDB_ENTITY}"
   fi
-  conda run -n "${ENV_NAME}" bash "${SCRIPT_DIR}/run_tts_modeling_train_only.sh" \
+  conda run --no-capture-output -n "${ENV_NAME}" bash "${SCRIPT_DIR}/run_tts_modeling_train_only.sh" \
     --codec-run-dir "${FFR_CODEC_RUN}" \
     --variant ffr \
     --work-dir "${FFR_WORK_DIR}" \
@@ -219,6 +221,7 @@ FFR_PID=$!
 
 echo "[RUNNING] VFR PID=${VFR_PID}, log=${VFR_LOG}"
 echo "[RUNNING] FFR PID=${FFR_PID}, log=${FFR_LOG}"
+echo "[TIP] Follow logs: tail -f ${VFR_LOG} ${FFR_LOG}"
 
 set +e
 wait "${VFR_PID}"
