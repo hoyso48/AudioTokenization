@@ -2,6 +2,8 @@
 from __future__ import annotations
 
 import argparse
+import threading
+import time
 from pathlib import Path
 from typing import List
 
@@ -26,6 +28,13 @@ def subset_exists(root: Path, folder_in_archive: str, subset: str) -> bool:
     return (root / folder_in_archive / subset).is_dir()
 
 
+def _heartbeat(subset: str, stop_event: threading.Event, interval_sec: int = 30) -> None:
+    start = time.time()
+    while not stop_event.wait(interval_sec):
+        elapsed = int(time.time() - start)
+        print(f"[{subset}] downloading... {elapsed}s elapsed", flush=True)
+
+
 def main() -> None:
     args = parse_args()
     root = Path(args.root).resolve()
@@ -41,19 +50,24 @@ def main() -> None:
 
     if missing and args.download:
         for subset in missing:
-            print(f"Downloading {subset} ...")
+            print(f"Downloading {subset} ...", flush=True)
+            stop_event = threading.Event()
+            heartbeat_thread = threading.Thread(target=_heartbeat, args=(subset, stop_event), daemon=True)
+            heartbeat_thread.start()
             torchaudio.datasets.LIBRITTS(
                 str(root),
                 url=subset,
                 folder_in_archive=args.folder_in_archive,
                 download=True,
             )
-            print(f"Done {subset}")
+            stop_event.set()
+            heartbeat_thread.join(timeout=1.0)
+            print(f"Done {subset}", flush=True)
 
-    print("Present subsets:", done + ([m for m in missing] if args.download else []))
+    print("Present subsets:", done + ([m for m in missing] if args.download else []), flush=True)
     if missing and not args.download:
-        print("Missing subsets:", missing)
-        print("Run again with --download to fetch them.")
+        print("Missing subsets:", missing, flush=True)
+        print("Run again with --download to fetch them.", flush=True)
 
 
 if __name__ == "__main__":

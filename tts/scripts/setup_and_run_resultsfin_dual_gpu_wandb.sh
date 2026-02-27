@@ -126,7 +126,7 @@ if [[ ${#missing_subsets[@]} -gt 0 ]]; then
     exit 1
   fi
   echo "[DATA] Downloading missing LibriTTS subsets: ${missing_subsets[*]}"
-  conda run --no-capture-output -n "${ENV_NAME}" python "${SCRIPT_DIR}/download_libritts.py" \
+  conda run --no-capture-output -n "${ENV_NAME}" python -u "${SCRIPT_DIR}/download_libritts.py" \
     --root "${LIBRITTS_ROOT}" \
     --subsets train-clean-100 train-clean-360 train-other-500 dev-clean test-clean \
     --download
