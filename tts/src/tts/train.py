@@ -9,13 +9,43 @@ from typing import Optional
 
 import numpy as np
 import torch
+from torch.utils.data import DataLoader
 from transformers import Trainer, TrainingArguments
 
 from .collator import TTSCollator
 from .constants import BOS_ID, EOS_ID, PAD_ID
 from .dataset import JsonlTTSDataset
+from .dynamic_batch import DynamicBatchSampler
 from .modeling_ar_tts import ARTTSConfig, ARTTSForConditionalGeneration
-from .text_tokenizer import CharTokenizer
+from .text_tokenizer import load_tokenizer
+
+
+class DynamicBatchTrainer(Trainer):
+    def __init__(
+        self,
+        *args,
+        train_batch_sampler: Optional[DynamicBatchSampler] = None,
+        **kwargs,
+    ) -> None:
+        super().__init__(*args, **kwargs)
+        self.train_batch_sampler = train_batch_sampler
+
+    def get_train_dataloader(self) -> DataLoader:
+        if self.train_dataset is None:
+            raise ValueError("Trainer: training requires a train_dataset")
+
+        if self.train_batch_sampler is None:
+            return super().get_train_dataloader()
+
+        dataloader = DataLoader(
+            self.train_dataset,
+            batch_sampler=self.train_batch_sampler,
+            collate_fn=self.data_collator,
+            num_workers=self.args.dataloader_num_workers,
+            pin_memory=self.args.dataloader_pin_memory,
+            persistent_workers=(self.args.dataloader_num_workers > 0),
+        )
+        return self.accelerator.prepare(dataloader)
 
 
 def set_seed(seed: int) -> None:
@@ -75,6 +105,11 @@ def parse_args() -> argparse.Namespace:
     p.add_argument("--per_device_train_batch_size", type=int, default=4)
     p.add_argument("--per_device_eval_batch_size", type=int, default=4)
     p.add_argument("--gradient_accumulation_steps", type=int, default=1)
+    p.add_argument("--dynamic_batching", action="store_true")
+    p.add_argument("--dynamic_batch_measure", type=str, default="target", choices=["target", "total"])
+    p.add_argument("--max_batch_tokens", type=int, default=6000)
+    p.add_argument("--max_batch_samples", type=int, default=16)
+    p.add_argument("--dynamic_bucket_size", type=int, default=256)
     p.add_argument("--logging_steps", type=int, default=20)
     p.add_argument("--eval_steps", type=int, default=500)
     p.add_argument("--save_steps", type=int, default=500)
@@ -84,12 +119,13 @@ def parse_args() -> argparse.Namespace:
     p.add_argument("--disable_bf16", action="store_true")
     p.add_argument("--disable_gradient_checkpointing", action="store_true")
     p.add_argument("--report_to", nargs="*", default=["none"])
+    p.add_argument("--run_name", type=str, default=None)
     p.add_argument("--resume_from_checkpoint", type=str, default=None)
     return p.parse_args()
 
 
 def build_trainer(args: argparse.Namespace) -> Trainer:
-    tokenizer = CharTokenizer.load(args.tokenizer_path)
+    tokenizer = load_tokenizer(args.tokenizer_path)
     text_vocab_size = tokenizer.vocab_size
     speech_vocab_size = args.speech_vocab_size or infer_speech_vocab_size(args.train_jsonl)
     full_vocab_size = 4 + text_vocab_size + speech_vocab_size
@@ -136,6 +172,7 @@ def build_trainer(args: argparse.Namespace) -> Trainer:
     model = ARTTSForConditionalGeneration(model_cfg)
 
     bf16 = (not args.disable_bf16) and torch.cuda.is_available()
+    train_batch_size = 1 if args.dynamic_batching else args.per_device_train_batch_size
     train_args = TrainingArguments(
         output_dir=args.output_dir,
         learning_rate=args.learning_rate,
@@ -144,7 +181,7 @@ def build_trainer(args: argparse.Namespace) -> Trainer:
         max_steps=args.max_steps,
         warmup_ratio=args.warmup_ratio,
         lr_scheduler_type=args.lr_scheduler_type,
-        per_device_train_batch_size=args.per_device_train_batch_size,
+        per_device_train_batch_size=train_batch_size,
         per_device_eval_batch_size=args.per_device_eval_batch_size,
         gradient_accumulation_steps=args.gradient_accumulation_steps,
         logging_steps=args.logging_steps,
@@ -156,17 +193,31 @@ def build_trainer(args: argparse.Namespace) -> Trainer:
         save_strategy="steps",
         bf16=bf16,
         report_to=args.report_to,
+        run_name=args.run_name,
         gradient_checkpointing=False,
         remove_unused_columns=False,
     )
 
-    trainer = Trainer(
+    train_batch_sampler = None
+    if args.dynamic_batching:
+        train_batch_sampler = DynamicBatchSampler(
+            lengths=train_ds.get_dynamic_lengths(measure=args.dynamic_batch_measure),
+            max_tokens=args.max_batch_tokens,
+            max_samples=args.max_batch_samples,
+            bucket_size=args.dynamic_bucket_size,
+            shuffle=True,
+            drop_last=False,
+            seed=args.seed,
+        )
+
+    trainer = DynamicBatchTrainer(
         model=model,
         args=train_args,
         train_dataset=train_ds,
         eval_dataset=val_ds,
         data_collator=collator,
         tokenizer=None,
+        train_batch_sampler=train_batch_sampler,
     )
 
     Path(args.output_dir).mkdir(parents=True, exist_ok=True)
@@ -178,6 +229,11 @@ def build_trainer(args: argparse.Namespace) -> Trainer:
                 "full_vocab_size": full_vocab_size,
                 "use_vfr": bool(args.use_vfr),
                 "max_span_len": int(args.max_span_len),
+                "dynamic_batching": bool(args.dynamic_batching),
+                "dynamic_batch_measure": args.dynamic_batch_measure,
+                "max_batch_tokens": int(args.max_batch_tokens),
+                "max_batch_samples": int(args.max_batch_samples),
+                "dynamic_bucket_size": int(args.dynamic_bucket_size),
             },
             f,
             ensure_ascii=True,

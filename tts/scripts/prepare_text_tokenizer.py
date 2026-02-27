@@ -16,9 +16,11 @@ def _setup_path() -> None:
 
 
 def parse_args() -> argparse.Namespace:
-    p = argparse.ArgumentParser(description="Build offline char tokenizer for TTS text")
+    p = argparse.ArgumentParser(description="Build offline text tokenizer for TTS text")
     p.add_argument("--input_jsonl", type=str, required=True, help="jsonl containing a text field")
     p.add_argument("--text_field", type=str, default="text")
+    p.add_argument("--tokenizer_type", type=str, default="phoneme", choices=["phoneme", "char"])
+    p.add_argument("--word_boundary_token", type=str, default="|")
     p.add_argument("--output_path", type=str, required=True)
     return p.parse_args()
 
@@ -41,13 +43,13 @@ def collect_texts(path: str, text_field: str) -> List[str]:
 
 def main() -> None:
     _setup_path()
-    from tts.text_tokenizer import CharTokenizer
+    from tts.text_tokenizer import build_tokenizer
 
     args = parse_args()
     texts = collect_texts(args.input_jsonl, args.text_field)
-    tok = CharTokenizer.build(texts)
+    tok = build_tokenizer(texts, tokenizer_type=args.tokenizer_type, word_boundary_token=args.word_boundary_token)
     tok.save(args.output_path)
-    print(f"Saved tokenizer to {args.output_path} (vocab_size={tok.vocab_size})")
+    print(f"Saved {args.tokenizer_type} tokenizer to {args.output_path} (vocab_size={tok.vocab_size})")
 
 
 if __name__ == "__main__":

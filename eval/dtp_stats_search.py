@@ -54,7 +54,7 @@ from dtp_stats import (  # noqa: E402
     patch_legacy_dtp_state_dict,
     pick_tau_value,
     resolve_with_dataset_roots,
-    run_generator_forward,
+    run_generator_forward_compiled,
 )
 from DTMAE.lightning_module import CodecLightningModule  # noqa: E402
 
@@ -292,7 +292,7 @@ def evaluate_tau_avg_r(
     t0 = time.time()
     for batch in iterator:
         wav = batch["wav"].to(model_device)
-        _, avg_r_val, tau_used = run_generator_forward(model, wav, device_type)
+        _, avg_r_val, tau_used = run_generator_forward_compiled(model, wav, device_type)
         avg_r_values.append(float(avg_r_val))
         tau_used_values.append(float(tau_used))
         processed += 1
@@ -355,7 +355,7 @@ def bootstrap_tau_with_update_test_time(
         desc = f"bootstrap(update_test_time) [{iter_idx + 1}/{bootstrap_iters}]"
         for batch in tqdm(dataloader, total=len(dataloader), desc=desc, leave=False):
             wav = batch["wav"].to(model_device)
-            _, avg_r_val, tau_used = run_generator_forward(model, wav, device_type)
+            _, avg_r_val, tau_used = run_generator_forward_compiled(model, wav, device_type)
             avg_r_values.append(float(avg_r_val))
             tau_used_values.append(float(tau_used))
             processed += 1

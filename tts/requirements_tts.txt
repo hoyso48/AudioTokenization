@@ -12,3 +12,5 @@ soundfile
 tqdm
 pytest
 jiwer
+g2p-en
+wandb

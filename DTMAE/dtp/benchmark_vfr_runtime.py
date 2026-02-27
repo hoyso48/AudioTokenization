@@ -67,14 +67,14 @@ def default_algo_specs() -> List[AlgoSpec]:
             label="TopK(max_span=4)",
             cls=BatchTopK,
             selector_kwargs={"max_s": 4},
-            complexity="O(N log N)",
+            complexity="O(N)",
         ),
         AlgoSpec(
             key="TopK_maxs8",
             label="TopK(max_span=8)",
             cls=BatchTopK,
             selector_kwargs={"max_s": 8},
-            complexity="O(N log N)",
+            complexity="O(N)",
         ),
         AlgoSpec(
             key="Clustering_maxs4",

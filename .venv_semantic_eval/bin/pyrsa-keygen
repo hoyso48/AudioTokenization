@@ -1,0 +1,6 @@
+#!/home/hoyso/projects/atk/AudioTokenization/.venv_semantic_eval/bin/python
+import sys
+from rsa.cli import keygen
+if __name__ == '__main__':
+    sys.argv[0] = sys.argv[0].removesuffix('.exe')
+    sys.exit(keygen())

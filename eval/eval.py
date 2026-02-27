@@ -552,8 +552,8 @@ def run_save_stage(args, cfg, model, input_paths: List[str], eval_dir: Path, gt_
                 with ac:
                     out = model({"wav": wav})
 
-            y_ref = out['gt_wav']
-            y_rec = out['gen_wav']
+            y_ref = cast(torch.Tensor, out['gt_wav'])
+            y_rec = cast(torch.Tensor, out['gen_wav'])
             vq_code = out.get('vq_code', None)
             avg_r_val = out.get('avg_r', None)
             tau_used_val = out.get('tau_used', None)
@@ -578,9 +578,10 @@ def run_save_stage(args, cfg, model, input_paths: List[str], eval_dir: Path, gt_
             ensure_parent_dir(pred_16k_path)
             torchaudio.save(str(pred_16k_path), y_rec_16[0].to(torch.float32).detach().cpu(), sample_rate=16000)
 
-            if vq_code is not None:
-                codebook_perplexity.update(vq_code.detach().cpu())
-                codebook_utilization.update(vq_code.detach().cpu())
+            if torch.is_tensor(vq_code):
+                vq_code_t = cast(torch.Tensor, vq_code)
+                codebook_perplexity.update(vq_code_t.detach().cpu())
+                codebook_utilization.update(vq_code_t.detach().cpu())
 
             if use_cuda_timing and sync_device is not None:
                 torch.cuda.synchronize(sync_device)
@@ -601,18 +602,26 @@ def run_save_stage(args, cfg, model, input_paths: List[str], eval_dir: Path, gt_
             dtp_avg_r = None
             if avg_r_val is not None:
                 if torch.is_tensor(avg_r_val):
-                    dtp_avg_r = float(avg_r_val.detach().cpu().item())
-                else:
+                    avg_r_t = cast(torch.Tensor, avg_r_val)
+                    dtp_avg_r = float(avg_r_t.detach().cpu().item())
+                elif isinstance(avg_r_val, (int, float, np.floating, np.integer)):
                     dtp_avg_r = float(avg_r_val)
-                dtp_avg_r_vals.append(dtp_avg_r)
+                else:
+                    dtp_avg_r = None
+                if dtp_avg_r is not None:
+                    dtp_avg_r_vals.append(dtp_avg_r)
 
             dtp_tau_used = None
             if tau_used_val is not None:
                 if torch.is_tensor(tau_used_val):
-                    dtp_tau_used = float(tau_used_val.detach().cpu().item())
-                else:
+                    tau_used_t = cast(torch.Tensor, tau_used_val)
+                    dtp_tau_used = float(tau_used_t.detach().cpu().item())
+                elif isinstance(tau_used_val, (int, float, np.floating, np.integer)):
                     dtp_tau_used = float(tau_used_val)
-                dtp_tau_used_vals.append(dtp_tau_used)
+                else:
+                    dtp_tau_used = None
+                if dtp_tau_used is not None:
+                    dtp_tau_used_vals.append(dtp_tau_used)
 
             transcript_text = load_transcript_for_audio(src_path)
             transcript_path = None

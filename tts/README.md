@@ -24,14 +24,16 @@ This directory contains a self-contained starter pipeline for LibriTTS-based TTS
 
 - `scripts/download_libritts.py`: download/verify LibriTTS subsets
 - `scripts/extract_codec_tokens.py`: extract offline utterance-level codec tokens (+ VFR spans)
-- `scripts/build_tts_examples.py`: build train/val examples with prompt-target pairing
-- `scripts/prepare_text_tokenizer.py`: build offline char tokenizer
+- `scripts/build_tts_examples.py`: build train/val examples with 3s prompt-target pairing
+- `scripts/prepare_text_tokenizer.py`: build offline phoneme tokenizer (default)
 - `scripts/train_ar_tts.py`: train FFR/VFR AR model with HF Trainer
 - `scripts/infer_ar_tts.py`: token generation inference
 - `scripts/synthesize_from_meta.py`: synthesize wavs from benchmark meta list
 - `scripts/eval_varstok_style.py`: VARSTOK-style objective eval (WER/SIM/UTMOS)
 - `scripts/run_seed_tts_eval.sh`: wrapper for `seed-tts-eval` WER/SIM
 - `scripts/run_tts_modeling_and_eval.sh`: full modeling + eval pipeline
+- `scripts/run_tts_modeling_train_only.sh`: modeling-only pipeline (no external eval)
+- `scripts/setup_and_run_resultsfin_dual_gpu_wandb.sh`: env+data setup and dual-GPU (VFR/FFR) W&B training launcher
 - `src/tts/*`: model, dataset, collator, utils
 
 ## 0) Environment
@@ -42,6 +44,8 @@ conda activate audiotok_tts
 export HF_DATASETS_OFFLINE=1
 export TRANSFORMERS_OFFLINE=1
 ```
+
+`prepare_text_tokenizer.py --tokenizer_type phoneme` uses `g2p-en` (included in `requirements_tts.txt`).
 
 ## 1) Dataset download (optional)
 
@@ -66,7 +70,8 @@ Run similarly for validation split.
 ```bash
 python scripts/build_tts_examples.py \
   --input_jsonl ./data/utt_tokens_train.jsonl \
-  --output_jsonl ./data/examples_train.jsonl
+  --output_jsonl ./data/examples_train.jsonl \
+  --prompt_seconds 3.0
 ```
 
 ## 4) Build text tokenizer
@@ -74,6 +79,7 @@ python scripts/build_tts_examples.py \
 ```bash
 python scripts/prepare_text_tokenizer.py \
   --input_jsonl ./data/examples_train.jsonl \
+  --tokenizer_type phoneme \
   --output_path ./artifacts/text_tokenizer.json
 ```
 
@@ -85,7 +91,10 @@ python scripts/train_ar_tts.py \
   --val_jsonl ./data/examples_val.jsonl \
   --tokenizer_path ./artifacts/text_tokenizer.json \
   --output_dir ./runs/ffr \
-  --speech_vocab_size 16384
+  --speech_vocab_size 16384 \
+  --dynamic_batching \
+  --max_batch_tokens 6000 \
+  --max_batch_samples 16
 ```
 
 ## 6) Train (VFR)
@@ -99,7 +108,10 @@ python scripts/train_ar_tts.py \
   --speech_vocab_size 16384 \
   --use_vfr \
   --max_span_len 512 \
-  --lambda_span 1.0
+  --lambda_span 1.0 \
+  --dynamic_batching \
+  --max_batch_tokens 6000 \
+  --max_batch_samples 16
 ```
 
 ## 7) Inference (token generation)
@@ -152,3 +164,30 @@ bash scripts/run_results0117_tts_modeling_eval.sh
 ```
 
 Edit variable paths at the top of `scripts/run_results0117_tts_modeling_eval.sh` before running.
+
+### Resultsfin full-585h train preset
+
+For your provided resultsfin codec checkpoints and full LibriTTS 585h training set:
+
+```bash
+bash scripts/run_resultsfin_full_train.sh
+```
+
+### Dual-GPU + W&B (VFR GPU0, FFR GPU1)
+
+```bash
+wandb login
+
+bash scripts/setup_and_run_resultsfin_dual_gpu_wandb.sh \
+  --wandb-project your_project_name \
+  --wandb-entity your_entity \
+  --env-name speech_eval \
+  --libritts-root /home/hoyso/datasets/LibriTTS
+```
+
+This launcher:
+
+- sets up the environment from `requirements_tts.txt`
+- checks/downloads LibriTTS subsets (`train-clean-100/360`, `train-other-500`, `dev-clean`)
+- builds the full 585h train file list
+- runs VFR and FFR training concurrently with W&B logging enabled

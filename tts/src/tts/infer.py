@@ -10,7 +10,7 @@ import torch
 from .collator import TTSCollator
 from .constants import BOS_ID, EOS_ID, SEP_ID
 from .modeling_ar_tts import ARTTSForConditionalGeneration
-from .text_tokenizer import CharTokenizer
+from .text_tokenizer import load_tokenizer
 
 
 def parse_args() -> argparse.Namespace:
@@ -56,7 +56,7 @@ def main() -> None:
     args = parse_args()
     device = torch.device(args.device)
 
-    tokenizer = CharTokenizer.load(args.tokenizer_path)
+    tokenizer = load_tokenizer(args.tokenizer_path)
     text_vocab_size = tokenizer.vocab_size
     collator = TTSCollator(
         text_vocab_size=text_vocab_size,

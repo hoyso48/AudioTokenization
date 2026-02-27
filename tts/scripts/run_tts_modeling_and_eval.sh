@@ -28,8 +28,13 @@ Optional:
     --max-train-files <int>
     --max-val-files <int>
     --train-epochs <float>                    (default: 100, VARSTOK-style)
-    --train-batch <int>                       (default: 4, practical static batch)
+    --train-batch <int>                       (default: 4, eval/static fallback batch)
     --grad-accum <int>                        (default: 1)
+    --no-dynamic-batching                     (disable dynamic token-batch sampler)
+    --max-batch-tokens <int>                  (default: 6000)
+    --max-batch-samples <int>                 (default: 16)
+    --dynamic-batch-measure <target|total>    (default: target)
+    --dynamic-bucket-size <int>               (default: 256)
     --max-new-tokens <int>                    (default: 1024)
     --temperature <float>                     (default: 0.0)
     --top-k <int>                             (default: 0)
@@ -58,6 +63,11 @@ MAX_VAL_FILES=""
 TRAIN_EPOCHS="100"
 TRAIN_BATCH="4"
 GRAD_ACCUM="1"
+DYNAMIC_BATCHING="1"
+MAX_BATCH_TOKENS="6000"
+MAX_BATCH_SAMPLES="16"
+DYNAMIC_BATCH_MEASURE="target"
+DYNAMIC_BUCKET_SIZE="256"
 MAX_NEW_TOKENS="1024"
 TEMPERATURE="0.0"
 TOP_K="0"
@@ -81,6 +91,11 @@ while [[ $# -gt 0 ]]; do
     --train-epochs) TRAIN_EPOCHS="$2"; shift 2 ;;
     --train-batch) TRAIN_BATCH="$2"; shift 2 ;;
     --grad-accum) GRAD_ACCUM="$2"; shift 2 ;;
+    --no-dynamic-batching) DYNAMIC_BATCHING="0"; shift 1 ;;
+    --max-batch-tokens) MAX_BATCH_TOKENS="$2"; shift 2 ;;
+    --max-batch-samples) MAX_BATCH_SAMPLES="$2"; shift 2 ;;
+    --dynamic-batch-measure) DYNAMIC_BATCH_MEASURE="$2"; shift 2 ;;
+    --dynamic-bucket-size) DYNAMIC_BUCKET_SIZE="$2"; shift 2 ;;
     --max-new-tokens) MAX_NEW_TOKENS="$2"; shift 2 ;;
     --temperature) TEMPERATURE="$2"; shift 2 ;;
     --top-k) TOP_K="$2"; shift 2 ;;
@@ -166,14 +181,17 @@ python "${SCRIPT_DIR}/extract_codec_tokens.py" \
 echo "[3/8] Building train/val TTS examples"
 python "${SCRIPT_DIR}/build_tts_examples.py" \
   --input_jsonl "${TRAIN_UTT_JSONL}" \
-  --output_jsonl "${TRAIN_EX_JSONL}"
+  --output_jsonl "${TRAIN_EX_JSONL}" \
+  --prompt_seconds 3.0
 python "${SCRIPT_DIR}/build_tts_examples.py" \
   --input_jsonl "${VAL_UTT_JSONL}" \
-  --output_jsonl "${VAL_EX_JSONL}"
+  --output_jsonl "${VAL_EX_JSONL}" \
+  --prompt_seconds 3.0
 
 echo "[4/8] Building text tokenizer"
 python "${SCRIPT_DIR}/prepare_text_tokenizer.py" \
   --input_jsonl "${TRAIN_EX_JSONL}" \
+  --tokenizer_type phoneme \
   --output_path "${TOKENIZER_JSON}"
 
 echo "[5/8] Training AR-TTS (${VARIANT})"
@@ -188,6 +206,15 @@ TRAIN_CMD=(
   --per_device_eval_batch_size "${TRAIN_BATCH}"
   --gradient_accumulation_steps "${GRAD_ACCUM}"
 )
+if [[ "${DYNAMIC_BATCHING}" == "1" ]]; then
+  TRAIN_CMD+=(
+    --dynamic_batching
+    --dynamic_batch_measure "${DYNAMIC_BATCH_MEASURE}"
+    --max_batch_tokens "${MAX_BATCH_TOKENS}"
+    --max_batch_samples "${MAX_BATCH_SAMPLES}"
+    --dynamic_bucket_size "${DYNAMIC_BUCKET_SIZE}"
+  )
+fi
 if [[ -n "${SPEECH_VOCAB_SIZE}" ]]; then
   TRAIN_CMD+=(--speech_vocab_size "${SPEECH_VOCAB_SIZE}")
 fi

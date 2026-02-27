@@ -27,3 +27,8 @@ lr_scheduler_type: cosine
 per_device_train_batch_size: 4
 per_device_eval_batch_size: 4
 gradient_accumulation_steps: 1
+dynamic_batching: true
+dynamic_batch_measure: target
+max_batch_tokens: 6000
+max_batch_samples: 16
+dynamic_bucket_size: 256

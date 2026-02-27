@@ -7,6 +7,7 @@ name: base-transformer-bs64-600k-100hz-tome50hzPLEBatchTopk-vq16384-2stage-ropeb
 log_dir: pl_log
 debug: false
 resume_ckpt: null
+load_optimizer_stae: true
 wandb_id: null
 ckpt: null # infer
 input_dir: null # infer

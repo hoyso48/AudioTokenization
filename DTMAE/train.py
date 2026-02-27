@@ -58,7 +58,19 @@ def train(cfg):
     )
     if getattr(cfg, "ckpt_strict", True) == False:
         lightning_module.strict_loading = False
-    trainer.fit(lightning_module, datamodule=datamodule, ckpt_path=cfg.resume_ckpt)
+    load_optimizer_stae = bool(getattr(cfg, "load_optimizer_stae", True))
+    fit_ckpt_path = cfg.resume_ckpt
+    if cfg.resume_ckpt is not None and not load_optimizer_stae:
+        checkpoint = torch.load(cfg.resume_ckpt, map_location="cpu")
+        state_dict = checkpoint.get("state_dict", checkpoint.get("model_state_dict", checkpoint))
+        strict = getattr(cfg, "ckpt_strict", True)
+        load_result = lightning_module.load_state_dict(state_dict, strict=strict)
+        if not strict:
+            print(f"Loaded weights only from {cfg.resume_ckpt}")
+            print(f"Missing keys: {load_result.missing_keys}")
+            print(f"Unexpected keys: {load_result.unexpected_keys}")
+        fit_ckpt_path = None
+    trainer.fit(lightning_module, datamodule=datamodule, ckpt_path=fit_ckpt_path)
     if cfg.ckpt is not None:
         lightning_module = CodecLightningModule.load_from_checkpoint(cfg.ckpt, strict=cfg.ckpt_strict)
         lightning_module.eval()

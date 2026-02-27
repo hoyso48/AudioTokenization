@@ -461,6 +461,37 @@ def run_generator_forward(
     return mask, _to_float(avg_r), _to_float(tau_used)
 
 
+def run_generator_forward_compiled(
+    model: CodecLightningModule,
+    wav: torch.Tensor,
+    device_type: str,
+) -> Tuple[Optional[torch.Tensor], float, float]:
+    # Prioritize the same compiled forward path used in eval.py.
+    with torch.inference_mode():
+        autocast_enabled = device_type == "cuda"
+        autocast_dtype = torch.bfloat16 if autocast_enabled else None
+        ac_context = (
+            torch.autocast(device_type=device_type, dtype=autocast_dtype)
+            if autocast_enabled
+            else nullcontext()
+        )
+        with ac_context:
+            out = model({"wav": wav})
+
+    avg_r = out.get("avg_r", None)
+    tau_used = out.get("tau_used", None)
+    if avg_r is None or tau_used is None:
+        raise RuntimeError("Compiled forward did not return avg_r/tau_used. Is use_dtp enabled?")
+
+    def _to_float(x: object) -> float:
+        if torch.is_tensor(x):
+            return float(x.detach().cpu().item())
+        return float(x)
+
+    # Compiled forward does not expose mask; return None for compatibility.
+    return None, _to_float(avg_r), _to_float(tau_used)
+
+
 def collect_dtp_stats(args) -> None:
     run_dir = Path(args.run_dir).resolve()
     cfg_path = run_dir / "hydra" / "config.yaml"

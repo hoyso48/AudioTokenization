@@ -21,6 +21,12 @@ conda activate "${ENV_NAME}"
 pip install --upgrade pip
 pip install -r "${ROOT_DIR}/requirements_tts.txt"
 
+python - <<'PY'
+import nltk
+for pkg in ["cmudict", "averaged_perceptron_tagger_eng"]:
+    nltk.download(pkg, quiet=False)
+PY
+
 echo "[INFO] Environment ready: ${ENV_NAME}"
 echo "[INFO] For offline runs export:"
 echo "  export HF_DATASETS_OFFLINE=1"

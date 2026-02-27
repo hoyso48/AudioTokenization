@@ -13,12 +13,48 @@ def parse_args() -> argparse.Namespace:
     p = argparse.ArgumentParser(description="Build AR-TTS training examples from utterance token jsonl")
     p.add_argument("--input_jsonl", type=str, required=True)
     p.add_argument("--output_jsonl", type=str, required=True)
-    p.add_argument("--prompt_tokens", type=int, default=120)
+    p.add_argument("--prompt_seconds", type=float, default=3.0)
+    p.add_argument("--min_prompt_tokens", type=int, default=8)
+    p.add_argument("--fallback_prompt_token_rate", type=float, default=40.0)
+    p.add_argument("--prompt_tokens", type=int, default=None, help="legacy fixed prompt tokens (overrides --prompt_seconds)")
     p.add_argument("--max_target_tokens", type=int, default=1024)
     p.add_argument("--min_target_tokens", type=int, default=16)
     p.add_argument("--seed", type=int, default=1337)
     p.add_argument("--max_examples", type=int, default=None)
     return p.parse_args()
+
+
+def infer_prompt_token_count(
+    rec: Dict[str, object],
+    prompt_seconds: float,
+    min_prompt_tokens: int,
+    fallback_prompt_token_rate: float,
+    legacy_prompt_tokens: int | None,
+) -> int:
+    token_seq = rec.get("tokens")
+    if not isinstance(token_seq, list):
+        return 0
+    token_len = len(token_seq)
+    if token_len <= 0:
+        return 0
+    if legacy_prompt_tokens is not None:
+        return max(1, min(token_len, int(legacy_prompt_tokens)))
+
+    sample_rate = rec.get("sample_rate")
+    num_samples = rec.get("orig_num_samples")
+    token_rate = fallback_prompt_token_rate
+
+    if isinstance(sample_rate, (int, float, str)) and isinstance(num_samples, (int, float, str)):
+        sr = float(sample_rate)
+        ns = float(num_samples)
+        if sr > 0.0 and ns > 0.0:
+            duration_sec = ns / sr
+            if duration_sec > 0.0:
+                token_rate = max(token_len / duration_sec, 1.0)
+
+    n_prompt = int(round(max(prompt_seconds, 0.0) * token_rate))
+    n_prompt = max(min_prompt_tokens, n_prompt)
+    return max(1, min(token_len, n_prompt))
 
 
 def main() -> None:
@@ -34,7 +70,7 @@ def main() -> None:
             obj = json.loads(ln)
             if "tokens" not in obj or "text" not in obj or "speaker_id" not in obj:
                 continue
-            if len(obj["tokens"]) < args.min_target_tokens:
+            if not isinstance(obj["tokens"], list) or len(obj["tokens"]) < args.min_target_tokens:
                 continue
             records.append(obj)
 
@@ -59,8 +95,20 @@ def main() -> None:
                     if prompt.get("utt_id") != target.get("utt_id"):
                         break
 
-            prompt_tokens = [int(x) for x in prompt["tokens"][: args.prompt_tokens]]
-            target_tokens = [int(x) for x in target["tokens"][: args.max_target_tokens]]
+            n_prompt_tokens = infer_prompt_token_count(
+                prompt,
+                prompt_seconds=args.prompt_seconds,
+                min_prompt_tokens=args.min_prompt_tokens,
+                fallback_prompt_token_rate=args.fallback_prompt_token_rate,
+                legacy_prompt_tokens=args.prompt_tokens,
+            )
+            prompt_seq = prompt.get("tokens")
+            target_seq = target.get("tokens")
+            if not isinstance(prompt_seq, list) or not isinstance(target_seq, list):
+                continue
+
+            prompt_tokens = [int(x) for x in prompt_seq[:n_prompt_tokens]]
+            target_tokens = [int(x) for x in target_seq[: args.max_target_tokens]]
             if len(prompt_tokens) == 0 or len(target_tokens) < args.min_target_tokens:
                 continue
 
@@ -73,9 +121,32 @@ def main() -> None:
                 "target_tokens": target_tokens,
             }
 
+            if "sample_rate" in prompt and "orig_num_samples" in prompt:
+                sample_rate_raw = prompt.get("sample_rate")
+                num_samples_raw = prompt.get("orig_num_samples")
+                if not isinstance(sample_rate_raw, (int, float, str)) or not isinstance(num_samples_raw, (int, float, str)):
+                    sample_rate_raw = None
+                    num_samples_raw = None
+
+                if sample_rate_raw is not None and num_samples_raw is not None:
+                    sr = float(sample_rate_raw)
+                    ns = float(num_samples_raw)
+                else:
+                    sr = 0.0
+                    ns = 0.0
+                if sr > 0.0 and ns > 0.0 and len(prompt_seq) > 0:
+                    prompt_duration = ns / sr
+                    prompt_token_rate = len(prompt_seq) / prompt_duration
+                    sample["prompt_duration_sec"] = float(len(prompt_tokens) / max(prompt_token_rate, 1e-6))
+
             if "spans" in prompt and "spans" in target:
-                prompt_spans = [int(x) for x in prompt["spans"][: len(prompt_tokens)]]
-                target_spans = [int(x) for x in target["spans"][: len(target_tokens)]]
+                prompt_spans_src = prompt.get("spans")
+                target_spans_src = target.get("spans")
+                if not isinstance(prompt_spans_src, list) or not isinstance(target_spans_src, list):
+                    continue
+
+                prompt_spans = [int(x) for x in prompt_spans_src[: len(prompt_tokens)]]
+                target_spans = [int(x) for x in target_spans_src[: len(target_tokens)]]
                 if len(prompt_spans) == len(prompt_tokens) and len(target_spans) == len(target_tokens):
                     sample["prompt_spans"] = prompt_spans
                     sample["target_spans"] = target_spans

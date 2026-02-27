@@ -264,7 +264,7 @@ def main() -> None:
     from tts.collator import TTSCollator
     from tts.constants import BOS_ID, EOS_ID, SEP_ID
     from tts.modeling_ar_tts import ARTTSForConditionalGeneration
-    from tts.text_tokenizer import CharTokenizer
+    from tts.text_tokenizer import load_tokenizer
 
     args = parse_args()
     device = torch.device(args.device)
@@ -273,7 +273,7 @@ def main() -> None:
     # Load AR model
     ar_model = ARTTSForConditionalGeneration.from_pretrained(args.model_dir).to(device)
     ar_model.eval()
-    tokenizer = CharTokenizer.load(args.tokenizer_path)
+    tokenizer = load_tokenizer(args.tokenizer_path)
     collator = TTSCollator(
         text_vocab_size=tokenizer.vocab_size,
         speech_vocab_size=args.speech_vocab_size,

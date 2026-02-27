@@ -13,7 +13,7 @@ class ARTTSConfig(PretrainedConfig):
 
     def __init__(
         self,
-        vocab_size: int,
+        vocab_size: int = 32000,
         d_model: int = 768,
         n_head: int = 12,
         n_layer: int = 12,

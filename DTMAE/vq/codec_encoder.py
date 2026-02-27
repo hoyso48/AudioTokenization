@@ -83,7 +83,7 @@ class TransformerEncoderSTFT(nn.Module):
         )
 
         stft_dim = n_fft // 2 + 1
-        self.proj = nn.Linear(2 * stft_dim, dim)
+        # self.proj = nn.Linear(2 * stft_dim, dim)
         self.conv = ConvDownsample(2 * stft_dim, dim, norm_eps=norm_eps)
 
         if n_layers_level1 > 0:

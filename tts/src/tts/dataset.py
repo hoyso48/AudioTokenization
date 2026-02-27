@@ -6,7 +6,7 @@ from typing import Dict, List, Optional
 
 from torch.utils.data import Dataset
 
-from .text_tokenizer import CharTokenizer
+from .text_tokenizer import load_tokenizer
 
 
 class JsonlTTSDataset(Dataset):
@@ -22,7 +22,7 @@ class JsonlTTSDataset(Dataset):
         self.path = Path(jsonl_path)
         if not self.path.is_file():
             raise FileNotFoundError(f"Dataset jsonl not found: {self.path}")
-        self.tokenizer = CharTokenizer.load(tokenizer_path)
+        self.tokenizer = load_tokenizer(tokenizer_path)
         self.use_vfr = bool(use_vfr)
         self.max_text_tokens = max_text_tokens
         self.max_prompt_tokens = max_prompt_tokens
@@ -63,6 +63,8 @@ class JsonlTTSDataset(Dataset):
                     "prompt_tokens": prompt_tokens,
                     "target_tokens": target_tokens,
                     "text": text,
+                    "target_length": len(target_tokens),
+                    "total_length": len(text_ids) + len(prompt_tokens) + len(target_tokens) + 4,
                 }
 
                 if self.use_vfr:
@@ -87,3 +89,13 @@ class JsonlTTSDataset(Dataset):
 
     def __getitem__(self, idx: int) -> Dict[str, object]:
         return self.samples[idx]
+
+    def get_dynamic_lengths(self, measure: str = "target") -> List[int]:
+        if measure not in {"target", "total"}:
+            raise ValueError(f"Unsupported dynamic length measure: {measure}")
+        key = "target_length" if measure == "target" else "total_length"
+        out: List[int] = []
+        for sample in self.samples:
+            val = sample[key]
+            out.append(val if isinstance(val, int) else int(val))
+        return out
