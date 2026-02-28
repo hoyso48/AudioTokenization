@@ -38,11 +38,11 @@ This script performs:
 USAGE
 }
 
-ENV_NAME="speech_eval"
+ENV_NAME="main"
 SETUP_ENV="1"
 DOWNLOAD_LIBRITTS="0"
-LIBRITTS_ROOT="/home/hoyso/datasets/LibriTTS"
-WORK_BASE="/home/hoyso/projects/atk/AudioTokenization/tts/experiments/resultsfin_dual_gpu_585h"
+LIBRITTS_ROOT="/workspace/datasets/LibriTTS"
+WORK_BASE="/workspace/AudioTokenization/tts/experiments/resultsfin_dual_gpu_585h"
 WANDB_PROJECT=""
 WANDB_ENTITY=""
 WANDB_MODE="online"
@@ -57,8 +57,8 @@ DYNAMIC_BUCKET_SIZE="256"
 MAX_TRAIN_FILES=""
 MAX_VAL_FILES=""
 
-FFR_CODEC_RUN="/home/hoyso/projects/atk/AudioTokenization/results/resultsfin/default-transformer-bs64-600k-80hz-FixedPattern40hz-vq65536-2stage-ropebase10kposids-window128-lneps1e2-layerscale1-qknorm-nodropout"
-VFR_CODEC_RUN="/home/hoyso/projects/atk/AudioTokenization/results/resultsfin/default-transformer-bs64-600k-80hz-PLEBatchTopK40hz-vq16384-2stage-ropebase10kposids-window128-lneps1e2-layerscale1-qknorm-nodropout"
+FFR_CODEC_RUN="/workspace/AudioTokenization/results/resultsfin/default-transformer-bs64-600k-80hz-FixedPattern40hz-vq65536-2stage-ropebase10kposids-window128-lneps1e2-layerscale1-qknorm-nodropout"
+VFR_CODEC_RUN="/workspace/AudioTokenization/results/resultsfin/default-transformer-bs64-600k-80hz-PLEBatchTopK40hz-vq16384-2stage-ropebase10kposids-window128-lneps1e2-layerscale1-qknorm-nodropout"
 
 while [[ $# -gt 0 ]]; do
   case "$1" in

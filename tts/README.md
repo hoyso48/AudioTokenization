@@ -46,6 +46,7 @@ export TRANSFORMERS_OFFLINE=1
 ```
 
 `prepare_text_tokenizer.py --tokenizer_type phoneme` uses `g2p-en` (included in `requirements_tts.txt`).
+`setup_env_tts.sh` bootstraps NLTK resources (`cmudict`, `averaged_perceptron_tagger_eng`) via `wget`.
 
 ## 1) Dataset download (optional)
 
