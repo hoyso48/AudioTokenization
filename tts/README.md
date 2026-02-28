@@ -185,6 +185,13 @@ bash scripts/setup_and_run_resultsfin_dual_gpu_wandb.sh \
   --libritts-root /home/hoyso/datasets/LibriTTS
 ```
 
+If you use `--no-setup-env`, pre-install runtime deps in that environment:
+
+```bash
+conda run -n <env_name> pip install -r tts/requirements_tts.txt
+conda run -n <env_name> pip install flash-attn --no-build-isolation
+```
+
 This launcher:
 
 - sets up the environment from `requirements_tts.txt`

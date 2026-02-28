@@ -9,8 +9,16 @@ accelerate>=1.0.0
 omegaconf==2.3.0
 hydra-core==1.3.2
 soundfile
+librosa
 tqdm
 pytest
 jiwer
 g2p-en
 wandb
+pytorch_lightning==2.5.1.post0
+torchmetrics
+pesq
+pystoi
+einops
+einx
+vector_quantize_pytorch

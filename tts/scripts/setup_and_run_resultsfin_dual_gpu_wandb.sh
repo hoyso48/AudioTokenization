@@ -124,6 +124,80 @@ if [[ "${SETUP_ENV}" == "1" ]]; then
   bash "${SCRIPT_DIR}/setup_env_tts.sh" "${ENV_NAME}"
 fi
 
+echo "[CHECK] Verifying runtime dependencies in env ${ENV_NAME}"
+conda run --no-capture-output -n "${ENV_NAME}" python - <<'PY'
+import importlib
+import sys
+
+required = [
+    "torch",
+    "torchaudio",
+    "transformers",
+    "accelerate",
+    "wandb",
+    "g2p_en",
+    "librosa",
+    "pytorch_lightning",
+    "torchmetrics",
+    "pesq",
+    "pystoi",
+    "einops",
+    "einx",
+    "vector_quantize_pytorch",
+    "flash_attn",
+]
+
+missing = []
+for name in required:
+    try:
+        importlib.import_module(name)
+    except Exception:
+        missing.append(name)
+
+if missing:
+    print("[ERROR] Missing python packages:", ", ".join(missing))
+    print("        Install via: conda run -n <env> pip install -r tts/requirements_tts.txt")
+    if "flash_attn" in missing:
+        print("        FlashAttention install hint: conda run -n <env> pip install flash-attn --no-build-isolation")
+    sys.exit(1)
+
+print("[CHECK] Dependency check passed")
+PY
+
+echo "[CHECK] Verifying GPU runtime visibility (need 2 GPUs: 0,1)"
+if ! command -v nvidia-smi >/dev/null 2>&1; then
+  echo "[ERROR] nvidia-smi is unavailable. GPU runtime is not attached."
+  echo "        For Docker, start container with GPU enabled (e.g., --gpus all)."
+  exit 1
+fi
+nvidia-smi -L || true
+
+conda run --no-capture-output -n "${ENV_NAME}" python - <<'PY'
+import sys
+import torch
+
+if not torch.cuda.is_available():
+    print("[ERROR] torch.cuda.is_available() is False")
+    print("        CUDA driver/runtime is not visible from this env")
+    sys.exit(1)
+
+n = torch.cuda.device_count()
+print(f"[CHECK] torch cuda visible, device_count={n}, torch_cuda={torch.version.cuda}")
+if n < 2:
+    print("[ERROR] This launcher requires at least 2 visible GPUs (GPU0 for VFR, GPU1 for FFR).")
+    sys.exit(1)
+
+for idx in (0, 1):
+    try:
+        x = torch.tensor([1.0], device=f"cuda:{idx}")
+        _ = float(x.item())
+    except Exception as exc:
+        print(f"[ERROR] Failed to allocate tensor on cuda:{idx}: {exc}")
+        sys.exit(1)
+
+print("[CHECK] cuda:0 and cuda:1 allocation OK")
+PY
+
 missing_subsets=()
 for subset in train-clean-100 train-clean-360 train-other-500 dev-clean; do
   if [[ ! -d "${LIBRITTS_DIR}/${subset}" ]]; then

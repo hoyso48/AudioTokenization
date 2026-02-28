@@ -119,6 +119,32 @@ if [[ -z "${DEVICE}" ]]; then
   fi
 fi
 
+if [[ "${DEVICE}" == "cuda" ]]; then
+  if ! command -v nvidia-smi >/dev/null 2>&1; then
+    echo "[ERROR] --device cuda requested but nvidia-smi is unavailable."
+    echo "        Check NVIDIA driver/container GPU runtime (e.g., --gpus all)."
+    exit 1
+  fi
+
+  python - <<'PY'
+import sys
+import torch
+
+if not torch.cuda.is_available():
+    print("[ERROR] torch.cuda.is_available() is False.")
+    print("        CUDA driver/runtime is not visible in this environment.")
+    sys.exit(1)
+
+try:
+    _ = torch.tensor([1.0], device="cuda")
+except Exception as exc:
+    print(f"[ERROR] CUDA tensor allocation failed: {exc}")
+    sys.exit(1)
+
+print(f"[CHECK] CUDA ready (device_count={torch.cuda.device_count()}, torch_cuda={torch.version.cuda})")
+PY
+fi
+
 mkdir -p "${WORK_DIR}" "${WORK_DIR}/data" "${WORK_DIR}/artifacts" "${WORK_DIR}/runs"
 
 TRAIN_UTT_JSONL="${WORK_DIR}/data/utt_tokens_train.jsonl"
