@@ -199,3 +199,9 @@ This launcher:
 - checks/downloads LibriTTS subsets (`train-clean-100/360`, `train-other-500`, `dev-clean`)
 - builds the full 585h train file list
 - runs VFR and FFR training concurrently with W&B logging enabled
+
+If dependency preflight stalls in your runtime, you can skip it:
+
+```bash
+bash scripts/setup_and_run_resultsfin_dual_gpu_wandb.sh ... --skip-dependency-check
+```

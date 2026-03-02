@@ -2,6 +2,7 @@
 import os
 import sys
 import json
+import csv
 import math
 import argparse
 import shutil
@@ -117,6 +118,60 @@ def infer_codebook_size_from_cfg(cfg) -> int:
 def read_lines(path: str) -> List[str]:
     with open(path, "r") as f:
         return [l.strip() for l in f if l.strip()]
+
+
+def load_transcript_key(path: Path) -> Dict[str, str]:
+    key_map: Dict[str, str] = {}
+    suffix = path.suffix.lower()
+
+    if suffix == ".txt":
+        with open(path, "r") as f:
+            for raw in f:
+                line = raw.strip()
+                if not line:
+                    continue
+                parts = line.split(maxsplit=1)
+                if len(parts) != 2:
+                    continue
+                utt_id, text = parts[0].strip(), parts[1].strip()
+                if utt_id and text:
+                    key_map[utt_id] = text
+        return key_map
+
+    if suffix == ".csv":
+        with open(path, "r", newline="", encoding="utf-8") as f:
+            reader = csv.DictReader(f)
+            for row in reader:
+                utt_id = (
+                    row.get("id")
+                    or row.get("utt_id")
+                    or row.get("file_id")
+                    or row.get("audio_id")
+                )
+                text = row.get("transcript") or row.get("text")
+                if utt_id and text:
+                    key_map[str(utt_id).strip()] = str(text).strip()
+        return key_map
+
+    if suffix == ".jsonl":
+        with open(path, "r", encoding="utf-8") as f:
+            for raw in f:
+                line = raw.strip()
+                if not line:
+                    continue
+                try:
+                    obj = json.loads(line)
+                except Exception:
+                    continue
+                if not isinstance(obj, dict):
+                    continue
+                utt_id = obj.get("id") or obj.get("utt_id") or obj.get("file_id") or obj.get("audio_id")
+                text = obj.get("transcript") or obj.get("text")
+                if utt_id and text:
+                    key_map[str(utt_id).strip()] = str(text).strip()
+        return key_map
+
+    raise ValueError(f"Unsupported transcript key format: {path}. Use .txt, .csv, or .jsonl")
 
 
 def pad_to_multiple_1d(waveform: torch.Tensor, multiple_of: int) -> Tuple[torch.Tensor, int]:
@@ -290,6 +345,131 @@ def resolve_with_dataset_roots(paths: List[str], cfg) -> List[str]:
         if not found:
             print(f"[Warning] Input path not found: {p}. Skipping.")
     return resolved
+
+
+def resolve_existing_paths(paths: List[str]) -> List[str]:
+    resolved: List[str] = []
+    for p in paths:
+        pp = Path(p)
+        if pp.is_absolute() and pp.exists():
+            resolved.append(str(pp.resolve()))
+            continue
+        if pp.exists():
+            resolved.append(str(pp.resolve()))
+            continue
+        print(f"[Warning] Input path not found: {p}. Skipping.")
+    return resolved
+
+
+def transcript_path_for_audio(audio_path: Path) -> Optional[str]:
+    file_id = audio_path.stem
+    if "-" in file_id:
+        prefix = "-".join(file_id.split("-")[:2])
+    else:
+        prefix = "_".join(file_id.split("_")[:2])
+    trans_path = audio_path.parent / f"{prefix}.trans.txt"
+    if trans_path.is_file():
+        return str(trans_path.resolve())
+    return None
+
+
+def infer_pred_path_for_ref(pred_root: Path, ref_path: Path) -> Optional[Path]:
+    search_roots = [pred_root]
+    pred16 = pred_root / "pred_16k"
+    if pred16.is_dir():
+        search_roots.append(pred16)
+
+    rel_candidates = [
+        last_k_parts(ref_path, 3).with_suffix(""),
+        last_k_parts(ref_path, 2).with_suffix(""),
+        Path(ref_path.stem),
+    ]
+
+    for root in search_roots:
+        for rel_stem in rel_candidates:
+            for ext in (".wav", ".flac"):
+                candidate = root / Path(str(rel_stem) + ext)
+                if candidate.is_file():
+                    return candidate.resolve()
+    return None
+
+
+def build_metrics_manifest_from_pred_root(
+    *,
+    input_paths: List[str],
+    pred_root: Path,
+    manifest_path: Path,
+    gt_cache_dir: Optional[Path] = None,
+    transcript_map: Optional[Dict[str, str]] = None,
+    transcript_key_path: Optional[Path] = None,
+) -> Dict[str, int]:
+    ensure_parent_dir(manifest_path)
+    pred_root = pred_root.resolve()
+    if gt_cache_dir is not None:
+        gt_cache_dir = gt_cache_dir.resolve()
+        gt_cache_dir.mkdir(parents=True, exist_ok=True)
+    matched = 0
+    missing_pred = 0
+    gt_cached = 0
+    gt_cache_hits = 0
+    transcript_hits = 0
+
+    with open(manifest_path, "w") as mf:
+        for p in input_paths:
+            ref = Path(p).resolve()
+            pred = infer_pred_path_for_ref(pred_root, ref)
+            if pred is None:
+                missing_pred += 1
+                continue
+
+            gt_16k_path: Optional[str] = None
+            if gt_cache_dir is not None:
+                rel3 = last_k_parts(ref, 3).with_suffix(".wav")
+                gt_cache_path = gt_cache_dir / rel3
+                if gt_cache_path.is_file():
+                    gt_cache_hits += 1
+                else:
+                    wav, sr = torchaudio.load(str(ref))
+                    if wav.dim() == 2 and wav.size(0) > 1:
+                        wav = wav[:1, :]
+                    elif wav.dim() == 1:
+                        wav = wav.unsqueeze(0)
+                    if sr != 16000:
+                        wav = torchaudio.functional.resample(wav, sr, 16000)
+                    ensure_parent_dir(gt_cache_path)
+                    torchaudio.save(str(gt_cache_path), wav.detach().to(torch.float32).cpu(), sample_rate=16000)
+                    gt_cached += 1
+                gt_16k_path = str(gt_cache_path.resolve())
+
+            transcript_text = transcript_map.get(ref.stem) if transcript_map is not None else None
+            if transcript_text:
+                transcript_hits += 1
+
+            record = {
+                "orig_path": str(ref),
+                "gt_16k_path": gt_16k_path,
+                "pred_16k_path": str(pred),
+                "transcript_path": str(transcript_key_path.resolve()) if transcript_key_path is not None else transcript_path_for_audio(ref),
+                "transcript_text": transcript_text,
+                "prediction_elapsed_sec": None,
+                "prediction_samples": None,
+                "prediction_samples_per_sec": None,
+                "prediction_items_per_sec": None,
+                "throughput_warmup_excluded": False,
+                "dtp_avg_r": None,
+                "dtp_tau_used": None,
+            }
+            mf.write(json.dumps(record) + "\n")
+            matched += 1
+
+    return {
+        "total_refs": int(len(input_paths)),
+        "matched": int(matched),
+        "missing_pred": int(missing_pred),
+        "gt_cached": int(gt_cached),
+        "gt_cache_hits": int(gt_cache_hits),
+        "transcript_hits": int(transcript_hits),
+    }
 
 
 def load_transcript_for_audio(audio_path: Path) -> Optional[str]:
@@ -752,12 +932,6 @@ def run_metrics_stage(
             orig_path = rec.get("orig_path")
             if orig_path is None:
                 raise RuntimeError("Manifest entry missing orig_path.")
-            info = torchaudio.info(orig_path)
-            if Path(orig_path).suffix.lower() != ".wav" or info.sample_rate != 16000:
-                raise RuntimeError(
-                    "GT is not saved and original is not 16k WAV. "
-                    "Re-run with --stage save and provide --gt_out_dir to save GT at 16k WAV."
-                )
             gt_path = orig_path
 
         if not (gt_path and pred_path):
@@ -816,8 +990,11 @@ def run_metrics_stage(
             spk_sim_vals.append(spk_sim_val)
 
         if want_mcd and mcd_compare is not None:
-            mcd, _ = mcd_compare(gt_path, pred_path)
-            mcd_val = float(mcd) if mcd is not None and not math.isnan(mcd) else None
+            try:
+                mcd, _ = mcd_compare(gt_path, pred_path)
+                mcd_val = float(mcd) if mcd is not None and not math.isnan(mcd) else None
+            except Exception:
+                mcd_val = None
             rec["mcd"] = mcd_val
             mcd_vals.append(mcd_val)
 
@@ -837,29 +1014,32 @@ def run_metrics_stage(
             wer_frac = None
             gt_text: Optional[str] = None
             asr_text: Optional[str] = None
-            if transcript_path and Path(transcript_path).is_file() and processor is not None and asr_model is not None:
+            ref_line = rec.get("transcript_text")
+            if isinstance(ref_line, str):
+                ref_line = ref_line.strip()
+            if not ref_line and transcript_path and Path(transcript_path).is_file():
                 with open(transcript_path, "r") as tf:
-                    ref_line = None
                     file_id = Path(gt_path).stem
                     for tline in tf:
                         if tline.startswith(file_id + " "):
                             ref_line = tline[len(file_id) + 1 :].strip()
                             break
-                if ref_line is not None:
-                    gt_text = ref_line
-                    inputs = processor(
-                        pr.squeeze().numpy(),
-                        sampling_rate=16000,
-                        return_tensors="pt",
-                    ).input_values.to(args.device)
-                    with torch.inference_mode():
-                        logits = asr_model(inputs).logits
-                        predicted_ids = torch.argmax(logits, dim=-1)
-                        hyp_text = processor.decode(predicted_ids[0].detach().cpu())
-                    asr_text = hyp_text
-                    wer_frac = float(jiwer_wer(ref_line, hyp_text))
-                    corpus_refs.append(ref_line)
-                    corpus_hyps.append(hyp_text)
+
+            if ref_line and processor is not None and asr_model is not None:
+                gt_text = ref_line
+                inputs = processor(
+                    pr.squeeze().numpy(),
+                    sampling_rate=16000,
+                    return_tensors="pt",
+                ).input_values.to(args.device)
+                with torch.inference_mode():
+                    logits = asr_model(inputs).logits
+                    predicted_ids = torch.argmax(logits, dim=-1)
+                    hyp_text = processor.decode(predicted_ids[0].detach().cpu())
+                asr_text = hyp_text
+                wer_frac = float(jiwer_wer(ref_line, hyp_text))
+                corpus_refs.append(ref_line)
+                corpus_hyps.append(hyp_text)
 
             rec["wer_fraction"] = wer_frac
             rec["wer"] = (wer_frac * 100.0) if wer_frac is not None else None
@@ -935,12 +1115,30 @@ def load_save_stage_stats_if_any(eval_dir: Path) -> Dict[str, Optional[float]]:
 def main():
     parser = argparse.ArgumentParser(description="Evaluate BigCodec SSL with two-stage pipeline (save -> metrics). Batch size is always 1.")
     parser.add_argument("--input", type=str, required=True, help="Directory (recursive) or .txt filelist or single audio file for GT inputs")
-    parser.add_argument("--run_dir", type=str, required=True, help="Run directory containing hydra/config.yaml and pl_log/last.ckpt")
+    parser.add_argument("--run_dir", type=str, default=None, help="Run directory containing hydra/config.yaml and pl_log/last.ckpt")
     parser.add_argument("--output_dir", type=str, default=None, help="Directory to store eval artifacts (default: <run_dir>/eval)")
     parser.add_argument("--stage", type=str, choices=["save", "metrics", "all"], default="all")
     parser.add_argument("--gt_out_dir", type=str, default=None, help="Where to save 16k WAV GTs during save stage")
     parser.add_argument("--pred_out_dir", type=str, default=None, help="Where to save 16k WAV predictions (default: run_dir/eval/pred_16k)")
     parser.add_argument("--manifest", type=str, default=None, help="Path to manifest.jsonl (default: run_dir/eval/manifest.jsonl)")
+    parser.add_argument(
+        "--pred_root",
+        type=str,
+        default=None,
+        help="Prediction audio root for metrics-only mode. If --manifest is missing, build it by pairing --input refs with <pred_root>/<spk>/<chapter>/<utt>.wav.",
+    )
+    parser.add_argument(
+        "--gt_cache_dir",
+        type=str,
+        default=None,
+        help="Optional directory to cache reference audio as 16k WAV for metrics-only manifest building.",
+    )
+    parser.add_argument(
+        "--transcript_key",
+        type=str,
+        default=None,
+        help="Optional transcript key file (.txt/.csv/.jsonl) mapping utt_id -> transcript for WER in metrics-only mode.",
+    )
     parser.add_argument("--length_mode", type=str, choices=["pad", "truncate"], default="pad", help="How to make length a multiple of cfg.dataset.multiple_of")
     parser.add_argument("--num_workers", type=int, default=4)
     parser.add_argument("--device", type=str, default="cuda" if torch.cuda.is_available() else "cpu")
@@ -979,18 +1177,40 @@ def main():
     torch.set_grad_enabled(False)
     torch.backends.cudnn.benchmark = True
 
-    run_dir = Path(args.run_dir).resolve()
-    cfg_path = run_dir / "hydra" / "config.yaml"
-    ckpt_path = run_dir / "pl_log" / "last.ckpt"
-    if not cfg_path.is_file():
-        raise FileNotFoundError(f"Config not found at {cfg_path}")
-    if not ckpt_path.is_file():
-        raise FileNotFoundError(f"Checkpoint not found at {ckpt_path}")
+    run_dir = Path(args.run_dir).resolve() if args.run_dir else None
+    pred_root = Path(args.pred_root).resolve() if args.pred_root else None
+    gt_cache_dir = Path(args.gt_cache_dir).resolve() if args.gt_cache_dir else None
+    transcript_key_path = Path(args.transcript_key).resolve() if args.transcript_key else None
+    transcript_map: Optional[Dict[str, str]] = None
+    if transcript_key_path is not None:
+        if not transcript_key_path.is_file():
+            raise FileNotFoundError(f"Transcript key not found: {transcript_key_path}")
+        transcript_map = load_transcript_key(transcript_key_path)
 
-    cfg = OmegaConf.load(str(cfg_path))
-    cfg = apply_cfg_overrides(cfg, args.cfg_override)
+    if args.stage in ("save", "all") and run_dir is None:
+        raise ValueError("--run_dir is required when --stage is 'save' or 'all'.")
 
-    eval_dir = Path(args.output_dir).resolve() if args.output_dir else (run_dir / "eval")
+    cfg = None
+    ckpt_path = None
+    if run_dir is not None:
+        cfg_path = run_dir / "hydra" / "config.yaml"
+        ckpt_path = run_dir / "pl_log" / "last.ckpt"
+        if not cfg_path.is_file():
+            raise FileNotFoundError(f"Config not found at {cfg_path}")
+        if args.stage in ("save", "all") and (ckpt_path is None or not ckpt_path.is_file()):
+            raise FileNotFoundError(f"Checkpoint not found at {ckpt_path}")
+
+        cfg = OmegaConf.load(str(cfg_path))
+        cfg = apply_cfg_overrides(cfg, args.cfg_override)
+
+    if args.output_dir:
+        eval_dir = Path(args.output_dir).resolve()
+    elif run_dir is not None:
+        eval_dir = run_dir / "eval"
+    elif pred_root is not None:
+        eval_dir = pred_root / "eval"
+    else:
+        eval_dir = Path.cwd() / "eval"
     eval_dir.mkdir(parents=True, exist_ok=True)
 
     manifest_path = Path(args.manifest) if args.manifest else (eval_dir / "manifest.jsonl")
@@ -1007,11 +1227,14 @@ def main():
     final_metrics_path = eval_dir / "metrics.json"
 
     raw_paths = parse_input_paths(args.input)
-    input_paths = resolve_with_dataset_roots(raw_paths, cfg)
+    if cfg is not None:
+        input_paths = resolve_with_dataset_roots(raw_paths, cfg)
+    else:
+        input_paths = resolve_existing_paths(raw_paths)
     resolved_input_count = len(input_paths)
 
     metadata = OrderedDict()
-    metadata["run_dir"] = str(run_dir)
+    metadata["run_dir"] = str(run_dir) if run_dir is not None else None
     metadata["stage"] = args.stage
     metadata["device"] = str(args.device)
     metadata["input"] = str(args.input)
@@ -1021,6 +1244,8 @@ def main():
     metadata["manifest_path"] = str(manifest_path)
     metadata["pred_out_dir"] = str(pred_out_dir)
     metadata["gt_out_dir"] = str(gt_out_dir) if gt_out_dir is not None else None
+    metadata["transcript_key"] = str(transcript_key_path) if transcript_key_path is not None else None
+    metadata["transcript_key_entries"] = int(len(transcript_map)) if transcript_map is not None else None
     metadata["cfg_overrides"] = list(args.cfg_override) if args.cfg_override else []
     metadata["selected_metrics"] = list(selected_metrics)
     metadata["save_stage_stats_path"] = str(save_stage_stats_path)
@@ -1028,6 +1253,8 @@ def main():
     metadata["final_metrics_path"] = str(final_metrics_path)
 
     if args.stage in ("save", "all"):
+        if run_dir is None or cfg is None or ckpt_path is None:
+            raise RuntimeError("Internal error: run_dir/cfg/ckpt must exist for save stage.")
         model = CodecLightningModule(cfg=cfg).to(args.device).eval()
         state = torch.load(str(ckpt_path), map_location="cpu", weights_only=False)
         state_dict = state.get("state_dict", state)
@@ -1059,7 +1286,35 @@ def main():
 
     if args.stage in ("metrics", "all"):
         if not manifest_path.is_file():
-            raise FileNotFoundError(f"Manifest not found at {manifest_path}. Run with --stage save first to generate 16k GT/PRED and a manifest, optionally providing --gt_out_dir.")
+            if pred_root is None:
+                raise FileNotFoundError(
+                    f"Manifest not found at {manifest_path}. Run with --stage save first to generate a manifest, "
+                    "or pass --pred_root to build a metrics-only manifest from external predictions."
+                )
+            pair_stats = build_metrics_manifest_from_pred_root(
+                input_paths=input_paths,
+                pred_root=pred_root,
+                manifest_path=manifest_path,
+                gt_cache_dir=gt_cache_dir,
+                transcript_map=transcript_map,
+                transcript_key_path=transcript_key_path,
+            )
+            metadata["pair_total_refs"] = pair_stats["total_refs"]
+            metadata["pair_matched"] = pair_stats["matched"]
+            metadata["pair_missing_pred"] = pair_stats["missing_pred"]
+            metadata["pair_gt_cached"] = pair_stats["gt_cached"]
+            metadata["pair_gt_cache_hits"] = pair_stats["gt_cache_hits"]
+            metadata["pair_transcript_hits"] = pair_stats["transcript_hits"]
+            if pair_stats["matched"] == 0:
+                raise RuntimeError(
+                    f"No reference/prediction pairs matched. input_count={pair_stats['total_refs']} pred_root={pred_root}"
+                )
+            print(
+                f"[Manifest] Built metrics manifest from pred_root={pred_root} | "
+                f"matched={pair_stats['matched']} missing={pair_stats['missing_pred']} total_refs={pair_stats['total_refs']} "
+                f"gt_cached={pair_stats['gt_cached']} gt_cache_hits={pair_stats['gt_cache_hits']} "
+                f"transcript_hits={pair_stats['transcript_hits']}"
+            )
         audio_metrics = run_metrics_stage(args, manifest_path, eval_dir, set(selected_metrics))
         metrics_stage_source = "computed"
     else:

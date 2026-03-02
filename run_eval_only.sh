@@ -41,15 +41,20 @@ UTMOSV2_SPEC="${UTMOSV2_SPEC:-git+https://github.com/sarulab-speech/UTMOSv2.git@
 UTMOSV2_SPEC_FALLBACK="${UTMOSV2_SPEC_FALLBACK:-utmosv2}"
 
 EVAL_OUT_OVERRIDE=""
+EXTERNAL_OUTPUTS_ROOT=""
+EXTERNAL_EVAL_ROOT="${EXTERNAL_EVAL_ROOT:-$ROOT/external_codecs/eval_results/waveform_level}"
+EXTERNAL_GT_CACHE_DIR=""
+EXTERNAL_TRANSCRIPT_KEY=""
 
 declare -a RUN_DIRS=()
 declare -a RUN_LIST_FILES=()
+declare -a EXTERNAL_VARIANT_DIRS=()
 declare -a EVAL_CFG_OVERRIDES=()
 declare -a EVAL_EXTRA_ARGS=()
 
 usage() {
   cat <<'EOF'
-Run eval only for existing training run directories.
+Run eval for training runs or external reconstructed waveforms.
 
 Usage:
   bash run_eval_only.sh [options] <run_dir> [<run_dir> ...]
@@ -57,6 +62,11 @@ Usage:
 Options:
   --run_dir <path>                 Add one run directory (repeatable)
   --run_list <file.txt>            File with one run_dir per line (# comments allowed)
+  --external_outputs_root <path>   Root with <codec>/<variant> reconstructed wavs
+  --external_variant_dir <path>    One external variant dir (repeatable)
+  --external_eval_root <path>      Output root for external metrics (default: external_codecs/eval_results/waveform_level)
+  --external_gt_cache_dir <path>   Shared 16k GT wav cache for external metrics (default: <external_eval_root>/__gt_16k_cache)
+  --external_transcript_key <path> Transcript key (.txt/.csv/.jsonl) for WER in external mode
 
   --input <path>                   Eval input path (default: DTMAE/filelists/librispeech_test_clean.txt)
   --eval_stage <save|metrics|all>  Eval stage (default: all)
@@ -118,6 +128,10 @@ Examples:
     --run_list run_dirs.txt \
     --cfg_override model.resampler.dtp_params.r=0.4 \
     --eval_arg --keep_audio
+
+  bash run_eval_only.sh \
+    --external_outputs_root external_codecs/outputs \
+    --eval_stage metrics
 EOF
 }
 
@@ -565,6 +579,26 @@ while [[ $# -gt 0 ]]; do
       RUN_LIST_FILES+=("$2")
       shift 2
       ;;
+    --external_outputs_root)
+      EXTERNAL_OUTPUTS_ROOT="$2"
+      shift 2
+      ;;
+    --external_variant_dir)
+      EXTERNAL_VARIANT_DIRS+=("$2")
+      shift 2
+      ;;
+    --external_eval_root)
+      EXTERNAL_EVAL_ROOT="$2"
+      shift 2
+      ;;
+    --external_gt_cache_dir)
+      EXTERNAL_GT_CACHE_DIR="$2"
+      shift 2
+      ;;
+    --external_transcript_key)
+      EXTERNAL_TRANSCRIPT_KEY="$2"
+      shift 2
+      ;;
     --input)
       INPUT_LIST="$2"
       shift 2
@@ -748,7 +782,12 @@ for list_file in "${RUN_LIST_FILES[@]}"; do
   append_run_dirs_from_list "$list_file"
 done
 
-if [[ "${#RUN_DIRS[@]}" -eq 0 ]]; then
+EXTERNAL_MODE=0
+if [[ -n "$EXTERNAL_OUTPUTS_ROOT" || "${#EXTERNAL_VARIANT_DIRS[@]}" -gt 0 ]]; then
+  EXTERNAL_MODE=1
+fi
+
+if [[ "$EXTERNAL_MODE" -eq 0 && "${#RUN_DIRS[@]}" -eq 0 ]]; then
   echo "[ERROR] No run directories provided." >&2
   usage
   exit 1
@@ -759,13 +798,33 @@ if [[ "$EVAL_STAGE" != "save" && "$EVAL_STAGE" != "metrics" && "$EVAL_STAGE" != 
   exit 1
 fi
 
+if [[ "$EXTERNAL_MODE" -eq 1 ]]; then
+  if [[ "$EVAL_STAGE" == "save" ]]; then
+    echo "[ERROR] external mode does not support --eval_stage save." >&2
+    exit 1
+  fi
+  if [[ "$EVAL_STAGE" == "all" ]]; then
+    echo "[INFO] external mode uses waveform-level metrics only; overriding --eval_stage all -> metrics"
+    EVAL_STAGE="metrics"
+  fi
+  if [[ "${#RUN_DIRS[@]}" -gt 0 ]]; then
+    echo "[ERROR] Do not mix run_dir mode with external mode options." >&2
+    exit 1
+  fi
+fi
+
 if [[ "$LENGTH_MODE" != "pad" && "$LENGTH_MODE" != "truncate" ]]; then
   echo "[ERROR] --length_mode must be one of: pad, truncate" >&2
   exit 1
 fi
 
-if [[ -n "$EVAL_OUT_OVERRIDE" && "${#RUN_DIRS[@]}" -ne 1 ]]; then
+if [[ "$EXTERNAL_MODE" -eq 0 && -n "$EVAL_OUT_OVERRIDE" && "${#RUN_DIRS[@]}" -ne 1 ]]; then
   echo "[ERROR] --eval_out can only be used with exactly one run_dir." >&2
+  exit 1
+fi
+
+if [[ "$EXTERNAL_MODE" -eq 1 && -n "$EVAL_OUT_OVERRIDE" ]]; then
+  echo "[ERROR] --eval_out is not used in external mode. Use --external_eval_root." >&2
   exit 1
 fi
 
@@ -779,6 +838,120 @@ if [[ "$CHECK_WAVLM" -eq 1 && "$EVAL_STAGE" != "save" ]] && metrics_contains "sp
     echo "        Add the file (or pass --no_check_wavlm)." >&2
     exit 2
   fi
+fi
+
+if [[ "$EXTERNAL_MODE" -eq 1 ]]; then
+  declare -a ALL_EXTERNAL_VARIANTS=()
+
+  if [[ -n "$EXTERNAL_OUTPUTS_ROOT" ]]; then
+    if [[ ! -d "$EXTERNAL_OUTPUTS_ROOT" ]]; then
+      echo "[ERROR] external outputs root not found: $EXTERNAL_OUTPUTS_ROOT" >&2
+      exit 1
+    fi
+    for codec_dir in "$EXTERNAL_OUTPUTS_ROOT"/*; do
+      [[ -d "$codec_dir" ]] || continue
+      for variant_dir in "$codec_dir"/*; do
+        [[ -d "$variant_dir" ]] || continue
+        ALL_EXTERNAL_VARIANTS+=("$variant_dir")
+      done
+    done
+  fi
+
+  for variant_dir in "${EXTERNAL_VARIANT_DIRS[@]}"; do
+    ALL_EXTERNAL_VARIANTS+=("$variant_dir")
+  done
+
+  if [[ "${#ALL_EXTERNAL_VARIANTS[@]}" -eq 0 ]]; then
+    echo "[ERROR] No external variant directories found." >&2
+    exit 1
+  fi
+
+  declare -A seen_variants=()
+  declare -a EXTERNAL_VARIANTS=()
+  for variant_dir in "${ALL_EXTERNAL_VARIANTS[@]}"; do
+    variant_dir="${variant_dir%/}"
+    if [[ ! -d "$variant_dir" ]]; then
+      echo "[ERROR] external variant dir not found: $variant_dir" >&2
+      exit 1
+    fi
+    if [[ -n "${seen_variants[$variant_dir]:-}" ]]; then
+      continue
+    fi
+    seen_variants[$variant_dir]=1
+    EXTERNAL_VARIANTS+=("$variant_dir")
+  done
+
+  ensure_metric_runtime_deps
+
+  if [[ -z "$EXTERNAL_GT_CACHE_DIR" ]]; then
+    EXTERNAL_GT_CACHE_DIR="$EXTERNAL_EVAL_ROOT/__gt_16k_cache"
+  fi
+
+  if [[ -n "$EXTERNAL_TRANSCRIPT_KEY" && ! -f "$EXTERNAL_TRANSCRIPT_KEY" ]]; then
+    echo "[ERROR] external transcript key not found: $EXTERNAL_TRANSCRIPT_KEY" >&2
+    exit 1
+  fi
+
+  total_runs=${#EXTERNAL_VARIANTS[@]}
+  done_runs=0
+  skipped_runs=0
+
+  for variant_dir in "${EXTERNAL_VARIANTS[@]}"; do
+    codec_name="$(basename "$(dirname "$variant_dir")")"
+    variant_name="$(basename "$variant_dir")"
+    eval_out="$EXTERNAL_EVAL_ROOT/$codec_name/$variant_name"
+    manifest_path="$eval_out/manifest.jsonl"
+
+    echo "============================================================"
+    echo "[EXTERNAL] codec=$codec_name variant=$variant_name"
+    echo "[SRC] $variant_dir"
+    echo "[OUT] $eval_out"
+
+    if [[ "$FORCE" -eq 0 ]] && metrics_already_covered "$eval_out/metrics.json"; then
+      echo "[SKIP] requested metrics already exist: $eval_out/metrics.json"
+      skipped_runs=$((skipped_runs + 1))
+      done_runs=$((done_runs + 1))
+      continue
+    fi
+
+    declare -a EVAL_CMD=(
+      "$PYTHON_EVAL"
+      "$ROOT/eval/eval.py"
+      "--input" "$INPUT_LIST"
+      "--output_dir" "$eval_out"
+      "--manifest" "$manifest_path"
+      "--stage" "metrics"
+      "--pred_root" "$variant_dir"
+      "--gt_cache_dir" "$EXTERNAL_GT_CACHE_DIR"
+      "--metrics" "$METRICS"
+      "--throughput_warmup_items" "$THROUGHPUT_WARMUP_ITEMS"
+      "--length_mode" "$LENGTH_MODE"
+      "--num_workers" "$NUM_WORKERS"
+    )
+
+    if [[ -n "$DEVICE" ]]; then
+      EVAL_CMD+=("--device" "$DEVICE")
+    fi
+    if [[ -n "$EXTERNAL_TRANSCRIPT_KEY" ]]; then
+      EVAL_CMD+=("--transcript_key" "$EXTERNAL_TRANSCRIPT_KEY")
+    fi
+    for ov in "${EVAL_CFG_OVERRIDES[@]}"; do
+      EVAL_CMD+=("--cfg_override" "$ov")
+    done
+    for arg in "${EVAL_EXTRA_ARGS[@]}"; do
+      EVAL_CMD+=("$arg")
+    done
+
+    conda run --no-capture-output -n "$EVAL_ENV" "${EVAL_CMD[@]}"
+    done_runs=$((done_runs + 1))
+  done
+
+  echo
+  echo "All external waveform eval jobs finished."
+  echo "- total:   $total_runs"
+  echo "- done:    $done_runs"
+  echo "- skipped: $skipped_runs"
+  exit 0
 fi
 
 total_runs=${#RUN_DIRS[@]}

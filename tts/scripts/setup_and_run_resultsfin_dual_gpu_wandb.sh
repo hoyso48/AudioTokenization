@@ -24,6 +24,7 @@ Optional:
     --max-batch-samples <int>                 (default: 16)
     --dynamic-batch-measure <target|total>    (default: target)
     --dynamic-bucket-size <int>               (default: 256)
+    --skip-dependency-check                   (skip python package preflight)
     --max-train-files <int>                   (optional debug limit)
     --max-val-files <int>                     (optional debug limit)
 
@@ -54,6 +55,7 @@ MAX_BATCH_TOKENS="6000"
 MAX_BATCH_SAMPLES="16"
 DYNAMIC_BATCH_MEASURE="target"
 DYNAMIC_BUCKET_SIZE="256"
+DEPENDENCY_CHECK="1"
 MAX_TRAIN_FILES=""
 MAX_VAL_FILES=""
 
@@ -79,6 +81,7 @@ while [[ $# -gt 0 ]]; do
     --max-batch-samples) MAX_BATCH_SAMPLES="$2"; shift 2 ;;
     --dynamic-batch-measure) DYNAMIC_BATCH_MEASURE="$2"; shift 2 ;;
     --dynamic-bucket-size) DYNAMIC_BUCKET_SIZE="$2"; shift 2 ;;
+    --skip-dependency-check) DEPENDENCY_CHECK="0"; shift 1 ;;
     --max-train-files) MAX_TRAIN_FILES="$2"; shift 2 ;;
     --max-val-files) MAX_VAL_FILES="$2"; shift 2 ;;
     -h|--help) usage; exit 0 ;;
@@ -124,7 +127,9 @@ if [[ "${SETUP_ENV}" == "1" ]]; then
   bash "${SCRIPT_DIR}/setup_env_tts.sh" "${ENV_NAME}"
 fi
 
+if [[ "${DEPENDENCY_CHECK}" == "1" ]]; then
 echo "[CHECK] Verifying runtime dependencies in env ${ENV_NAME}"
+run_with_heartbeat "CHECK-DEPS" \
 conda run --no-capture-output -n "${ENV_NAME}" python - <<'PY'
 import importlib
 import sys
@@ -149,9 +154,7 @@ required = [
 
 missing = []
 for name in required:
-    try:
-        importlib.import_module(name)
-    except Exception:
+    if importlib.util.find_spec(name) is None:
         missing.append(name)
 
 if missing:
@@ -163,6 +166,7 @@ if missing:
 
 print("[CHECK] Dependency check passed")
 PY
+fi
 
 echo "[CHECK] Verifying GPU runtime visibility (need 2 GPUs: 0,1)"
 if ! command -v nvidia-smi >/dev/null 2>&1; then

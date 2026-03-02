@@ -9,6 +9,8 @@ develop-eggs/
 dist/
 downloads/
 external_codecs/
+mushra/
+mls_eval/
 eggs/
 .eggs/
 lib/
